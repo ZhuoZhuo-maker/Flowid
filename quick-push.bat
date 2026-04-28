@@ -6,10 +6,11 @@ cd /d "%~dp0"
 set "EXIT_CODE=0"
 set "BRANCH="
 set "NO_PAUSE="
+set "REMOTE_URL=git@gitee.com:zhuozhuo1786449/flowid-v2.0.git"
 
 if /i "%~1"=="--no-pause" set "NO_PAUSE=1"
 
-echo [STEP 1/5] Detect current branch...
+echo [STEP 1/6] Detect current branch...
 set "BRANCH="
 set "BRANCH_FILE=%TEMP%\flowid-branch.txt"
 del /q "%BRANCH_FILE%" 2>nul
@@ -21,14 +22,24 @@ if "%BRANCH%"=="" (
   echo [HINT] This folder is likely NOT a git repository: missing .git; or git is unavailable.
   echo [HINT] Fix options:
   echo        - Open the REAL cloned repo folder; it should contain a .git directory. Then run again.
-  echo        - Alternatively: run "git init" then "git remote add origin YOUR_URL"
+  echo        - Alternatively: run "git init" then add a remote.
   set "EXIT_CODE=11"
   goto :end
 )
 echo [OK ] Branch: %BRANCH%
 
 echo.
-echo [STEP 2/5] Show working tree status...
+echo [STEP 2/6] Ensure remote origin...
+git remote get-url origin >nul 2>nul
+if errorlevel 1 (
+  echo [INFO] origin not set, adding: %REMOTE_URL%
+  git remote add origin "%REMOTE_URL%"
+) else (
+  echo [OK ] origin already set.
+)
+
+echo.
+echo [STEP 3/6] Show working tree status...
 git status --short
 
 echo.
@@ -36,7 +47,7 @@ set /p MSG=Commit message (Enter=chore: update):
 if "%MSG%"=="" set "MSG=chore: update"
 
 echo.
-echo [STEP 3/5] Stage changes...
+echo [STEP 4/6] Stage changes...
 git add .
 if errorlevel 1 (
   echo [ERR] git add failed.
@@ -48,12 +59,12 @@ git diff --cached --quiet
 if not errorlevel 1 (
   echo [WARN] No staged changes. Nothing to commit.
   set "EXIT_CODE=0"
-  goto :end
+  goto :push_only
 )
 echo [OK ] Staged.
 
 echo.
-echo [STEP 4/5] Commit...
+echo [STEP 5/6] Commit...
 git commit -m "%MSG%"
 if errorlevel 1 (
   echo [ERR] git commit failed.
@@ -62,9 +73,10 @@ if errorlevel 1 (
 )
 echo [OK ] Committed.
 
+:push_only
 echo.
-echo [STEP 5/5] Push to origin/%BRANCH%...
-git push origin %BRANCH%
+echo [STEP 6/6] Push to origin/%BRANCH%...
+git push -u origin %BRANCH%
 if errorlevel 1 (
   echo [ERR] git push failed.
   set "EXIT_CODE=14"
