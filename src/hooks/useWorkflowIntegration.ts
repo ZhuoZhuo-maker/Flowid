@@ -1913,7 +1913,14 @@ export function useWorkflowIntegration() {
        * - model：仅调用云端模型，不提交 ComfyUI
        * - workflow：仅提交 ComfyUI（即使配置了云端模型也不走模型）
        */
-      const executionTarget = options?.executionTarget ?? 'workflow'
+      const hasCloudModelConfigured =
+        Boolean(String(nodeConfig.cloudModelUrl || '').trim()) &&
+        Boolean(String(nodeConfig.cloudModelName || '').trim())
+      const executionTarget =
+        options?.executionTarget ??
+        ((node.data as any)?.promptPickerMode === 'model' ? 'model' : undefined) ??
+        // 对“只用模型、不懂 ComfyUI”的用户：当节点配置了云端模型且本地/云端执行未启用时，默认走模型。
+        ((!snapshot.local.enabled && !snapshot.cloud.enabled && hasCloudModelConfigured) ? 'model' : 'workflow')
       if (executionTarget === 'model') {
         const model = String(nodeConfig.cloudModelName || '').trim()
         const baseUrl = normalizeOpenAICompatibleBaseUrl(String(nodeConfig.cloudModelUrl || ''))

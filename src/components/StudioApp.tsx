@@ -6081,6 +6081,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         const result = await runNodeWorkflow(prepared, {
           allNodes: latestNodes,
           runNodeTitle: String(fresh.data.title || fresh.id),
+          executionTarget:
+            (fresh.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow',
           rawPromptText:
             fresh.data.kind === 'image' || fresh.data.kind === 'video'
               ? String((fresh.data as ImageNodeData | VideoNodeData).prompt || '')
