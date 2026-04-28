@@ -1,0 +1,39 @@
+/**
+ * Flowid 前端工程（Vite）。
+ */
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
+import type { ProxyOptions } from 'vite'
+
+const comfyLocalProxy: ProxyOptions = {
+  target: 'http://127.0.0.1:8188',
+  changeOrigin: true,
+  rewrite: (path) => path.replace(/^\/__comfy_local__/, ''),
+  configure: (proxy) => {
+    proxy.on('proxyReq', (proxyReq) => {
+      // 某些 ComfyUI 安全策略会基于 Origin/Referer 拒绝非同源写请求（403）
+      proxyReq.setHeader('origin', 'http://127.0.0.1:8188')
+      proxyReq.setHeader('referer', 'http://127.0.0.1:8188/')
+    })
+  },
+}
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react(), tailwindcss()],
+  server: {
+    /** 固定本机 IPv4，与 `localhost` 分属不同浏览器来源；与默认存档、工作流 localStorage 一致 */
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
+    proxy: {
+      '/__comfy_local__': comfyLocalProxy,
+    },
+  },
+  preview: {
+    host: '127.0.0.1',
+    port: 4173,
+    strictPort: true,
+  },
+})

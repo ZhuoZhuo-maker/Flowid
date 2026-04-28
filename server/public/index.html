@@ -1,0 +1,1122 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flowid Auth Server</title>
+    <style>
+      :root {
+        --bg: #0b0f15;
+        --panel: #111114;
+        --panel-2: rgba(0, 0, 0, 0.22);
+        --panel-3: rgba(255, 255, 255, 0.04);
+        --line: rgba(255, 255, 255, 0.08);
+        --line-2: rgba(255, 255, 255, 0.12);
+        --text: rgba(255, 255, 255, 0.9);
+        --muted: rgba(255, 255, 255, 0.55);
+        --muted-2: rgba(255, 255, 255, 0.35);
+        --primary: #ea580c;
+        --shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
+        --radius: 18px;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { height: 100%; }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(1200px 520px at 50% -140px, rgba(234, 88, 12, 0.14), transparent 55%),
+          radial-gradient(900px 520px at 12% 0%, rgba(99, 102, 241, 0.10), transparent 60%),
+          radial-gradient(900px 520px at 88% 0%, rgba(56, 189, 248, 0.08), transparent 60%),
+          #07070a;
+        color: var(--text);
+        font-family: "Microsoft YaHei", "PingFang SC", system-ui, -apple-system, Segoe UI, sans-serif;
+      }
+
+      .wrap {
+        max-width: 1040px;
+        margin: 0 auto;
+        padding: 22px 18px 36px;
+      }
+
+      .title {
+        font-size: 16px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        margin: 0;
+        color: rgba(255, 255, 255, 0.82);
+      }
+
+      .sub {
+        color: var(--muted);
+        margin: 10px 0 18px;
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+
+      .card {
+        background: linear-gradient(180deg, rgba(17, 17, 20, 0.96), rgba(12, 12, 16, 0.92));
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 16px;
+        box-shadow: var(--shadow);
+        backdrop-filter: blur(10px);
+      }
+
+      .card h3 {
+        margin: 0 0 12px;
+        font-size: 12px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.22em;
+        color: rgba(255, 255, 255, 0.62);
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        margin-bottom: 10px;
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+
+      input, select, textarea {
+        width: 100%;
+        outline: none;
+      }
+
+      input, select {
+        height: 36px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: rgba(255, 255, 255, 0.88);
+        padding: 0 12px;
+        transition: border-color .15s ease, background-color .15s ease;
+      }
+
+      textarea {
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: rgba(255, 255, 255, 0.88);
+        padding: 10px 12px;
+        min-height: 110px;
+        resize: vertical;
+        line-height: 1.6;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+        transition: border-color .15s ease, background-color .15s ease;
+      }
+
+      input:focus, select:focus, textarea:focus {
+        border-color: rgba(234, 88, 12, 0.45);
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .btns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+      button {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(255, 255, 255, 0.66);
+        height: 34px;
+        padding: 0 14px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        transition: background-color .15s ease, color .15s ease, border-color .15s ease, transform .12s ease;
+        user-select: none;
+      }
+
+      button:hover {
+        background: rgba(255, 255, 255, 0.08);
+        color: rgba(255, 255, 255, 0.86);
+        border-color: rgba(255, 255, 255, 0.16);
+      }
+
+      button:active { transform: scale(0.98); }
+
+      button.primary {
+        background: rgba(234, 88, 12, 0.16);
+        border-color: rgba(234, 88, 12, 0.35);
+        color: #f97316;
+      }
+
+      button.primary:hover {
+        background: var(--primary);
+        border-color: rgba(234, 88, 12, 0.55);
+        color: #fff;
+      }
+
+      pre {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        min-height: 200px;
+        overflow: auto;
+        margin: 14px 0 0;
+        color: rgba(255, 255, 255, 0.86);
+        box-shadow: var(--shadow);
+      }
+
+      .tip {
+        margin-top: 10px;
+        color: var(--muted-2);
+        font-size: 12px;
+        letter-spacing: 0.08em;
+      }
+      .users-toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .users-count {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .users-table-wrap {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        overflow: auto;
+        max-height: 280px;
+        background: rgba(0, 0, 0, 0.18);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th, td {
+        border-bottom: 1px solid #1a2333;
+        padding: 8px;
+        text-align: left;
+        white-space: nowrap;
+      }
+      th {
+        position: sticky;
+        top: 0;
+        background: rgba(17, 17, 20, 0.95);
+        color: rgba(255, 255, 255, 0.7);
+        backdrop-filter: blur(8px);
+      }
+      .status-tag {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 1px 8px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.7);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .template-list {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        max-height: 220px;
+        overflow: auto;
+        background: rgba(0, 0, 0, 0.18);
+      }
+      .template-item {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        padding: 8px;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: center;
+      }
+      .template-item:last-child { border-bottom: none; }
+      .template-meta { font-size: 12px; color: var(--muted); }
+      .template-name {
+        cursor: pointer;
+        user-select: none;
+      }
+      .template-name:hover {
+        color: rgba(255, 255, 255, 0.9);
+      }
+      .template-item-actions { display: flex; gap: 6px; align-items: center; }
+      .template-dropzone {
+        border: 1px dashed rgba(255, 255, 255, 0.14);
+        border-radius: 16px;
+        padding: 14px;
+        color: var(--muted);
+        text-align: center;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .template-dropzone.is-dragover {
+        border-color: rgba(234, 88, 12, 0.55);
+        background: rgba(234, 88, 12, 0.08);
+        color: rgba(255, 255, 255, 0.78);
+      }
+      @media (max-width: 860px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1 class="title">Flowid Auth Server</h1>
+      <p class="sub">登录/注册/授权状态调试台（本地开发环境）</p>
+      <div class="grid">
+        <section class="card">
+          <h3>认证请求</h3>
+          <label class="field">
+            <span>账号</span>
+            <input id="account" placeholder="请输入账号" />
+          </label>
+          <label class="field">
+            <span>密码</span>
+            <input id="password" type="password" placeholder="请输入密码" />
+          </label>
+          <label class="field">
+            <span>设备码（可选）</span>
+            <input id="machineCode" placeholder="例如 M-123456" />
+          </label>
+          <div class="btns">
+            <button class="primary" id="registerBtn">注册</button>
+            <button class="primary" id="loginBtn">登录</button>
+            <button id="statusBtn">查授权状态</button>
+            <button id="healthBtn">健康检查</button>
+          </div>
+          <div class="tip">登录后会自动缓存 token，供“查授权状态”使用。</div>
+        </section>
+        <section class="card">
+          <h3>接口说明</h3>
+          <div class="tip">POST /auth/register</div>
+          <div class="tip">POST /auth/login</div>
+          <div class="tip">GET /auth/license/status (Bearer token)</div>
+          <div class="tip">GET /healthz</div>
+          <div class="tip">GET /templates</div>
+          <div class="tip">GET /templates/:id</div>
+          <div class="tip">POST /tasks/submit</div>
+          <div class="tip">GET /tasks/:taskId/status</div>
+          <div class="tip">GET /admin/users</div>
+          <div class="tip">POST /admin/user/freeze</div>
+          <div class="tip">POST /admin/user/renew</div>
+          <div class="tip">GET /admin/templates</div>
+          <div class="tip">GET /admin/templates/:id</div>
+          <div class="tip">POST /admin/templates/upload</div>
+          <div class="tip">PUT /admin/templates/:id</div>
+          <div class="tip">PUT /admin/templates/:id/workflow</div>
+          <div class="tip">DELETE /admin/templates/:id</div>
+          <div class="tip">GET /system-prompts</div>
+          <div class="tip">GET /system-prompts/:id</div>
+          <div class="tip">GET /admin/system-prompts</div>
+          <div class="tip">GET /admin/system-prompts/:id</div>
+          <div class="tip">POST /admin/system-prompts/upload</div>
+          <div class="tip">PUT /admin/system-prompts/:id</div>
+          <div class="tip">DELETE /admin/system-prompts/:id</div>
+        </section>
+      </div>
+      <div class="grid" style="margin-top: 12px">
+        <section class="card">
+          <h3>账号管理</h3>
+          <label class="field">
+            <span>管理员口令</span>
+            <input id="adminToken" type="password" placeholder="请输入管理员口令" />
+          </label>
+          <label class="field">
+            <span>目标账号</span>
+            <input id="adminAccount" placeholder="请输入目标账号" />
+          </label>
+          <label class="field">
+            <span>续期天数（默认30）</span>
+            <input id="renewDays" type="number" value="30" min="1" max="3650" />
+          </label>
+          <div class="btns">
+            <button id="freezeBtn">冻结账号</button>
+            <button id="unfreezeBtn">解冻账号</button>
+            <button class="primary" id="renewBtn">续期账号</button>
+          </div>
+          <div class="tip">仅管理员可操作：冻结/解冻/续期/查看用户列表。</div>
+        </section>
+      </div>
+      <div class="card" style="margin-top: 12px">
+        <div class="users-toolbar">
+          <h3 style="margin: 0">注册用户列表</h3>
+          <div class="btns">
+            <span class="users-count" id="usersCount">共 0 人</span>
+            <button id="refreshUsersBtn">刷新用户列表</button>
+          </div>
+        </div>
+        <div class="users-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>账号</th>
+                <th>昵称</th>
+                <th>状态</th>
+                <th>设备码</th>
+                <th>到期时间</th>
+                <th>注册时间</th>
+              </tr>
+            </thead>
+            <tbody id="usersTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="grid" style="margin-top: 12px">
+        <section class="card">
+          <h3>官方模板管理（管理员）</h3>
+          <label class="field">
+            <span>节点分类</span>
+            <select id="templateCategoryInput">
+              <option value="text">文本</option>
+              <option value="script">脚本</option>
+              <option value="image">图片</option>
+              <option value="video">视频</option>
+              <option value="audio">配音</option>
+              <option value="music">音乐</option>
+              <option value="panorama">VR360</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>模板 ID（可空，空则自动生成）</span>
+            <input id="templateIdInput" placeholder="例如 ltx-video-v1" />
+          </label>
+          <label class="field">
+            <span>模板名称</span>
+            <input id="templateNameInput" placeholder="例如 LTX 视频模板" />
+          </label>
+          <label class="field">
+            <span>版本</span>
+            <input id="templateVersionInput" value="1.0.0" />
+          </label>
+          <label class="field">
+            <span>描述</span>
+            <input id="templateDescriptionInput" placeholder="模板说明" />
+          </label>
+          <label class="field">
+            <span>参数 Schema(JSON，可空)</span>
+            <textarea id="templateSchemaInput" placeholder='例如 {"prompt":{"type":"string"}}'></textarea>
+          </label>
+          <div class="btns">
+            <button id="extractParamsBtn">从工作流提取参数</button>
+          </div>
+          <div class="template-dropzone" id="templateDropzone">
+            拖拽一个或多个 JSON 文件到这里（支持批量上传）
+          </div>
+          <div class="btns" style="margin-top: 8px">
+            <button id="pickTemplateFilesBtn">选择 JSON 文件</button>
+            <input id="templateFilesInput" type="file" accept=".json,application/json" multiple style="display:none" />
+          </div>
+          <div class="btns">
+            <button class="primary" id="templateUploadBtn">上传新模板</button>
+            <button id="templateUpdateMetaBtn">更新模板信息</button>
+            <button id="templateUpdateWorkflowBtn">更新工作流JSON</button>
+            <button id="templateDeleteBtn">删除模板</button>
+          </div>
+        </section>
+        <section class="card">
+          <div class="users-toolbar">
+            <h3 style="margin: 0">模板列表</h3>
+            <div class="btns">
+              <select id="templateCategoryFilter">
+                <option value="all">全部分类</option>
+                <option value="text">文本</option>
+                <option value="script">脚本</option>
+                <option value="image">图片</option>
+                <option value="video">视频</option>
+                <option value="audio">配音</option>
+                <option value="music">音乐</option>
+                <option value="panorama">VR360</option>
+              </select>
+              <button id="templateSelectAllBtn">全选</button>
+              <button id="templateClearSelectionBtn">清空勾选</button>
+              <button id="templateBatchDeleteBtn">批量删除</button>
+              <span class="users-count" id="templatesCount">共 0 个</span>
+              <button id="refreshTemplatesBtn">刷新模板列表</button>
+            </div>
+          </div>
+          <div class="template-list" id="templateList"></div>
+          <div class="tip">点击某个模板可自动回填到左侧编辑区。</div>
+        </section>
+      </div>
+      <div class="grid" style="margin-top: 12px">
+        <section class="card">
+          <h3>系统提示词预设（管理员）</h3>
+          <label class="field">
+            <span>分类（可自定义）</span>
+            <input id="systemPromptCategoryInput" placeholder="例如 写作 / 图像 / 运营" value="general" />
+          </label>
+          <label class="field">
+            <span>预设 ID（可空，空则自动生成）</span>
+            <input id="systemPromptIdInput" placeholder="例如 story-style-1" />
+          </label>
+          <label class="field">
+            <span>标题（前端展示用，建议唯一）</span>
+            <input id="systemPromptNameInput" placeholder="例如 镜头/风格提示(text-1)" />
+          </label>
+          <label class="field">
+            <span>版本</span>
+            <input id="systemPromptVersionInput" value="1.0.0" />
+          </label>
+          <label class="field">
+            <span>描述（可选）</span>
+            <input id="systemPromptDescriptionInput" placeholder="可写用途说明，便于检索" />
+          </label>
+          <label class="field">
+            <span>正文（系统提示词内容）</span>
+            <textarea id="systemPromptTextInput" placeholder="在这里粘贴/编写系统提示词正文..."></textarea>
+          </label>
+          <div class="btns">
+            <button class="primary" id="systemPromptUploadBtn">新建预设</button>
+            <button id="systemPromptUpdateBtn">更新预设</button>
+            <button id="systemPromptDeleteBtn">删除预设</button>
+            <button id="refreshSystemPromptsBtn">刷新列表</button>
+          </div>
+          <div class="tip">服务端会对正文做校验（sha256 + hmac），检测到篡改会拒绝下发。</div>
+        </section>
+
+        <section class="card">
+          <div class="users-toolbar">
+            <h3 style="margin: 0">系统提示词列表</h3>
+            <div class="btns">
+              <select id="systemPromptCategoryFilter">
+                <option value="all">全部分类</option>
+              </select>
+              <span class="users-count" id="systemPromptsCount">共 0 个</span>
+              <button id="refreshSystemPromptsBtn2">刷新</button>
+            </div>
+          </div>
+          <div class="template-list" id="systemPromptList"></div>
+          <div class="tip">点击条目回填到左侧编辑区；“复制引用”会生成 @系统提示词(标题)。</div>
+        </section>
+      </div>
+      <pre id="output">{ "ok": true, "service": "flowid-auth-server" }</pre>
+    </div>
+    <script>
+      const output = document.getElementById('output');
+      const usersTableBody = document.getElementById('usersTableBody');
+      const usersCount = document.getElementById('usersCount');
+      const templateList = document.getElementById('templateList');
+      const templatesCount = document.getElementById('templatesCount');
+      const templateCategoryFilter = document.getElementById('templateCategoryFilter');
+      const templateDropzone = document.getElementById('templateDropzone');
+      const templateFilesInput = document.getElementById('templateFilesInput');
+      const systemPromptList = document.getElementById('systemPromptList');
+      const systemPromptsCount = document.getElementById('systemPromptsCount');
+      const systemPromptCategoryFilter = document.getElementById('systemPromptCategoryFilter');
+      let tokenCache = '';
+      let templatesCache = [];
+      let systemPromptsCache = [];
+      const selectedTemplateIds = new Set();
+      const CATEGORY_LABELS = {
+        text: '文本',
+        script: '脚本',
+        image: '图片',
+        video: '视频',
+        audio: '配音',
+        music: '音乐',
+        panorama: 'VR360',
+      };
+      const getValue = (id) => document.getElementById(id).value.trim();
+      const getAdminHeaders = () => ({
+        'Content-Type': 'application/json',
+        'x-admin-token': getValue('adminToken'),
+      });
+      const formatTime = (ts) => {
+        if (!Number.isFinite(Number(ts))) return '-';
+        return new Date(Number(ts)).toLocaleString('zh-CN', { hour12: false });
+      };
+      const setOutput = (title, data) => {
+        output.textContent = `${title}\n\n${JSON.stringify(data, null, 2)}`;
+      };
+      const parseJsonSafe = (text, fallback) => {
+        const raw = String(text || '').trim();
+        if (!raw) return fallback;
+        return JSON.parse(raw);
+      };
+      const inferParamsSchemaFromWorkflow = (workflowObj) => {
+        const set = new Set();
+        const walk = (value) => {
+          if (typeof value === 'string') {
+            const matches = value.match(/__([A-Z0-9_]+)__/g) || [];
+            matches.forEach((item) => set.add(item.slice(2, -2).toLowerCase()));
+            return;
+          }
+          if (Array.isArray(value)) {
+            value.forEach(walk);
+            return;
+          }
+          if (value && typeof value === 'object') {
+            Object.values(value).forEach(walk);
+          }
+        };
+        walk(workflowObj);
+        const schema = {};
+        Array.from(set).sort().forEach((key) => {
+          schema[key] = { type: 'string', title: key };
+        });
+        return schema;
+      };
+      const getTemplateForm = () => ({
+        id: getValue('templateIdInput'),
+        name: getValue('templateNameInput'),
+        version: getValue('templateVersionInput') || '1.0.0',
+        category: getValue('templateCategoryInput') || 'image',
+        description: getValue('templateDescriptionInput'),
+        paramsSchema: parseJsonSafe(document.getElementById('templateSchemaInput').value, {}),
+      });
+      const fillTemplateForm = (row) => {
+        document.getElementById('templateIdInput').value = row.id || '';
+        document.getElementById('templateNameInput').value = row.name || '';
+        document.getElementById('templateVersionInput').value = row.version || '1.0.0';
+        document.getElementById('templateCategoryInput').value = row.category || 'image';
+        document.getElementById('templateDescriptionInput').value = row.description || '';
+        document.getElementById('templateSchemaInput').value = JSON.stringify(row.paramsSchema || {}, null, 2);
+      };
+
+      const getSystemPromptForm = () => ({
+        id: getValue('systemPromptIdInput'),
+        name: getValue('systemPromptNameInput'),
+        version: getValue('systemPromptVersionInput') || '1.0.0',
+        category: getValue('systemPromptCategoryInput') || 'general',
+        description: getValue('systemPromptDescriptionInput'),
+        systemPromptText: String(document.getElementById('systemPromptTextInput').value || '').trim(),
+      });
+
+      const fillSystemPromptForm = (row) => {
+        document.getElementById('systemPromptIdInput').value = row.id || '';
+        document.getElementById('systemPromptNameInput').value = row.name || '';
+        document.getElementById('systemPromptVersionInput').value = row.version || '1.0.0';
+        document.getElementById('systemPromptCategoryInput').value = row.category || 'general';
+        document.getElementById('systemPromptDescriptionInput').value = row.description || '';
+      };
+      const renderUsers = (rows) => {
+        usersTableBody.innerHTML = '';
+        usersCount.textContent = `共 ${rows.length} 人`;
+        rows.forEach((row) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${row.account || ''}</td>
+            <td>${row.nickname || ''}</td>
+            <td><span class="status-tag">${row.licenseStatus || ''}</span></td>
+            <td title="${row.machineCode || ''}">${row.machineCode || '-'}</td>
+            <td>${formatTime(row.expiresAtMs)}</td>
+            <td>${formatTime(row.createdAtMs)}</td>
+          `;
+          usersTableBody.appendChild(tr);
+        });
+      };
+      const filteredTemplates = () => {
+        const category = templateCategoryFilter.value;
+        if (category === 'all') return templatesCache;
+        return templatesCache.filter((item) => (item.category || 'image') === category);
+      };
+
+      const filteredSystemPrompts = () => {
+        const category = systemPromptCategoryFilter.value;
+        if (category === 'all') return systemPromptsCache;
+        return systemPromptsCache.filter((item) => (item.category || 'general') === category);
+      };
+
+      const syncSystemPromptCategoryOptions = (rows) => {
+        const set = new Set();
+        (rows || []).forEach((r) => set.add(String(r.category || 'general')));
+        const current = systemPromptCategoryFilter.value || 'all';
+        systemPromptCategoryFilter.innerHTML = '';
+        const allOpt = document.createElement('option');
+        allOpt.value = 'all';
+        allOpt.textContent = '全部分类';
+        systemPromptCategoryFilter.appendChild(allOpt);
+        Array.from(set).sort().forEach((cat) => {
+          const opt = document.createElement('option');
+          opt.value = cat;
+          opt.textContent = cat || 'general';
+          systemPromptCategoryFilter.appendChild(opt);
+        });
+        systemPromptCategoryFilter.value =
+          Array.from(systemPromptCategoryFilter.options).some((o) => o.value === current) ? current : 'all';
+      };
+      const renderTemplates = (rows) => {
+        templatesCache = rows || [];
+        const showing = filteredTemplates();
+        templatesCount.textContent = `共 ${showing.length} 个`;
+        templateList.innerHTML = '';
+        showing.forEach((row) => {
+          const div = document.createElement('div');
+          div.className = 'template-item';
+          const checked = selectedTemplateIds.has(row.id) ? 'checked' : '';
+          div.innerHTML = `
+            <div class="template-item-actions">
+              <input type="checkbox" data-role="pick" data-id="${row.id}" ${checked} />
+              <div>
+                <div class="template-name" data-role="rename" data-id="${row.id}" title="双击重命名">
+                  ${row.name || '-'} <span class="template-meta">v${row.version || '-'} · ${CATEGORY_LABELS[row.category || 'image'] || row.category || ''}</span>
+                </div>
+                <div class="template-meta">${row.id || ''} · ${row.workflowFile || ''}</div>
+              </div>
+            </div>
+            <div class="template-item-actions">
+              <button type="button" data-role="load" data-id="${row.id}">编辑</button>
+              <button type="button" data-role="schema" data-id="${row.id}">参数</button>
+              <button type="button" data-role="delete" data-id="${row.id}">删除</button>
+            </div>
+          `;
+          div.querySelector('[data-role="pick"]').onchange = (event) => {
+            const nextChecked = Boolean(event.target.checked);
+            if (nextChecked) selectedTemplateIds.add(row.id);
+            else selectedTemplateIds.delete(row.id);
+          };
+          div.querySelector('[data-role="load"]').onclick = async () => {
+            try {
+              const data = await callApi(`/admin/templates/${encodeURIComponent(row.id)}`, {
+                headers: { 'x-admin-token': getValue('adminToken') },
+              });
+              fillTemplateForm(data);
+              setOutput('模板详情', data);
+            } catch (e) { setOutput('加载模板失败', { message: e.message }); }
+          };
+          div.querySelector('[data-role="schema"]').onclick = async () => {
+            try {
+              const data = await callApi(`/admin/templates/${encodeURIComponent(row.id)}`, {
+                headers: { 'x-admin-token': getValue('adminToken') },
+              });
+              fillTemplateForm(data);
+              setOutput('模板参数', { id: data.id, name: data.name, paramsSchema: data.paramsSchema || {} });
+            } catch (e) { setOutput('加载参数失败', { message: e.message }); }
+          };
+          div.querySelector('[data-role="delete"]').onclick = async () => {
+            try {
+              if (!confirm(`确定删除模板 ${row.id} 吗？`)) return;
+              const data = await callApi(`/admin/templates/${encodeURIComponent(row.id)}`, {
+                method: 'DELETE',
+                headers: { 'x-admin-token': getValue('adminToken') },
+              });
+              selectedTemplateIds.delete(row.id);
+              setOutput('删除模板成功', data);
+              document.getElementById('refreshTemplatesBtn').click();
+            } catch (e) { setOutput('删除模板失败', { message: e.message }); }
+          };
+          div.querySelector('[data-role="rename"]').ondblclick = async () => {
+            try {
+              const nextName = prompt('请输入新的模板名称', row.name || '');
+              if (!nextName || !nextName.trim()) return;
+              const data = await callApi(`/admin/templates/${encodeURIComponent(row.id)}`, {
+                method: 'PUT',
+                headers: getAdminHeaders(),
+                body: JSON.stringify({
+                  name: nextName.trim(),
+                  version: row.version || '1.0.0',
+                  category: row.category || 'image',
+                  description: row.description || '',
+                  paramsSchema: row.paramsSchema || {},
+                }),
+              });
+              setOutput('重命名成功', data);
+              document.getElementById('refreshTemplatesBtn').click();
+            } catch (e) { setOutput('重命名失败', { message: e.message }); }
+          };
+          templateList.appendChild(div);
+        });
+      };
+
+      const renderSystemPrompts = (rows) => {
+        systemPromptsCache = rows || [];
+        syncSystemPromptCategoryOptions(systemPromptsCache);
+        const showing = filteredSystemPrompts();
+        systemPromptsCount.textContent = `共 ${showing.length} 个`;
+        systemPromptList.innerHTML = '';
+        showing.forEach((row) => {
+          const div = document.createElement('div');
+          div.className = 'template-item';
+          const name = row.name || '-';
+          const meta = `${row.id || ''} · v${row.version || '-'} · ${row.category || 'general'}`;
+          div.innerHTML = `
+            <div style="min-width:0">
+              <div class="template-name" data-role="load" title="点击回填到编辑区">${name}</div>
+              <div class="template-meta">${meta}</div>
+            </div>
+            <div class="template-item-actions">
+              <button type="button" data-role="rename">重命名</button>
+              <button type="button" data-role="delete">删除</button>
+            </div>
+          `;
+          div.querySelector('[data-role="load"]').onclick = async () => {
+            try {
+              fillSystemPromptForm(row);
+              const data = await callApi(`/admin/system-prompts/${encodeURIComponent(row.id)}`, {
+                method: 'GET',
+                headers: getAdminHeaders(),
+              });
+              document.getElementById('systemPromptTextInput').value = data.systemPromptText || '';
+              setOutput('系统提示词详情', data);
+            } catch (e) {
+              setOutput('加载系统提示词失败', { message: e.message });
+            }
+          };
+          div.querySelector('[data-role="rename"]').onclick = async () => {
+            try {
+              const nextName = prompt('请输入新的标题（前端展示用）', row.name || '');
+              if (!nextName || !nextName.trim()) return;
+              const payload = {
+                id: row.id,
+                name: nextName.trim(),
+                version: row.version || '1.0.0',
+                category: row.category || 'general',
+                description: row.description || '',
+              };
+              const data = await callApi(`/admin/system-prompts/${encodeURIComponent(row.id)}`, {
+                method: 'PUT',
+                headers: getAdminHeaders(),
+                body: JSON.stringify(payload),
+              });
+              setOutput('重命名成功', data);
+              await refreshSystemPrompts();
+            } catch (e) {
+              setOutput('重命名失败', { message: e.message });
+            }
+          };
+          div.querySelector('[data-role="delete"]').onclick = async () => {
+            try {
+              if (!confirm(`确定删除系统提示词 ${row.id} 吗？`)) return;
+              const data = await callApi(`/admin/system-prompts/${encodeURIComponent(row.id)}`, {
+                method: 'DELETE',
+                headers: getAdminHeaders(),
+              });
+              setOutput('删除系统提示词成功', data);
+              await refreshSystemPrompts();
+            } catch (e) {
+              setOutput('删除系统提示词失败', { message: e.message });
+            }
+          };
+          systemPromptList.appendChild(div);
+        });
+      };
+      async function callApi(path, init = {}) {
+        const res = await fetch(path, init);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.message || `${res.status} ${res.statusText}`);
+        return data;
+      }
+      const uploadWorkflowByPayload = async (payload) => {
+        const data = await callApi('/admin/templates/upload', {
+          method: 'POST',
+          headers: getAdminHeaders(),
+          body: JSON.stringify(payload),
+        });
+        return data;
+      };
+      document.getElementById('registerBtn').onclick = async () => {
+        try {
+          const data = await callApi('/auth/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              account: getValue('account'),
+              password: getValue('password'),
+              machineCode: getValue('machineCode'),
+            }),
+          });
+          tokenCache = data.token || '';
+          setOutput('注册成功', data);
+        } catch (e) { setOutput('注册失败', { message: e.message }); }
+      };
+      document.getElementById('loginBtn').onclick = async () => {
+        try {
+          const data = await callApi('/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              account: getValue('account'),
+              password: getValue('password'),
+              machineCode: getValue('machineCode'),
+            }),
+          });
+          tokenCache = data.token || '';
+          setOutput('登录成功', data);
+        } catch (e) { setOutput('登录失败', { message: e.message }); }
+      };
+      document.getElementById('statusBtn').onclick = async () => {
+        try {
+          const data = await callApi('/auth/license/status', {
+            headers: { Authorization: `Bearer ${tokenCache}` },
+          });
+          setOutput('授权状态', data);
+        } catch (e) { setOutput('查询失败', { message: e.message }); }
+      };
+      document.getElementById('healthBtn').onclick = async () => {
+        try {
+          const data = await callApi('/healthz');
+          setOutput('健康检查', data);
+        } catch (e) { setOutput('健康检查失败', { message: e.message }); }
+      };
+      document.getElementById('freezeBtn').onclick = async () => {
+        try {
+          const data = await callApi('/admin/user/freeze', {
+            method: 'POST',
+            headers: getAdminHeaders(),
+            body: JSON.stringify({
+              account: getValue('adminAccount'),
+              frozen: true,
+            }),
+          });
+          setOutput('冻结成功', data);
+        } catch (e) { setOutput('冻结失败', { message: e.message }); }
+      };
+      document.getElementById('unfreezeBtn').onclick = async () => {
+        try {
+          const data = await callApi('/admin/user/freeze', {
+            method: 'POST',
+            headers: getAdminHeaders(),
+            body: JSON.stringify({
+              account: getValue('adminAccount'),
+              frozen: false,
+            }),
+          });
+          setOutput('解冻成功', data);
+        } catch (e) { setOutput('解冻失败', { message: e.message }); }
+      };
+      document.getElementById('renewBtn').onclick = async () => {
+        try {
+          const daysRaw = Number(getValue('renewDays') || '30');
+          const data = await callApi('/admin/user/renew', {
+            method: 'POST',
+            headers: getAdminHeaders(),
+            body: JSON.stringify({
+              account: getValue('adminAccount'),
+              days: Number.isFinite(daysRaw) ? daysRaw : 30,
+            }),
+          });
+          setOutput('续期成功', data);
+        } catch (e) { setOutput('续期失败', { message: e.message }); }
+      };
+      document.getElementById('refreshUsersBtn').onclick = async () => {
+        try {
+          const data = await callApi('/admin/users', {
+            headers: {
+              'x-admin-token': getValue('adminToken'),
+            },
+          });
+          renderUsers(data.users || []);
+          setOutput('用户列表', data);
+        } catch (e) { setOutput('获取用户列表失败', { message: e.message }); }
+      };
+      document.getElementById('refreshTemplatesBtn').onclick = async () => {
+        try {
+          const data = await callApi('/admin/templates', {
+            headers: { 'x-admin-token': getValue('adminToken') },
+          });
+          renderTemplates(data.templates || []);
+          setOutput('模板列表', data);
+        } catch (e) { setOutput('获取模板列表失败', { message: e.message }); }
+      };
+
+      const refreshSystemPrompts = async () => {
+        try {
+          const data = await callApi('/admin/system-prompts', {
+            method: 'GET',
+            headers: getAdminHeaders(),
+          });
+          renderSystemPrompts(data.prompts || []);
+          setOutput('系统提示词列表', data);
+        } catch (e) {
+          setOutput('获取系统提示词列表失败', { message: e.message });
+        }
+      };
+
+      document.getElementById('refreshSystemPromptsBtn').onclick = refreshSystemPrompts;
+      document.getElementById('refreshSystemPromptsBtn2').onclick = refreshSystemPrompts;
+      systemPromptCategoryFilter.onchange = () => renderSystemPrompts(systemPromptsCache);
+
+      document.getElementById('systemPromptUploadBtn').onclick = async () => {
+        try {
+          const payload = getSystemPromptForm();
+          if (!payload.name) throw new Error('标题不能为空');
+          if (!payload.systemPromptText) throw new Error('正文不能为空');
+          const data = await callApi('/admin/system-prompts/upload', {
+            method: 'POST',
+            headers: getAdminHeaders(),
+            body: JSON.stringify(payload),
+          });
+          setOutput('系统提示词已创建', data);
+          await refreshSystemPrompts();
+        } catch (e) {
+          setOutput('创建系统提示词失败', { message: e.message });
+        }
+      };
+
+      document.getElementById('systemPromptUpdateBtn').onclick = async () => {
+        try {
+          const payload = getSystemPromptForm();
+          if (!payload.id) throw new Error('请先填写预设 ID（或从列表点击回填）');
+          if (!payload.name) throw new Error('标题不能为空');
+          const data = await callApi(`/admin/system-prompts/${encodeURIComponent(payload.id)}`, {
+            method: 'PUT',
+            headers: getAdminHeaders(),
+            body: JSON.stringify(payload),
+          });
+          setOutput('系统提示词已更新', data);
+          await refreshSystemPrompts();
+        } catch (e) {
+          setOutput('更新系统提示词失败', { message: e.message });
+        }
+      };
+
+      document.getElementById('systemPromptDeleteBtn').onclick = async () => {
+        try {
+          const id = getValue('systemPromptIdInput');
+          if (!id) throw new Error('请先填写预设 ID（或从列表点击回填）');
+          if (!confirm(`确定删除系统提示词 ${id} 吗？`)) return;
+          const data = await callApi(`/admin/system-prompts/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: getAdminHeaders(),
+          });
+          setOutput('删除系统提示词成功', data);
+          document.getElementById('systemPromptTextInput').value = '';
+          await refreshSystemPrompts();
+        } catch (e) {
+          setOutput('删除系统提示词失败', { message: e.message });
+        }
+      };
+      templateCategoryFilter.onchange = () => {
+        renderTemplates(templatesCache);
+      };
+      document.getElementById('templateUploadBtn').onclick = async () => {
+        try {
+          const payload = getTemplateForm();
+          const data = await uploadWorkflowByPayload(payload);
+          setOutput('上传模板成功', data);
+          document.getElementById('refreshTemplatesBtn').click();
+        } catch (e) { setOutput('上传模板失败', { message: e.message }); }
+      };
+      document.getElementById('templateUpdateMetaBtn').onclick = async () => {
+        try {
+          const payload = getTemplateForm();
+          if (!payload.id) throw new Error('请先填写模板 ID');
+          const data = await callApi(`/admin/templates/${encodeURIComponent(payload.id)}`, {
+            method: 'PUT',
+            headers: getAdminHeaders(),
+            body: JSON.stringify({
+              name: payload.name,
+              version: payload.version,
+              category: payload.category,
+              description: payload.description,
+              paramsSchema: payload.paramsSchema,
+            }),
+          });
+          setOutput('更新模板信息成功', data);
+          document.getElementById('refreshTemplatesBtn').click();
+        } catch (e) { setOutput('更新模板信息失败', { message: e.message }); }
+      };
+      document.getElementById('templateUpdateWorkflowBtn').onclick = async () => {
+        try {
+          const payload = getTemplateForm();
+          if (!payload.id) throw new Error('请先填写模板 ID');
+          const data = await callApi(`/admin/templates/${encodeURIComponent(payload.id)}/workflow`, {
+            method: 'PUT',
+            headers: getAdminHeaders(),
+            body: JSON.stringify({
+              workflowJson: payload.workflowJson,
+            }),
+          });
+          setOutput('更新工作流成功', data);
+        } catch (e) { setOutput('更新工作流失败', { message: e.message }); }
+      };
+      document.getElementById('templateDeleteBtn').onclick = async () => {
+        try {
+          const id = getValue('templateIdInput');
+          if (!id) throw new Error('请先填写模板 ID');
+          if (!confirm(`确定删除模板 ${id} 吗？`)) return;
+          const data = await callApi(`/admin/templates/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+            headers: { 'x-admin-token': getValue('adminToken') },
+          });
+          setOutput('删除模板成功', data);
+          document.getElementById('refreshTemplatesBtn').click();
+        } catch (e) { setOutput('删除模板失败', { message: e.message }); }
+      };
+      document.getElementById('templateSelectAllBtn').onclick = () => {
+        filteredTemplates().forEach((item) => selectedTemplateIds.add(item.id));
+        renderTemplates(templatesCache);
+      };
+      document.getElementById('templateClearSelectionBtn').onclick = () => {
+        selectedTemplateIds.clear();
+        renderTemplates(templatesCache);
+      };
+      document.getElementById('templateBatchDeleteBtn').onclick = async () => {
+        try {
+          const ids = Array.from(selectedTemplateIds);
+          if (!ids.length) throw new Error('请先勾选模板');
+          if (!confirm(`确定批量删除 ${ids.length} 个模板吗？`)) return;
+          for (const id of ids) {
+            await callApi(`/admin/templates/${encodeURIComponent(id)}`, {
+              method: 'DELETE',
+              headers: { 'x-admin-token': getValue('adminToken') },
+            });
+          }
+          selectedTemplateIds.clear();
+          setOutput('批量删除成功', { count: ids.length, ids });
+          document.getElementById('refreshTemplatesBtn').click();
+        } catch (e) { setOutput('批量删除失败', { message: e.message }); }
+      };
+      document.getElementById('extractParamsBtn').onclick = () => {
+        setOutput('提示', { message: '请先通过“编辑”加载模板，或通过拖拽/文件上传 JSON 后再提取参数。' });
+      };
+      const uploadFiles = async (files) => {
+        const valid = Array.from(files).filter((file) => file.name.toLowerCase().endsWith('.json'));
+        if (!valid.length) throw new Error('未检测到 JSON 文件');
+        const category = getValue('templateCategoryInput') || 'image';
+        const version = getValue('templateVersionInput') || '1.0.0';
+        const description = getValue('templateDescriptionInput');
+        let count = 0;
+        for (const file of valid) {
+          const raw = await file.text();
+          const workflowJson = parseJsonSafe(raw, {});
+          const name = file.name.replace(/\.json$/i, '') || `template-${Date.now()}`;
+          const payload = {
+            name,
+            version,
+            category,
+            description,
+            paramsSchema: inferParamsSchemaFromWorkflow(workflowJson),
+            workflowJson,
+          };
+          await uploadWorkflowByPayload(payload);
+          count += 1;
+        }
+        setOutput('批量上传完成', { count });
+        document.getElementById('refreshTemplatesBtn').click();
+      };
+      templateDropzone.ondragover = (event) => {
+        event.preventDefault();
+        templateDropzone.classList.add('is-dragover');
+      };
+      templateDropzone.ondragleave = () => {
+        templateDropzone.classList.remove('is-dragover');
+      };
+      templateDropzone.ondrop = async (event) => {
+        event.preventDefault();
+        templateDropzone.classList.remove('is-dragover');
+        try {
+          await uploadFiles(event.dataTransfer.files);
+        } catch (e) { setOutput('拖拽上传失败', { message: e.message }); }
+      };
+      document.getElementById('pickTemplateFilesBtn').onclick = () => templateFilesInput.click();
+      templateFilesInput.onchange = async (event) => {
+        try {
+          await uploadFiles(event.target.files || []);
+          event.target.value = '';
+        } catch (e) { setOutput('文件上传失败', { message: e.message }); }
+      };
+      document.getElementById('refreshUsersBtn').click();
+      document.getElementById('refreshTemplatesBtn').click();
+      refreshSystemPrompts();
+    </script>
+  </body>
+</html>

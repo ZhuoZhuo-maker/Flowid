@@ -1,0 +1,28 @@
+{
+  "appId": "com.flowid.workflow-analyzer",
+  "productName": "Flowid 工作流分析工具",
+  "directories": {
+    "output": "release-analyzer"
+  },
+  "extraMetadata": {
+    "main": "electron/analyzer-main.cjs"
+  },
+  "files": [
+    "electron/analyzer-*.cjs",
+    "electron/analyzer.html",
+    "package.json"
+  ],
+  "asar": true,
+  "win": {
+    "target": ["nsis"],
+    "signAndEditExecutable": false,
+    "artifactName": "${productName}_v${version}.${ext}"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": false,
+    "createDesktopShortcut": true,
+    "shortcutName": "Flowid 工作流分析工具"
+  }
+}

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <meta name="application-name" content="Flowid" />
+    <title>Flowid</title>
+    <!-- 误用 http://localhost:端口 打开时与 127.0.0.1 的 localStorage 不互通；尽早跳转到 127.0.0.1 统一数据来源 -->
+    <script>
+      (function () {
+        if (window.location.hostname !== 'localhost') return
+        var p = window.location.port
+        window.location.replace(
+          window.location.protocol +
+            '//127.0.0.1' +
+            (p ? ':' + p : '') +
+            window.location.pathname +
+            window.location.search +
+            window.location.hash,
+        )
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

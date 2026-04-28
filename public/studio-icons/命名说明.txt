@@ -1,0 +1,29 @@
+UTF-8
+本目录放画布 UI 图标 SVG，开发时访问路径为：/studio-icons/<文件名>
+
+请将 Figma 导出的文件重命名为下表文件名后覆盖对应文件（可只替换内容，勿改文件名）。
+
+文件名                      用途说明
+--------------------------------------------------------------------------------
+left-add.svg                左侧第 1 钮默认：添加节点（打开添加节点面板）
+left-add-active.svg         左侧第 1 钮激活：添加节点面板已打开
+brand-flowid.svg            顶栏品牌 Logo
+top-save.svg                顶栏：保存进度
+top-notify.svg              顶栏：打开「生成记录」侧栏
+top-home.svg                顶栏：首页 / 适配画布
+top-star.svg                顶栏：充值区星标小图
+left-download.svg           左侧第 2 钮默认（素材库面板）
+left-download-active.svg    左侧第 2 钮激活（面板已打开）
+left-asset.svg              左侧第 3 钮（生成记录）
+left-history.svg            左侧第 4 钮（预设模板）
+left-help.svg               左侧第 5 钮（系统设置）
+rt-select.svg               右下：选择 / 箭头
+rt-pan.svg                  右下：抓手
+rt-minimap.svg              右下：小地图开关
+panel-upload.svg            素材库面板：上传
+
+可选第二套状态（若设计稿单独给了再增加）：
+  *-hover.svg
+  *-active.svg（除已有 left-download-active 外）
+
+占位文件可整文件替换；保持 viewBox 与导出尺寸一致即可。

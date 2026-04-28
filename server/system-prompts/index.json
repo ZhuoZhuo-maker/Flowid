@@ -1,0 +1,174 @@
+{
+  "prompts": [
+    {
+      "id": "e73c56ba-e4a2-4986-9984-c4c81bbe30d8",
+      "name": "动效提示词",
+      "version": "1.0.0",
+      "category": "生图",
+      "description": "",
+      "promptFile": "e73c56ba-e4a2-4986-9984-c4c81bbe30d8.system-prompt.txt",
+      "sha256": "fcd7c458d9b78f2e3693510d017c0800982af87984825766a653cf881039f8a0",
+      "sig": "e270e29b19138f5dd63990cec966caab7add866473155a756028699490a94ac6"
+    },
+    {
+      "id": "c3b8f1e8-22c4-4144-bbf6-05f1c11f8d18",
+      "name": "海报提示词",
+      "version": "1.0.0",
+      "category": "生图",
+      "description": "",
+      "promptFile": "c3b8f1e8-22c4-4144-bbf6-05f1c11f8d18.system-prompt.txt",
+      "sha256": "6ff7cd049ebbb933e4c1313ba0cb2fa64c5015686a258332941a7dd5f7bf914f",
+      "sig": "8c8b4e2821ee7ed52150b7c9c4a1ef9c6d16addda9e7588e605751c66604d276"
+    },
+    {
+      "id": "a4edec6d-a9bc-453f-8d77-9303dd25bf08",
+      "name": "图标提示词",
+      "version": "1.0.0",
+      "category": "生图",
+      "description": "",
+      "promptFile": "a4edec6d-a9bc-453f-8d77-9303dd25bf08.system-prompt.txt",
+      "sha256": "fa6cff27a6dd4cd47e73b49b9433f7fb1c24b8e23503648c34e985d4c6fecf79",
+      "sig": "8216c24ece812fc10c42df699feed5ec958b360c9877a8d623b1d2589ca559a9"
+    },
+    {
+      "id": "d5750a37-8487-4c3f-9bd3-6d7a170f2329",
+      "name": "logo提示词",
+      "version": "1.0.0",
+      "category": "生图",
+      "description": "",
+      "promptFile": "d5750a37-8487-4c3f-9bd3-6d7a170f2329.system-prompt.txt",
+      "sha256": "f1e99f9936574017656366694cddc8ce1373a479ef8d6bc7c14192eed4d1850a",
+      "sig": "4048148fbe38bda4c83b15c4c032b8d9ca4e668c5ad7ff3251050a36adc2a243"
+    },
+    {
+      "id": "9f2c94ba-d283-45bd-a46b-0a595d8522f8",
+      "name": "UI界面提示词",
+      "version": "1.0.0",
+      "category": "生图",
+      "description": "",
+      "promptFile": "9f2c94ba-d283-45bd-a46b-0a595d8522f8.system-prompt.txt",
+      "sha256": "704699971f7380c92439d883e3df7c1b5a9f9dbcbcc46fc99676b256e26de2fc",
+      "sig": "b1d91992c1c17aef9ad3084c520280fa59cbac5ca55e4ca3c60e4da83ed5cc43"
+    },
+    {
+      "id": "b6dbdab7-8b1d-4a95-bfd9-0f71380cc84a",
+      "name": "电商模特提示词",
+      "version": "1.0.0",
+      "category": "生图",
+      "description": "",
+      "promptFile": "b6dbdab7-8b1d-4a95-bfd9-0f71380cc84a.system-prompt.txt",
+      "sha256": "9650d1b45706af3635be87fa5925050714f064e1ec3823f162b2ca6ef962e4b6",
+      "sig": "e7966b9c07c929279c036fd883466c5af56af733d1cb1a390c434f6e1c229f3f"
+    },
+    {
+      "id": "4b03f732-2a76-439f-8628-dd5a1867e692",
+      "name": "剧-11-数字导演】与【视觉预览专家】",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "4b03f732-2a76-439f-8628-dd5a1867e692.system-prompt.txt",
+      "sha256": "4d404c741d9ea266e6620a3c5383a4da30e009c5b2849d3349b55d54acd7d983",
+      "sig": "8a604331d073f1be2d87bf36b95e4e04b635d5962b469e77b32fea4c5a44c43c"
+    },
+    {
+      "id": "97cd7830-f411-4077-b0c8-5dd80090e04d",
+      "name": "剧-10-AI 视觉资产架构师】与【提示词工程师】",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "97cd7830-f411-4077-b0c8-5dd80090e04d.system-prompt.txt",
+      "sha256": "2c766765670626ce41d794347ae5030c26e40f42ff4b7aab3b2eae0f530f378b",
+      "sig": "d393c2083437f2238c4d9baa20b185c43102384c9c669b443b2328e462aafe85"
+    },
+    {
+      "id": "8e306077-f849-410a-a65b-57b3397c3946",
+      "name": "剧-9-文学编辑】兼【剧本排版专家】",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "8e306077-f849-410a-a65b-57b3397c3946.system-prompt.txt",
+      "sha256": "f87727195b2b41a762a990ff3ffb6607cb2c0247dee2a1a4b9bc5f3a380a98b1",
+      "sig": "de45d3dee128b2305e695bf015704cb11bbcfab0094adb44db5b657c97549c91"
+    },
+    {
+      "id": "8412ae72-f135-4bcb-bf58-62783f6ef40f",
+      "name": "剧-8-剧本医生",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "8412ae72-f135-4bcb-bf58-62783f6ef40f.system-prompt.txt",
+      "sha256": "7a2ebc32d2c3d3a9b886257669fbc059f31c15534296e3292bb7b4c50e6d7c4a",
+      "sig": "d7386731b89124e7d4b122539fa0ba4909856b4211dfade2ddc6873b949cfa94"
+    },
+    {
+      "id": "66f60552-e091-48cd-b244-848b5c11388c",
+      "name": "剧-7-高级编剧",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "66f60552-e091-48cd-b244-848b5c11388c.system-prompt.txt",
+      "sha256": "375c5308ae6c38e0566bb369bd38459d60556321668056aefc6ad5784d51aed5",
+      "sig": "cdce5a640386451bcb4950c85496819708a982fb124019f802d1ce512d0a944b"
+    },
+    {
+      "id": "26b34ee2-3645-4df4-b796-0cdf06e14ec0",
+      "name": "剧-6-导演与分镜设计师",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "26b34ee2-3645-4df4-b796-0cdf06e14ec0.system-prompt.txt",
+      "sha256": "e1d7ea278c7295dbd4fe3c7f99e1464c1a8cdd13b77c4049253d1e67559bcb2c",
+      "sig": "4e7b077e27f5f629021bfb301e115b5f3684b3e630ecb99b684c30a6a21ed199"
+    },
+    {
+      "id": "85d16a7f-31cc-41fe-ab88-33d632640aff",
+      "name": "剧-5-顶级剧本架构师",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "85d16a7f-31cc-41fe-ab88-33d632640aff.system-prompt.txt",
+      "sha256": "bbaf9b0f8aa60d3fffade6e58b1d17fc92cb61aac57b20edba4c71c8d17628ff",
+      "sig": "5b810b79b78edc3994cd59a0eb7451158973519e65bcf0fd776e4b050cae8a1b"
+    },
+    {
+      "id": "4de2e326-97c8-4193-8303-c995e3691542",
+      "name": "剧-4-视觉叙事大师 & 剧本医生",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "4de2e326-97c8-4193-8303-c995e3691542.system-prompt.txt",
+      "sha256": "51dbde9e379b4132ce2a50feaf10a8ea3dfe6317220173f455dd9bfe55265d5c",
+      "sig": "8c99ef8e69c6cb91f222c3933c939b2f3160d22c1baec40c54d510e8d4988203"
+    },
+    {
+      "id": "62e6403f-4349-4dfe-a0cd-556c0188ec86",
+      "name": "剧-3-高级电影选角导演 & 角色架构师",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "62e6403f-4349-4dfe-a0cd-556c0188ec86.system-prompt.txt",
+      "sha256": "69832164180a36d493636c037b00ea20737c0c77a98b27ec05861c86f2d0598f",
+      "sig": "fe14b7ff6600cb06726260e85f12ce42b9c2a3861d3deccd8642f678d53cfcfb"
+    },
+    {
+      "id": "28543bc7-64c1-41bc-b606-d4a78bcebd79",
+      "name": "剧-2-顶级电影视觉编剧",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "28543bc7-64c1-41bc-b606-d4a78bcebd79.system-prompt.txt",
+      "sha256": "b8ddfe2f10795f297ef6e4f821225ab58e6adbeb121fe00acfc25f0e02a082d8",
+      "sig": "267942bf67e37ebf051b073a3572dd044b3844555d3e171aa5c2e7bfe329f27e"
+    },
+    {
+      "id": "756b3202-5cbd-488c-83ef-dec0b469efa4",
+      "name": "剧-1-高级电影策划",
+      "version": "1.0.0",
+      "category": "剧本",
+      "description": "",
+      "promptFile": "756b3202-5cbd-488c-83ef-dec0b469efa4.system-prompt.txt",
+      "sha256": "cfae188a5901f339ad81f207d9b2b6186ce99ef9c166378a18018edea45398f8",
+      "sig": "139ee918afc740ba717beae1b22ae71f3ec5d08219bf65fb3dc69b231a3eca39"
+    }
+  ]
+}

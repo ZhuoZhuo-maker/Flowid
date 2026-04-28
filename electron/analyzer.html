@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flowid 工作流分析工具</title>
+    <style>
+      :root {
+        --bg: #0b0f15;
+        --panel: #0f1218;
+        --line: #2a303d;
+        --line-2: #36425a;
+        --text: #eef3ff;
+        --muted: #9ea9c4;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Microsoft YaHei", system-ui, sans-serif;
+        background: radial-gradient(circle at top, #111826 0%, var(--bg) 55%);
+        color: var(--text);
+      }
+      .wrap { max-width: 1120px; margin: 20px auto; padding: 0 14px; }
+      h1 { margin: 0 0 6px; font-size: 24px; }
+      .sub { margin: 0 0 14px; color: var(--muted); }
+      .actions { display: flex; gap: 8px; margin-bottom: 12px; }
+      button {
+        height: 36px; padding: 0 12px;
+        border: 1px solid var(--line-2);
+        border-radius: 8px; background: #151b27; color: var(--text); cursor: pointer;
+      }
+      button.primary { background: #2b3954; border-color: #5b6f94; }
+      .grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; }
+      .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-height: 180px; }
+      .card h3 { margin: 0 0 10px; font-size: 15px; }
+      .muted { color: var(--muted); font-size: 12px; }
+      textarea, pre {
+        width: 100%; min-height: 230px; border-radius: 8px; border: 1px solid var(--line);
+        background: #0a0f17; color: #dce5ff; padding: 10px; font-size: 12px; line-height: 1.45;
+      }
+      .list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow: auto; }
+      .item { border: 1px solid #243044; border-radius: 8px; padding: 8px; }
+      .item .k { color: var(--muted); margin-right: 6px; }
+      @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Flowid 工作流分析工具</h1>
+      <p class="sub">解析 ComfyUI 工作流：模型清单、节点类型、自定义插件线索。可单独打包成 exe。</p>
+      <div class="actions">
+        <button class="primary" id="pickBtn">选择工作流 JSON</button>
+        <button id="analyzeBtn">分析文本框 JSON</button>
+        <button id="copyBtn">复制分析结果</button>
+      </div>
+      <div class="grid">
+        <section class="card">
+          <h3>工作流 JSON</h3>
+          <p class="muted" id="filePath">未选择文件</p>
+          <textarea id="jsonInput" placeholder="可粘贴工作流 JSON，或用“选择工作流 JSON”读取文件"></textarea>
+        </section>
+        <section class="card">
+          <h3>分析结果（摘要）</h3>
+          <pre id="summaryOutput">暂无结果</pre>
+        </section>
+      </div>
+      <div class="grid" style="margin-top:12px;">
+        <section class="card">
+          <h3>模型清单</h3>
+          <div class="list" id="modelsList"></div>
+        </section>
+        <section class="card">
+          <h3>插件/节点线索</h3>
+          <div class="list" id="pluginsList"></div>
+        </section>
+      </div>
+    </div>
+    <script>
+      const pickBtn = document.getElementById('pickBtn');
+      const analyzeBtn = document.getElementById('analyzeBtn');
+      const copyBtn = document.getElementById('copyBtn');
+      const jsonInput = document.getElementById('jsonInput');
+      const summaryOutput = document.getElementById('summaryOutput');
+      const filePathEl = document.getElementById('filePath');
+      const modelsList = document.getElementById('modelsList');
+      const pluginsList = document.getElementById('pluginsList');
+
+      const modelKeys = ['model_name', 'unet_name', 'vae_name', 'clip_name', 'clip_name1', 'clip_name2', 'lora_name', 'checkpoint', 'ckpt_name', 'model'];
+      const pluginHints = [
+        { kw: 'easy ', plugin: 'ComfyUI-Easy-Use（推测）' },
+        { kw: 'VHS_', plugin: 'VideoHelperSuite（VHS）' },
+        { kw: 'Qwen', plugin: 'ComfyUI_Qwen3-VL-Instruct（推测）' },
+        { kw: 'KJ', plugin: 'KJNodes（推测）' },
+        { kw: 'GuHai', plugin: '孤海节点包（推测）' },
+        { kw: 'pysssss', plugin: 'pysssss 节点包（推测）' },
+      ];
+
+      function analyze(rawText) {
+        const obj = JSON.parse(rawText);
+        const nodes = Object.entries(obj).filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v));
+        const classTypes = new Map();
+        const models = [];
+        const pluginSet = new Set();
+
+        for (const [id, node] of nodes) {
+          const classType = String(node.class_type || '').trim();
+          if (!classType) continue;
+          classTypes.set(classType, (classTypes.get(classType) || 0) + 1);
+          const inputs = node.inputs && typeof node.inputs === 'object' ? node.inputs : {};
+          for (const [k, v] of Object.entries(inputs)) {
+            if (!modelKeys.includes(k)) continue;
+            if (typeof v === 'string' && v.trim()) {
+              models.push({ nodeId: id, classType, field: k, value: v.trim() });
+            }
+          }
+          for (const hint of pluginHints) {
+            if (classType.includes(hint.kw)) pluginSet.add(hint.plugin);
+          }
+        }
+
+        const uniqueModels = [];
+        const seen = new Set();
+        for (const row of models) {
+          const key = `${row.field}|${row.value}|${row.classType}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          uniqueModels.push(row);
+        }
+
+        const summary = {
+          总节点数: nodes.length,
+          节点类型数: classTypes.size,
+          模型条目数: uniqueModels.length,
+          可能插件数: pluginSet.size,
+        };
+
+        return {
+          summary,
+          models: uniqueModels,
+          classTypeTop: [...classTypes.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50),
+          plugins: [...pluginSet],
+        };
+      }
+
+      function renderList(container, rows, mapper) {
+        container.innerHTML = '';
+        if (!rows.length) {
+          container.innerHTML = '<div class="muted">无</div>';
+          return;
+        }
+        rows.forEach((row) => {
+          const el = document.createElement('div');
+          el.className = 'item';
+          el.innerHTML = mapper(row);
+          container.appendChild(el);
+        });
+      }
+
+      function renderResult(result) {
+        summaryOutput.textContent = JSON.stringify({
+          ...result.summary,
+          高频节点类型: result.classTypeTop,
+          可能插件: result.plugins,
+        }, null, 2);
+        renderList(modelsList, result.models, (r) =>
+          `<div><span class="k">节点</span>${r.nodeId} / ${r.classType}</div>
+           <div><span class="k">字段</span>${r.field}</div>
+           <div><span class="k">值</span>${r.value}</div>`
+        );
+        renderList(pluginsList, result.plugins, (p) => `<div>${p}</div>`);
+      }
+
+      pickBtn.onclick = async () => {
+        const picked = await window.workflowAnalyzerDesktop?.pickFile?.();
+        if (!picked) return;
+        filePathEl.textContent = picked.filePath;
+        jsonInput.value = picked.content;
+        try {
+          renderResult(analyze(picked.content));
+        } catch (e) {
+          summaryOutput.textContent = `解析失败：${e?.message || e}`;
+        }
+      };
+
+      analyzeBtn.onclick = () => {
+        try {
+          renderResult(analyze(jsonInput.value));
+        } catch (e) {
+          summaryOutput.textContent = `解析失败：${e?.message || e}`;
+        }
+      };
+
+      copyBtn.onclick = async () => {
+        try {
+          await navigator.clipboard.writeText(summaryOutput.textContent);
+          alert('已复制摘要');
+        } catch {
+          alert('复制失败，请手动复制');
+        }
+      };
+    </script>
+  </body>
+</html>
