@@ -7,8 +7,16 @@ set "EXIT_CODE=0"
 set "BRANCH="
 set "NO_PAUSE="
 set "REMOTE_URL=git@gitee.com:zhuozhuo1786449/flowid-v2.0.git"
+set "AUTO_MSG="
+set "AUTO_YES="
 
 if /i "%~1"=="--no-pause" set "NO_PAUSE=1"
+if /i "%~1"=="--yes" set "AUTO_YES=1"
+if /i "%~2"=="--yes" set "AUTO_YES=1"
+if /i "%~1"=="--auto" set "AUTO_YES=1"
+if /i "%~2"=="--auto" set "AUTO_YES=1"
+if /i "%~1"=="--auto" set "AUTO_MSG=1"
+if /i "%~2"=="--auto" set "AUTO_MSG=1"
 
 echo [STEP 1/6] Detect current branch...
 set "BRANCH="
@@ -43,8 +51,13 @@ echo [STEP 3/6] Show working tree status...
 git status --short
 
 echo.
-set /p MSG=Commit message (Enter=chore: update): 
-if "%MSG%"=="" set "MSG=chore: update"
+set "MSG="
+if defined AUTO_MSG (
+  set "MSG=chore: update"
+) else (
+  set /p "MSG=Commit message (Enter=chore: update): "
+  if "%MSG%"=="" set "MSG=chore: update"
+)
 
 echo.
 echo [STEP 4/6] Stage changes...
@@ -65,6 +78,9 @@ echo [OK ] Staged.
 
 echo.
 echo [STEP 5/6] Commit...
+if not defined AUTO_YES (
+  echo [INFO] About to commit with message: %MSG%
+)
 git commit -m "%MSG%"
 if errorlevel 1 (
   echo [ERR] git commit failed.
