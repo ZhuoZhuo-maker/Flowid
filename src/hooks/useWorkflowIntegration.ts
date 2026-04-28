@@ -26,6 +26,7 @@ import {
 } from '../lib/license'
 import { matchStudioNodeWorkflow } from '../lib/matchStudioNodeWorkflow'
 import { persistWorkflowJsonToDisk } from '../lib/localAssetDiskMirror'
+import { normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
 import {
   buildComfyPromptDigest,
   checkComfyHealth,
@@ -1901,6 +1902,60 @@ export function useWorkflowIntegration() {
       if (node.data.kind === 'panorama') {
         throw new Error('VR360 全景节点为本地预览与导出工具，请在节点内使用「当前视角」，不参与 Comfy 执行')
       }
+
+      const nodeKind = node.data.kind
+      const nodeConfig = snapshot.nodeConfigs[nodeKind]
+
+      /**
+       * 文本/脚本节点：若用户在提示框里选择了云端模型配置，则直接走 OpenAI 兼容接口生成文本，
+       * 而不是提交 ComfyUI 工作流任务。
+       */
+      if (nodeKind === 'text' || nodeKind === 'script') {
+        const model = String(nodeConfig.cloudModelName || '').trim()
+        const baseUrl = normalizeOpenAICompatibleBaseUrl(String(nodeConfig.cloudModelUrl || ''))
+        const apiKey = String(nodeConfig.cloudApiKey || '').trim()
+        const body = String((node.data as any)?.body || '').trim()
+        if (baseUrl && model) {
+          if (!apiKey) {
+            throw new Error('已选择云端模型但未填写 API Key，请先在设置中填写该节点类型的 API Key')
+          }
+          if (!body) {
+            throw new Error('文本内容为空，无法调用模型。请先在节点里填写内容再执行。')
+          }
+          options?.onProgress?.({ percent: 8, label: '正在调用文本模型…' })
+          const endpoint = `${baseUrl}/v1/chat/completions`
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model,
+              temperature: 0.7,
+              messages: [
+                { role: 'system', content: '你是 Flowid 文本节点助手。请直接输出最终文本，不要输出额外解释。' },
+                { role: 'user', content: body },
+              ],
+            }),
+          })
+          const json = (await res.json().catch(() => ({}))) as any
+          if (!res.ok) {
+            const msg = String(json?.error?.message || json?.message || `HTTP ${res.status}`)
+            throw new Error(`文本模型调用失败：${msg}`)
+          }
+          const content = String(json?.choices?.[0]?.message?.content || '').trim()
+          options?.onProgress?.({ percent: 96, label: '模型已返回，正在回填…' })
+          return {
+            previewUrl: null,
+            audioUrl: null,
+            resultUrl: null,
+            textResult: content,
+            historyEntry: json,
+          }
+        }
+      }
+
       const targetProvider = snapshot.executionProvider
       const providerConfig =
         targetProvider === 'local'
@@ -1930,8 +1985,6 @@ export function useWorkflowIntegration() {
             : '请先填写云端 ComfyUI 地址',
         )
       }
-      const nodeKind = node.data.kind
-      const nodeConfig = snapshot.nodeConfigs[nodeKind]
       if (snapshot.executionMode === 'official') {
         const templateId = String(nodeConfig.officialTemplateId || '').trim()
         if (!templateId) {
