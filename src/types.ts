@@ -124,6 +124,12 @@ export type StudioNodeDataBase = {
   workflowEntryId?: string
 
   /**
+   * 底部提示框切换：执行时走工作流（ComfyUI）还是走文本模型。
+   * 这是“节点级”状态，用于同一画布不同节点不同执行路径。
+   */
+  promptPickerMode?: 'workflow' | 'model'
+
+  /**
    * 兼容字段：部分 UI 层会在未严格区分 kind 的情况下读取媒体节点字段。
    * 这些字段对非媒体节点应视为不存在（undefined）。
    */

@@ -1730,8 +1730,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const [showMiniPreview, setShowMiniPreview] = useState(false)
   /** 底部提示框是否放大布局（参考外部产品的大输入区）。 */
   const [promptPanelExpanded, setPromptPanelExpanded] = useState(false)
-  /** 底部提示框：选择「工作流」还是「模型」 */
-  const [promptPanelPickerMode, setPromptPanelPickerMode] = useState<'workflow' | 'model'>('workflow')
   /** 文本节点「自动拆分」下拉：选完后重置 key，便于再次选择同一项。 */
   const [textSplitSelectKey, setTextSplitSelectKey] = useState(0)
   /**
@@ -1925,7 +1923,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (current && !base.some((i) => i.label === current)) {
       base.unshift({ value: 'custom-current', label: current })
     }
-    return [...base, { value: 'custom', label: '自定义' }]
+    // 不展示“自定义”入口：只显示预设模型 +（若当前值不在预设中）当前模型名
+    return base
   }, [nodeConfigs, promptPanel])
 
   const promptPanelModelSelectValue = useMemo(() => {
@@ -1934,8 +1933,15 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     const found = loadCloudModelPresets().find((i) => i.name === current)
     if (found) return found.id
     if (current) return 'custom-current'
-    return loadCloudModelPresets()[0]?.id || 'custom'
+    return loadCloudModelPresets()[0]?.id || ''
   }, [nodeConfigs, promptPanel])
+
+  /** 底部提示框：节点级切换「工作流」还是「模型」 */
+  const promptPanelPickerMode = useMemo(() => {
+    if (!promptPanel) return 'workflow' as const
+    const mode = (promptPanel.node.data as any)?.promptPickerMode
+    return mode === 'model' ? 'model' : 'workflow'
+  }, [promptPanel])
 
   /** 与 `matchStudioNodeWorkflow` / 执行逻辑一致的下拉展示值，避免 model 为空时显示第一项却跑全局选中 */
   const promptPanelWorkflowSelectValue = useMemo(() => {
@@ -5375,6 +5381,27 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             title: fresh.data.title,
           })
         }
+        return
+      }
+
+      // 其它节点：若模型返回了文本结果，按节点类型回填到提示框字段（用于“模型模式”生成提示词/描述）
+      const textResult = String(result.textResult || '').trim()
+      if (!textResult) return
+      if (kind === 'image' || kind === 'video') {
+        updateNodeData(id, {
+          kind,
+          prompt: textResult,
+        } as any)
+        appendHistory({ text: '模型已生成提示词并回填', kind: 'action' })
+        return
+      }
+      if (kind === 'audio' || kind === 'music') {
+        updateNodeData(id, {
+          kind,
+          note: textResult,
+        } as any)
+        appendHistory({ text: '模型已生成描述并回填', kind: 'action' })
+        return
       }
     },
     [appendHistory, updateNodeData],
@@ -5394,6 +5421,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const result = await runNodeWorkflow(prepared, {
         allNodes: nodes,
         runNodeTitle: String(latest.data.title || latest.id),
+        executionTarget: promptPanelPickerMode,
         rawPromptText:
           latest.data.kind === 'image' || latest.data.kind === 'video'
             ? String((latest.data as ImageNodeData | VideoNodeData).prompt || '')
@@ -7031,7 +7059,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         aria-label="打开设置面板"
                         onClick={(event) => {
                           event.stopPropagation()
-                          setPromptPanelPickerMode((m) => (m === 'workflow' ? 'model' : 'workflow'))
+                          if (!visiblePromptPanel) return
+                          const nid = visiblePromptPanel.node.id
+                          const current = (visiblePromptPanel.node.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow'
+                          const next = current === 'workflow' ? 'model' : 'workflow'
+                          updateNodeData(nid, {
+                            promptPickerMode: next,
+                          } as any)
                         }}
                         onDoubleClick={(event) => {
                           event.stopPropagation()

@@ -57,6 +57,8 @@ export type RunNodeWorkflowOptions = {
   rawPromptText?: string
   /** 执行前的原始说明文本（未做 @ 引用解析）。 */
   rawNoteText?: string
+  /** 节点提示框切换：强制只走模型或只走工作流（ComfyUI） */
+  executionTarget?: 'workflow' | 'model'
   /** 执行前预检查消息（用于 UI 提示，不依赖控制台）。 */
   onPreflightMessage?: (message: string) => void
   /** 执行入口传入的当前节点标题（以触发执行时的节点标题为准）。 */
@@ -1907,52 +1909,68 @@ export function useWorkflowIntegration() {
       const nodeConfig = snapshot.nodeConfigs[nodeKind]
 
       /**
-       * 文本/脚本节点：若用户在提示框里选择了云端模型配置，则直接走 OpenAI 兼容接口生成文本，
-       * 而不是提交 ComfyUI 工作流任务。
+       * 节点提示框切换：
+       * - model：仅调用云端模型，不提交 ComfyUI
+       * - workflow：仅提交 ComfyUI（即使配置了云端模型也不走模型）
        */
-      if (nodeKind === 'text' || nodeKind === 'script') {
+      const executionTarget = options?.executionTarget ?? 'workflow'
+      if (executionTarget === 'model') {
         const model = String(nodeConfig.cloudModelName || '').trim()
         const baseUrl = normalizeOpenAICompatibleBaseUrl(String(nodeConfig.cloudModelUrl || ''))
         const apiKey = String(nodeConfig.cloudApiKey || '').trim()
-        const body = String((node.data as any)?.body || '').trim()
-        if (baseUrl && model) {
-          if (!apiKey) {
-            throw new Error('已选择云端模型但未填写 API Key，请先在设置中填写该节点类型的 API Key')
-          }
-          if (!body) {
-            throw new Error('文本内容为空，无法调用模型。请先在节点里填写内容再执行。')
-          }
-          options?.onProgress?.({ percent: 8, label: '正在调用文本模型…' })
-          const endpoint = `${baseUrl}/v1/chat/completions`
-          const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model,
-              temperature: 0.7,
-              messages: [
-                { role: 'system', content: '你是 Flowid 文本节点助手。请直接输出最终文本，不要输出额外解释。' },
-                { role: 'user', content: body },
-              ],
-            }),
-          })
-          const json = (await res.json().catch(() => ({}))) as any
-          if (!res.ok) {
-            const msg = String(json?.error?.message || json?.message || `HTTP ${res.status}`)
-            throw new Error(`文本模型调用失败：${msg}`)
-          }
-          const content = String(json?.choices?.[0]?.message?.content || '').trim()
-          options?.onProgress?.({ percent: 96, label: '模型已返回，正在回填…' })
-          return {
-            previewUrl: null,
-            audioUrl: null,
-            resultUrl: null,
-            textResult: content,
-            historyEntry: json,
-          }
+        if (!baseUrl || !model) {
+          throw new Error('当前节点未配置云端模型（模型名/地址），无法仅使用模型执行')
+        }
+        if (!apiKey) {
+          throw new Error('当前节点未填写 API Key，无法仅使用模型执行')
+        }
+        const inputText =
+          nodeKind === 'text' || nodeKind === 'script'
+            ? String((node.data as any)?.body || '').trim()
+            : nodeKind === 'image' || nodeKind === 'video'
+              ? String((node.data as any)?.prompt || '').trim()
+              : nodeKind === 'audio' || nodeKind === 'music'
+                ? String((node.data as any)?.note || '').trim()
+                : ''
+        if (!inputText) {
+          throw new Error('输入内容为空，无法调用模型。请先在节点提示框填写内容再执行。')
+        }
+        const systemPrompt =
+          nodeKind === 'image' || nodeKind === 'video'
+            ? '你是提示词工程助手。请把用户输入改写成适合图像/视频生成的高质量提示词，输出纯文本，不要解释。'
+            : nodeKind === 'audio' || nodeKind === 'music'
+              ? '你是配音/音乐生成提示词助手。请把用户描述改写成更清晰可执行的提示词，输出纯文本，不要解释。'
+              : '你是 Flowid 文本节点助手。请直接输出最终文本，不要输出额外解释。'
+        options?.onProgress?.({ percent: 8, label: '正在调用文本模型…' })
+        const endpoint = `${baseUrl}/v1/chat/completions`
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.7,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: inputText },
+            ],
+          }),
+        })
+        const json = (await res.json().catch(() => ({}))) as any
+        if (!res.ok) {
+          const msg = String(json?.error?.message || json?.message || `HTTP ${res.status}`)
+          throw new Error(`文本模型调用失败：${msg}`)
+        }
+        const content = String(json?.choices?.[0]?.message?.content || '').trim()
+        options?.onProgress?.({ percent: 96, label: '模型已返回，正在回填…' })
+        return {
+          previewUrl: null,
+          audioUrl: null,
+          resultUrl: null,
+          textResult: content,
+          historyEntry: json,
         }
       }
 
