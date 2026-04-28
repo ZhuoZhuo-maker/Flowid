@@ -130,6 +130,14 @@ export type StudioNodeDataBase = {
   promptPickerMode?: 'workflow' | 'model'
 
   /**
+   * 节点级云端模型配置（用于“模型”模式执行）。
+   * 不同节点可配置不同模型与 key，不随节点类型同步。
+   */
+  cloudModelName?: string
+  cloudModelUrl?: string
+  cloudApiKey?: string
+
+  /**
    * 兼容字段：部分 UI 层会在未严格区分 kind 的情况下读取媒体节点字段。
    * 这些字段对非媒体节点应视为不存在（undefined）。
    */

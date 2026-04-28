@@ -1,6 +1,8 @@
 import type { Node } from '@xyflow/react'
 import type { StudioNodeData, StudioNodeKind } from '../types'
 import { fetchSystemPromptPresetText, loadActiveSystemPromptPresetId } from './systemPromptPresets'
+import { normalizeOpenAICompatibleBaseUrl } from './openaiCompat'
+import { fetchOpenAICompat } from './openaiProxy'
 
 const AI_ASSISTANT_CONFIG_KEY = 'flowid.ai.assistant.config.v1'
 
@@ -171,10 +173,13 @@ export async function planActionsWithModel(
   nodes: Array<Node<StudioNodeData>>,
   config: AiAssistantConfig,
 ): Promise<AiAssistantAction[]> {
-  const endpoint =
+  const rawEndpoint =
     config.provider === 'ollama'
       ? (config.endpoint.trim() || 'http://127.0.0.1:11434/v1/chat/completions')
       : config.endpoint.trim()
+  const endpoint = rawEndpoint
+    ? `${normalizeOpenAICompatibleBaseUrl(rawEndpoint)}/v1/chat/completions`
+    : ''
   const apiKey = config.apiKey.trim()
   const model = config.model.trim()
   if (!endpoint || !model) return []
@@ -186,13 +191,13 @@ export async function planActionsWithModel(
     '你是 Flowid 助手。你只能输出 JSON：{"actions":[...]}，不要输出其它文字。动作 type 仅允许 create_node/connect_nodes/run_node。'
   const userPrompt = `用户需求：${text}\n当前节点列表：${JSON.stringify(nodeBrief)}`
   try {
-    const res = await fetch(endpoint, {
+    const res = await fetchOpenAICompat(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
-      body: JSON.stringify({
+      json: {
         model,
         temperature: 0.2,
         response_format: { type: 'json_object' },
@@ -200,7 +205,7 @@ export async function planActionsWithModel(
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
         ],
-      }),
+      },
     })
     if (!res.ok) return []
     const data = (await res.json()) as {
@@ -220,10 +225,13 @@ export async function chatReplyWithModel(
   text: string,
   config: AiAssistantConfig,
 ): Promise<string> {
-  const endpoint =
+  const rawEndpoint =
     config.provider === 'ollama'
       ? (config.endpoint.trim() || 'http://127.0.0.1:11434/v1/chat/completions')
       : config.endpoint.trim()
+  const endpoint = rawEndpoint
+    ? `${normalizeOpenAICompatibleBaseUrl(rawEndpoint)}/v1/chat/completions`
+    : ''
   const apiKey = config.apiKey.trim()
   const model = config.model.trim()
   if (!endpoint || !model) return ''
@@ -260,13 +268,13 @@ export async function chatReplyWithModel(
   const requestReply = async (chatModel: string): Promise<string> => {
     const presetId = loadActiveSystemPromptPresetId()
     const presetSystemPrompt = presetId ? await fetchSystemPromptPresetText(presetId) : ''
-    const res = await fetch(endpoint, {
+    const res = await fetchOpenAICompat(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
-      body: JSON.stringify({
+      json: {
         model: chatModel,
         temperature: 0.4,
         messages: [
@@ -278,7 +286,7 @@ export async function chatReplyWithModel(
           },
           { role: 'user', content: text },
         ],
-      }),
+      },
     })
     if (!res.ok) return ''
     const data = (await res.json()) as {

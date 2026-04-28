@@ -10,11 +10,19 @@ export function AiAssistantPanel({
   messages,
   busy,
   onSend,
+  onTestChatModel,
+  onTestTts,
+  chatModelTestStatus,
+  ttsTestStatus,
   onClose,
 }: {
   messages: AiAssistantMessage[]
   busy: boolean
   onSend: (text: string) => Promise<void>
+  onTestChatModel: () => Promise<void>
+  onTestTts: () => Promise<void>
+  chatModelTestStatus: string
+  ttsTestStatus: string
   onClose: () => void
 }) {
   const [input, setInput] = useState('')
@@ -31,6 +39,30 @@ export function AiAssistantPanel({
       <p className="ai-assistant-panel__hint">
         支持：新建节点、按标题连线、执行节点。示例：新建一个图片节点；连接「剧本」到「图片」；执行「图片节点1」。
       </p>
+      <div className="ai-assistant-panel__hint" aria-label="连接与播报测试">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <button
+            type="button"
+            className="btn btn--chip btn--chip-light"
+            disabled={busy}
+            onClick={() => void onTestChatModel()}
+            title="测试当前聊天模型（/v1/chat/completions）"
+          >
+            测试聊天模型
+          </button>
+          <button
+            type="button"
+            className="btn btn--chip btn--chip-light"
+            disabled={busy}
+            onClick={() => void onTestTts()}
+            title="测试当前 TTS（会尝试播报一段短语音）"
+          >
+            测试 TTS 播报
+          </button>
+        </div>
+        {chatModelTestStatus ? <div className="ai-assistant-panel__empty">{chatModelTestStatus}</div> : null}
+        {ttsTestStatus ? <div className="ai-assistant-panel__empty">{ttsTestStatus}</div> : null}
+      </div>
       <div className="ai-assistant-panel__list" aria-label="AI 对话记录">
         {messages.length ? (
           messages.map((m) => (

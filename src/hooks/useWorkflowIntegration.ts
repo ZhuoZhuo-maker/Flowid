@@ -1922,9 +1922,15 @@ export function useWorkflowIntegration() {
         // 对“只用模型、不懂 ComfyUI”的用户：当节点配置了云端模型且本地/云端执行未启用时，默认走模型。
         ((!snapshot.local.enabled && !snapshot.cloud.enabled && hasCloudModelConfigured) ? 'model' : 'workflow')
       if (executionTarget === 'model') {
-        const model = String(nodeConfig.cloudModelName || '').trim()
-        const baseUrl = normalizeOpenAICompatibleBaseUrl(String(nodeConfig.cloudModelUrl || ''))
-        const apiKey = String(nodeConfig.cloudApiKey || '').trim()
+        if (!(nodeKind === 'text' || nodeKind === 'script')) {
+          // 目前仅文本/脚本节点支持“模型模式”执行；其它节点必须走 ComfyUI 工作流。
+          throw new Error('当前节点类型不支持“模型”执行，请切换到 COMFYUI 模式后再执行')
+        }
+        const model = String((node.data as any)?.cloudModelName || nodeConfig.cloudModelName || '').trim()
+        const baseUrl = normalizeOpenAICompatibleBaseUrl(
+          String((node.data as any)?.cloudModelUrl || nodeConfig.cloudModelUrl || ''),
+        )
+        const apiKey = String((node.data as any)?.cloudApiKey || nodeConfig.cloudApiKey || '').trim()
         if (!baseUrl || !model) {
           throw new Error('当前节点未配置云端模型（模型名/地址），无法仅使用模型执行')
         }

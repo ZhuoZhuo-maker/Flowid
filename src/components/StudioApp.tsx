@@ -102,6 +102,8 @@ import {
   type AiAssistantAction,
   type AiAssistantConfig,
 } from '../lib/aiAssistantAgent'
+import { normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
+import { fetchOpenAICompat } from '../lib/openaiProxy'
 import {
   buildMentionToken,
   collectMentionImageSources,
@@ -197,12 +199,28 @@ function normalizeBaseUrl(raw: string): string {
 }
 
 function isLikelyGradioTtsEndpoint(rawEndpoint: string): boolean {
-  const lower = rawEndpoint.toLowerCase()
+  const lower = String(rawEndpoint || '').trim().toLowerCase()
   return (
     lower.includes(':7860') ||
     lower.includes('/gradio_api') ||
     lower.includes('indextts')
   )
+}
+
+async function readHttpErrorMessage(res: Response): Promise<string> {
+  const contentType = String(res.headers.get('content-type') || '').toLowerCase()
+  try {
+    if (contentType.includes('application/json')) {
+      const json = (await res.json().catch(() => ({}))) as any
+      const msg = String(json?.error?.message || json?.message || '').trim()
+      if (msg) return msg
+      return JSON.stringify(json).slice(0, 500)
+    }
+    const text = await res.text().catch(() => '')
+    return String(text || '').trim().slice(0, 500)
+  } catch {
+    return ''
+  }
 }
 
 function fileDataFromPath(path: string): { path: string; meta: { _type: 'gradio.FileData' } } {
@@ -1436,6 +1454,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const [aiAssistantDialogOpen, setAiAssistantDialogOpen] = useState(false)
   const [aiMessages, setAiMessages] = useState<AiAssistantMessage[]>([])
   const [aiBusy, setAiBusy] = useState(false)
+  const [chatModelTestStatus, setChatModelTestStatus] = useState('')
+  const [ttsTestStatus, setTtsTestStatus] = useState('')
   const [aiConfig, setAiConfig] = useState<AiAssistantConfig>(() => loadAiAssistantConfig())
   /**
    * 桌面端：优先从工程目录恢复 AI 配置，避免切换入口后丢失 TTS 与模型参数。
@@ -1919,7 +1939,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (!promptPanel) return [] as PromptPanelDropdownOption[]
     const presets = loadCloudModelPresets()
     const base = presets.map((item) => ({ value: item.id, label: item.name }))
-    const current = String(nodeConfigs[promptPanel.kind].cloudModelName || '').trim()
+    const current = String((promptPanel.node.data as any)?.cloudModelName || '').trim()
     if (current && !base.some((i) => i.label === current)) {
       base.unshift({ value: 'custom-current', label: current })
     }
@@ -1929,7 +1949,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   const promptPanelModelSelectValue = useMemo(() => {
     if (!promptPanel) return ''
-    const current = String(nodeConfigs[promptPanel.kind].cloudModelName || '').trim()
+    const current = String((promptPanel.node.data as any)?.cloudModelName || '').trim()
     const found = loadCloudModelPresets().find((i) => i.name === current)
     if (found) return found.id
     if (current) return 'custom-current'
@@ -1939,6 +1959,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   /** 底部提示框：节点级切换「工作流」还是「模型」 */
   const promptPanelPickerMode = useMemo(() => {
     if (!promptPanel) return 'workflow' as const
+    // 目前仅文本/脚本节点支持“模型模式”，其它节点固定为工作流模式。
+    if (!(promptPanel.kind === 'text' || promptPanel.kind === 'script')) return 'workflow' as const
     const mode = (promptPanel.node.data as any)?.promptPickerMode
     return mode === 'model' ? 'model' : 'workflow'
   }, [promptPanel])
@@ -5676,14 +5698,15 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (!endpoint) throw new Error('未配置 TTS endpoint')
 
     const cloneAudioDataUrl = aiConfig.ttsCloneAudioDataUrl.trim()
-    if (!cloneAudioDataUrl) {
+    const needsCloneAudio = isLikelyGradioTtsEndpoint(endpoint)
+    if (needsCloneAudio && !cloneAudioDataUrl) {
       throw new Error('请先在 AI 助手设置上传克隆音色参考音频')
     }
 
     let blob: Blob | null = null
     let lastError = ''
 
-    if (isLikelyGradioTtsEndpoint(endpoint)) {
+    if (needsCloneAudio) {
       try {
         const baseUrl = normalizeBaseUrl(endpoint)
         const uploadId = crypto.randomUUID()
@@ -5799,9 +5822,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const endpointCandidates = buildTtsEndpointCandidates(endpoint)
       const model = aiConfig.ttsModel.trim()
       const voice = aiConfig.ttsVoice.trim() || 'alloy'
-      const cloneAudioBase64 = cloneAudioDataUrl.includes(',')
-        ? cloneAudioDataUrl.slice(cloneAudioDataUrl.indexOf(',') + 1)
-        : ''
       for (const item of endpointCandidates) {
         try {
           const payload: Record<string, unknown> = {
@@ -5810,21 +5830,20 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             format: 'mp3',
           }
           if (model) payload.model = model
-          payload.reference_audio = cloneAudioDataUrl
-          payload.reference_audio_base64 = cloneAudioBase64
-          payload.clone_audio = cloneAudioDataUrl
-          payload.prompt_audio = cloneAudioDataUrl
+          // 云端 OpenAI 兼容 TTS：仅发送标准字段，避免厂商不支持的克隆字段以及超大 payload（DataURL/base64）。
 
-          const res = await fetch(item, {
+          const speechUrl = `${normalizeOpenAICompatibleBaseUrl(item)}/v1/audio/speech`
+          const res = await fetchOpenAICompat(speechUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               ...(aiConfig.ttsApiKey.trim() ? { Authorization: `Bearer ${aiConfig.ttsApiKey.trim()}` } : {}),
             },
-            body: JSON.stringify(payload),
+            json: payload,
           })
           if (!res.ok) {
-            lastError = `${item} -> HTTP ${res.status}`
+            const msg = await readHttpErrorMessage(res)
+            lastError = `${speechUrl} -> HTTP ${res.status}${msg ? ` (${msg})` : ''}`
             continue
           }
           const contentType = String(res.headers.get('content-type') || '').toLowerCase()
@@ -5879,6 +5898,72 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     await audio.play()
     return { size: blob.size }
   }, [aiConfig.ttsApiKey, aiConfig.ttsCloneAudioDataUrl, aiConfig.ttsCloneAudioName, aiConfig.ttsEndpoint, aiConfig.ttsModel, aiConfig.ttsVoice])
+
+  const testAiChatModelFromPanel = useCallback(async () => {
+    const started = performance.now()
+    const provider = aiConfig.provider
+    setChatModelTestStatus(`测试中…（provider=${provider}）`)
+    try {
+      const rawEndpoint =
+        provider === 'ollama'
+          ? (aiConfig.endpoint.trim() || 'http://127.0.0.1:11434/v1/chat/completions')
+          : aiConfig.endpoint.trim()
+      const endpoint = rawEndpoint
+        ? `${normalizeOpenAICompatibleBaseUrl(rawEndpoint)}/v1/chat/completions`
+        : ''
+      const model = aiConfig.model.trim()
+      if (!endpoint || !model) {
+        setChatModelTestStatus('聊天模型测试失败：未配置 endpoint 或 model')
+        return
+      }
+      const res = await fetchOpenAICompat(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(aiConfig.apiKey.trim() ? { Authorization: `Bearer ${aiConfig.apiKey.trim()}` } : {}),
+        },
+        json: {
+          model,
+          temperature: 0,
+          messages: [{ role: 'user', content: '只回复 OK' }],
+        },
+      })
+      const elapsed = Math.round(performance.now() - started)
+      if (!res.ok) {
+        const msg = await readHttpErrorMessage(res)
+        setChatModelTestStatus(
+          `聊天模型测试失败：HTTP ${res.status}${msg ? ` (${msg})` : ''}（endpoint=${endpoint}，${elapsed}ms）`,
+        )
+        return
+      }
+      const data = (await res.json().catch(() => ({}))) as any
+      const content = String(data?.choices?.[0]?.message?.content || '').trim()
+      if (!content) {
+        setChatModelTestStatus(`聊天模型测试失败：响应为空（endpoint=${endpoint}，${elapsed}ms）`)
+        return
+      }
+      setChatModelTestStatus(`聊天模型测试成功：${elapsed}ms（provider=${provider}，endpoint=${endpoint}）`)
+    } catch (e) {
+      const elapsed = Math.round(performance.now() - started)
+      setChatModelTestStatus(`聊天模型测试失败：${String((e as any)?.message || e)}（${elapsed}ms）`)
+    }
+  }, [aiConfig])
+
+  const testAiTtsFromPanel = useCallback(async () => {
+    const started = performance.now()
+    const ep = aiConfig.ttsEndpoint.trim() || '未填写'
+    setTtsTestStatus(`测试中…（endpoint=${ep}）`)
+    try {
+      await speakAssistantText('这是一段语音播报测试。')
+      const elapsed = Math.round(performance.now() - started)
+      setTtsTestStatus(`TTS 测试成功：已尝试播报（endpoint=${ep}，${elapsed}ms）`)
+    } catch (e) {
+      const elapsed = Math.round(performance.now() - started)
+      setTtsTestStatus(
+        `TTS 测试失败：${String((e as any)?.message || e)}（endpoint=${ep}，${elapsed}ms）`,
+      )
+    }
+  }, [aiConfig.ttsEndpoint, speakAssistantText])
 
   /**
    * 监听助手最新回复：启用 TTS 时自动播报。
@@ -6662,6 +6747,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                     messages={aiMessages}
                     busy={aiBusy}
                     onSend={handleAiAssistantSend}
+                    onTestChatModel={testAiChatModelFromPanel}
+                    onTestTts={testAiTtsFromPanel}
+                    chatModelTestStatus={chatModelTestStatus}
+                    ttsTestStatus={ttsTestStatus}
                     onClose={() => setAiAssistantDialogOpen(false)}
                   />
                 </div>,
@@ -7062,6 +7151,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         onClick={(event) => {
                           event.stopPropagation()
                           if (!visiblePromptPanel) return
+                          if (!(visiblePromptPanel.kind === 'text' || visiblePromptPanel.kind === 'script')) {
+                            // 非文本节点不允许切换到“模型”模式
+                            updateNodeData(visiblePromptPanel.node.id, {
+                              kind: visiblePromptPanel.kind,
+                              promptPickerMode: 'workflow',
+                            } as any)
+                            return
+                          }
                           const nid = visiblePromptPanel.node.id
                           const current = (visiblePromptPanel.node.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow'
                           const next = current === 'workflow' ? 'model' : 'workflow'
@@ -7459,13 +7556,15 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         options={promptPanelModelOptions}
                         onChange={(pickedId) => {
                           const kind = visiblePromptPanel.kind
-                          if (pickedId === 'custom' || pickedId === 'custom-current') {
-                            updateNodeConfig(kind, { cloudModelName: '', cloudModelUrl: '' })
-                            return
-                          }
+                          if (pickedId === 'custom-current') return
                           const preset = loadCloudModelPresets().find((i) => i.id === pickedId)
                           if (!preset) return
-                          updateNodeConfig(kind, { cloudModelName: preset.name, cloudModelUrl: preset.baseUrl })
+                          updateNodeData(visiblePromptPanel.node.id, {
+                            kind,
+                            cloudModelName: preset.name,
+                            cloudModelUrl: preset.baseUrl,
+                            cloudApiKey: String((preset as any).apiKey || ''),
+                          } as any)
                         }}
                       />
                     )}

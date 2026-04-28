@@ -362,8 +362,54 @@ function toAuthPayload(user) {
 
 const app = express()
 app.use(cors())
-app.use(express.json({ limit: '1mb' }))
+// Proxy requests (OpenAI compat) may include larger JSON payloads.
+app.use(express.json({ limit: '25mb' }))
 app.use(express.static(path.join(__dirname, 'public')))
+
+function isAllowedProxyTarget(rawUrl) {
+  try {
+    const u = new URL(String(rawUrl || '').trim())
+    const host = u.hostname.toLowerCase()
+    // Allowlist: DashScope OpenAI-compatible endpoint.
+    // Extend here if you add more providers.
+    if (host === 'dashscope.aliyuncs.com') return true
+    return false
+  } catch {
+    return false
+  }
+}
+
+/**
+ * CORS-safe proxy for OpenAI-compatible APIs.
+ * Frontend (5173) cannot directly call some cloud endpoints due to CORS.
+ * This proxy runs on 3721 and forwards the request server-side.
+ *
+ * Body: { url, method, headers?, json? }
+ */
+app.post('/proxy/openai', async (req, res) => {
+  const url = String(req.body?.url || '').trim()
+  const method = String(req.body?.method || 'GET').trim().toUpperCase()
+  const headers = req.body?.headers && typeof req.body.headers === 'object' ? req.body.headers : {}
+  const json = req.body?.json
+  if (!url || !isAllowedProxyTarget(url)) {
+    res.status(400).json({ message: 'Proxy target not allowed' })
+    return
+  }
+  try {
+    const upstream = await fetch(url, {
+      method,
+      headers,
+      body: json != null && method !== 'GET' ? JSON.stringify(json) : undefined,
+    })
+    const contentType = upstream.headers.get('content-type') || 'application/octet-stream'
+    res.status(upstream.status)
+    res.setHeader('content-type', contentType)
+    const buf = Buffer.from(await upstream.arrayBuffer())
+    res.send(buf)
+  } catch (e) {
+    res.status(502).json({ message: String(e?.message || e || 'proxy failed') })
+  }
+})
 
 app.get('/healthz', (_req, res) => {
   res.json({ ok: true, service: 'flowid-auth-server' })

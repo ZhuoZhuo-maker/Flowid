@@ -46,6 +46,13 @@ import {
   type CloudModelPreset,
 } from '../../lib/cloudModelPresets'
 import { normalizeOpenAICompatibleBaseUrl } from '../../lib/openaiCompat'
+import {
+  loadAiAssistantCorePresets,
+  removeAiAssistantCorePreset,
+  upsertAiAssistantCorePreset,
+  type AiAssistantCorePreset,
+} from '../../lib/aiAssistantPresets'
+import { loadTtsPresets, removeTtsPreset, upsertTtsPreset, type TtsPreset } from '../../lib/ttsPresets'
 
 const KIND_LABELS: Record<StudioNodeKind, string> = {
   text: '文本',
@@ -248,6 +255,28 @@ export function WorkflowSettingsPanel({
     apiKey: '',
   })
   const [cloudModelTestMsg, setCloudModelTestMsg] = useState<string>('')
+  const [aiCorePresets, setAiCorePresets] = useState<AiAssistantCorePreset[]>(() => loadAiAssistantCorePresets())
+  const [ttsPresets, setTtsPresets] = useState<TtsPreset[]>(() => loadTtsPresets())
+  const [editingAiCoreId, setEditingAiCoreId] = useState<string | null>(null)
+  const [aiCoreDraft, setAiCoreDraft] = useState<AiAssistantCorePreset>({
+    id: '',
+    name: '',
+    provider: 'ollama',
+    endpoint: '',
+    apiKey: '',
+    model: '',
+  })
+  const [aiCoreTestMsg, setAiCoreTestMsg] = useState<string>('')
+  const [editingTtsId, setEditingTtsId] = useState<string | null>(null)
+  const [ttsDraft, setTtsDraft] = useState<TtsPreset>({
+    id: '',
+    name: '',
+    endpoint: '',
+    apiKey: '',
+    model: '',
+    voice: '',
+  })
+  const [ttsTestMsg, setTtsTestMsg] = useState<string>('')
   /** 是否 Flowid 桌面壳（可弹出系统文件/文件夹对话框并读写真实路径） */
   const isElectronDesktop = useMemo(
     () =>
@@ -283,6 +312,230 @@ export function WorkflowSettingsPanel({
       window.removeEventListener('flowid:cloud-model-presets-changed', onChanged as EventListener)
     }
   }, [])
+
+  useEffect(() => {
+    const onAi = () => setAiCorePresets(loadAiAssistantCorePresets())
+    const onTts = () => setTtsPresets(loadTtsPresets())
+    window.addEventListener('flowid:ai-assistant-core-presets-changed', onAi as EventListener)
+    window.addEventListener('flowid:tts-presets-changed', onTts as EventListener)
+    return () => {
+      window.removeEventListener('flowid:ai-assistant-core-presets-changed', onAi as EventListener)
+      window.removeEventListener('flowid:tts-presets-changed', onTts as EventListener)
+    }
+  }, [])
+
+  // If user already has an active config but presets were cleared (e.g. new profile / storage reset),
+  // seed a "当前配置" preset so the UI always shows where the assistant is pointing to.
+  useEffect(() => {
+    if (!aiCorePresets.length && (aiAssistantConfig.endpoint.trim() || aiAssistantConfig.model.trim())) {
+      const seeded: AiAssistantCorePreset = {
+        id: crypto.randomUUID(),
+        name: aiAssistantConfig.provider === 'cloud' ? '当前云端聊天模型' : '当前本地聊天模型',
+        provider: aiAssistantConfig.provider === 'cloud' ? 'cloud' : 'ollama',
+        endpoint: aiAssistantConfig.endpoint.trim(),
+        apiKey: String(aiAssistantConfig.apiKey || ''),
+        model: aiAssistantConfig.model.trim(),
+      }
+      const merged = upsertAiAssistantCorePreset(seeded)
+      setAiCorePresets(merged)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiAssistantConfig.endpoint, aiAssistantConfig.model, aiAssistantConfig.provider])
+
+  useEffect(() => {
+    const hasAny = ttsPresets.length > 0
+    const hasConfig = Boolean(aiAssistantConfig.ttsEndpoint.trim() || aiAssistantConfig.ttsModel.trim() || aiAssistantConfig.ttsVoice.trim())
+    if (!hasAny && hasConfig) {
+      const seeded: TtsPreset = {
+        id: crypto.randomUUID(),
+        name: '当前 TTS 配置',
+        endpoint: aiAssistantConfig.ttsEndpoint.trim(),
+        apiKey: String(aiAssistantConfig.ttsApiKey || ''),
+        model: aiAssistantConfig.ttsModel.trim(),
+        voice: aiAssistantConfig.ttsVoice.trim(),
+      }
+      const merged = upsertTtsPreset(seeded)
+      setTtsPresets(merged)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiAssistantConfig.ttsEndpoint, aiAssistantConfig.ttsModel, aiAssistantConfig.ttsVoice])
+
+  const startNewAiCorePreset = () => {
+    const id = crypto.randomUUID()
+    setEditingAiCoreId(id)
+    setAiCoreDraft({
+      id,
+      name: '新助手模型',
+      provider: 'ollama',
+      endpoint: 'http://127.0.0.1:11434/v1/chat/completions',
+      apiKey: '',
+      model: 'qwen3:14b',
+    })
+    setAiCoreTestMsg('')
+  }
+
+  const startEditAiCorePreset = (p: AiAssistantCorePreset) => {
+    setEditingAiCoreId(p.id)
+    setAiCoreDraft({
+      id: p.id,
+      name: p.name,
+      provider: p.provider,
+      endpoint: p.endpoint,
+      apiKey: String(p.apiKey || ''),
+      model: p.model,
+    })
+    setAiCoreTestMsg('')
+  }
+
+  const saveAiCoreDraft = () => {
+    if (!editingAiCoreId) return
+    if (!aiCoreDraft.name.trim()) {
+      setAiCoreTestMsg('请填写名称。')
+      return
+    }
+    const next: AiAssistantCorePreset = {
+      id: editingAiCoreId,
+      name: aiCoreDraft.name.trim(),
+      provider: aiCoreDraft.provider === 'cloud' ? 'cloud' : 'ollama',
+      endpoint: aiCoreDraft.endpoint.trim(),
+      apiKey: String(aiCoreDraft.apiKey || ''),
+      model: aiCoreDraft.model.trim(),
+    }
+    const merged = upsertAiAssistantCorePreset(next)
+    setAiCorePresets(merged)
+    setAiCoreTestMsg('已保存。')
+  }
+
+  const testAiCorePreset = async (p: AiAssistantCorePreset) => {
+    const endpoint = String(p.endpoint || '').trim()
+    if (!endpoint) {
+      setAiCoreTestMsg('请先填写 endpoint。')
+      return
+    }
+    setAiCoreTestMsg('测试中…')
+    try {
+      const base = normalizeOpenAICompatibleBaseUrl(endpoint)
+      const url = `${base}/v1/models`
+      const res = await fetch(url, {
+        headers: p.provider === 'cloud' && p.apiKey ? { Authorization: `Bearer ${p.apiKey}` } : {},
+      })
+      if (!res.ok) {
+        setAiCoreTestMsg(`测试失败：HTTP ${res.status}`)
+        return
+      }
+      setAiCoreTestMsg('测试成功：可访问 /v1/models')
+    } catch (e) {
+      setAiCoreTestMsg(`测试失败：${String((e as any)?.message || e)}`)
+    }
+  }
+
+  const applyAiCorePreset = (p: AiAssistantCorePreset) => {
+    onAiAssistantConfigChange({
+      provider: p.provider,
+      endpoint: p.endpoint,
+      apiKey: String(p.apiKey || ''),
+      model: p.model,
+    })
+  }
+
+  const startNewTtsPreset = () => {
+    const id = crypto.randomUUID()
+    setEditingTtsId(id)
+    setTtsDraft({
+      id,
+      name: '新 TTS',
+      endpoint: 'http://127.0.0.1:7860/',
+      apiKey: '',
+      model: 'gpt-4o-mini-tts',
+      voice: 'alloy',
+    })
+    setTtsTestMsg('')
+  }
+
+  const startEditTtsPreset = (p: TtsPreset) => {
+    setEditingTtsId(p.id)
+    setTtsDraft({
+      id: p.id,
+      name: p.name,
+      endpoint: p.endpoint,
+      apiKey: String(p.apiKey || ''),
+      model: p.model,
+      voice: p.voice,
+    })
+    setTtsTestMsg('')
+  }
+
+  const saveTtsDraft = () => {
+    if (!editingTtsId) return
+    if (!ttsDraft.name.trim()) {
+      setTtsTestMsg('请填写名称。')
+      return
+    }
+    const next: TtsPreset = {
+      id: editingTtsId,
+      name: ttsDraft.name.trim(),
+      endpoint: ttsDraft.endpoint.trim(),
+      apiKey: String(ttsDraft.apiKey || ''),
+      model: ttsDraft.model.trim(),
+      voice: ttsDraft.voice.trim(),
+    }
+    const merged = upsertTtsPreset(next)
+    setTtsPresets(merged)
+    setTtsTestMsg('已保存。')
+  }
+
+  const isLikelyGradio = (raw: string): boolean => {
+    const lower = String(raw || '').trim().toLowerCase()
+    return lower.includes('/gradio_api') || lower.endsWith(':7860') || lower.endsWith(':7860/')
+  }
+
+  const normalizeBaseUrl = (raw: string): string => String(raw || '').trim().replace(/\/+$/, '')
+
+  const testTtsPreset = async (p: TtsPreset) => {
+    const endpoint = String(p.endpoint || '').trim()
+    if (!endpoint) {
+      setTtsTestMsg('请先填写 TTS endpoint。')
+      return
+    }
+    setTtsTestMsg('测试中…')
+    try {
+      if (isLikelyGradio(endpoint)) {
+        const base = normalizeBaseUrl(endpoint)
+        const res = await fetch(`${base}/gradio_api/info`)
+        if (!res.ok) {
+          setTtsTestMsg(`测试失败：HTTP ${res.status}`)
+          return
+        }
+        setTtsTestMsg('测试成功：Gradio 接口可访问')
+        return
+      }
+      // 只做连通性/鉴权检查：避免不同厂商 TTS payload 差异导致测试失败、或产生计费请求。
+      const base = normalizeOpenAICompatibleBaseUrl(endpoint)
+      const url = `${base}/v1/models`
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          ...(p.apiKey ? { Authorization: `Bearer ${p.apiKey}` } : {}),
+        },
+      })
+      if (!res.ok) {
+        setTtsTestMsg(`测试失败：HTTP ${res.status}`)
+        return
+      }
+      setTtsTestMsg('测试成功：连接正常（已通过 /v1/models 鉴权检查）')
+    } catch (e) {
+      setTtsTestMsg(`测试失败：${String((e as any)?.message || e)}`)
+    }
+  }
+
+  const applyTtsPreset = (p: TtsPreset) => {
+    onAiAssistantConfigChange({
+      ttsEndpoint: p.endpoint,
+      ttsApiKey: String(p.apiKey || ''),
+      ttsModel: p.model,
+      ttsVoice: p.voice,
+    })
+  }
 
   const startEditCloudModel = (preset: CloudModelPreset) => {
     setEditingCloudModelId(preset.id)
@@ -1287,77 +1540,79 @@ export function WorkflowSettingsPanel({
                     </div>
                   ) : null}
 
-                  <div className="space-y-2">
-                    {cloudModelPresets.map((m) => {
-                      const isActive = String(activeNodeConfig.cloudModelName || '').trim() === m.name.trim()
-                      return (
-                        <div
-                          key={m.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => startEditCloudModel(m)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') startEditCloudModel(m)
-                          }}
-                          className={`cursor-pointer select-none flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
-                            isActive ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/30'
-                          }`}
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-[13px] font-black uppercase tracking-widest text-white/70">
-                              {m.name}
+                  {activeKind && !(activeKind === 'text' || activeKind === 'script') ? null : (
+                    <div className="space-y-2">
+                      {cloudModelPresets.map((m) => {
+                        const isActive = String(activeNodeConfig.cloudModelName || '').trim() === m.name.trim()
+                        return (
+                          <div
+                            key={m.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => startEditCloudModel(m)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') startEditCloudModel(m)
+                            }}
+                            className={`cursor-pointer select-none flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
+                              isActive ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/30'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="truncate text-[13px] font-black uppercase tracking-widest text-white/70">
+                                {m.name}
+                              </div>
+                              <div className="truncate font-mono text-[11px] text-white/30">{m.baseUrl || '-'}</div>
                             </div>
-                            <div className="truncate font-mono text-[11px] text-white/30">{m.baseUrl || '-'}</div>
+                            <div className="flex shrink-0 flex-wrap gap-2">
+                              <button
+                                type="button"
+                                className={WF_BTN_CAPSULE_COMPACT}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  applyCloudModelToActiveKind(m)
+                                }}
+                              >
+                                使用
+                              </button>
+                              <button
+                                type="button"
+                                className={WF_BTN_CAPSULE_COMPACT}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  startEditCloudModel(m)
+                                }}
+                              >
+                                设置
+                              </button>
+                              <button
+                                type="button"
+                                className={WF_BTN_CAPSULE_DARK_COMPACT}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  void testCloudModelPreset(m)
+                                }}
+                              >
+                                测试
+                              </button>
+                              <button
+                                type="button"
+                                className={WF_BTN_CAPSULE_DARK_COMPACT}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (!window.confirm(`确定删除云端模型「${m.name}」吗？`)) return
+                                  const next = removeCloudModelPreset(m.id)
+                                  setCloudModelPresets(next)
+                                  if (editingCloudModelId === m.id) setEditingCloudModelId(null)
+                                }}
+                              >
+                                删除
+                              </button>
+                            </div>
                           </div>
-                          <div className="flex shrink-0 flex-wrap gap-2">
-                            <button
-                              type="button"
-                              className={WF_BTN_CAPSULE_COMPACT}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                applyCloudModelToActiveKind(m)
-                              }}
-                            >
-                              使用
-                            </button>
-                            <button
-                              type="button"
-                              className={WF_BTN_CAPSULE_COMPACT}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                startEditCloudModel(m)
-                              }}
-                            >
-                              设置
-                            </button>
-                            <button
-                              type="button"
-                              className={WF_BTN_CAPSULE_DARK_COMPACT}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                void testCloudModelPreset(m)
-                              }}
-                            >
-                              测试
-                            </button>
-                            <button
-                              type="button"
-                              className={WF_BTN_CAPSULE_DARK_COMPACT}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                if (!window.confirm(`确定删除云端模型「${m.name}」吗？`)) return
-                                const next = removeCloudModelPreset(m.id)
-                                setCloudModelPresets(next)
-                                if (editingCloudModelId === m.id) setEditingCloudModelId(null)
-                              }}
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -1552,143 +1807,294 @@ export function WorkflowSettingsPanel({
               <p className="m-0 text-[14px] tracking-wide text-white/20">
                 自动保存：修改任一字段后立即生效并写入本地配置。云端推荐使用 GPT-4o-mini。
               </p>
-              <div className="space-y-4">
-                <select
-                  className="w-full rounded-xl border border-orange-500/50 bg-black/60 py-3.5 pl-3.5 pr-10 text-[16px] text-white/90 outline-none shadow-[0_0_20px_rgba(234,88,12,0.05)]"
-                  value={aiAssistantConfig.provider}
-                  onChange={(e) =>
-                    onAiAssistantConfigChange({
-                      provider: e.target.value === 'cloud' ? 'cloud' : 'ollama',
-                      endpoint:
-                        e.target.value === 'cloud'
-                          ? ''
-                          : 'http://127.0.0.1:11434/v1/chat/completions',
-                      model: e.target.value === 'cloud' ? 'gpt-4o-mini' : 'qwen3:14b',
-                      apiKey: e.target.value === 'cloud' ? aiAssistantConfig.apiKey : '',
-                    })
-                  }
-                >
-                  <option value="ollama">Ollama 本地</option>
-                  <option value="cloud">云端模型</option>
-                </select>
-                <input
-                  className={WF_INPUT_COMFY}
-                  placeholder={
-                    aiAssistantConfig.provider === 'ollama'
-                      ? '本地 endpoint（默认 127.0.0.1:11434）'
-                      : '云端 OpenAI 兼容 endpoint'
-                  }
-                  value={aiAssistantConfig.endpoint}
-                  onChange={(e) => onAiAssistantConfigChange({ endpoint: e.target.value })}
-                />
-                {aiAssistantConfig.provider === 'cloud' ? (
-                  <input
-                    className={WF_INPUT_COMFY}
-                    type="password"
-                    autoComplete="off"
-                    placeholder="API Key（云端必填）"
-                    value={aiAssistantConfig.apiKey}
-                    onChange={(e) => onAiAssistantConfigChange({ apiKey: e.target.value })}
-                  />
-                ) : null}
-                <input
-                  className={WF_INPUT_COMFY}
-                  placeholder={
-                    aiAssistantConfig.provider === 'cloud' ? '模型名（如 gpt-4o-mini）' : '模型名（如 qwen3:14b）'
-                  }
-                  value={aiAssistantConfig.model}
-                  onChange={(e) => onAiAssistantConfigChange({ model: e.target.value })}
-                />
-                <label className="flex cursor-pointer items-center gap-3">
-                  <input
-                    type="checkbox"
-                    className="h-5 w-5 shrink-0 accent-orange-600 rounded"
-                    checked={aiAssistantConfig.ttsEnabled}
-                    onChange={(e) => onAiAssistantConfigChange({ ttsEnabled: e.target.checked })}
-                  />
-                  <span className="text-[14px] font-black uppercase tracking-widest text-white/50">
-                    自动语音播报 (TTS)
-                  </span>
-                </label>
-                {aiAssistantConfig.ttsEnabled ? (
-                  <div className="mt-1 space-y-6 border-t border-white/5 pt-6">
-                    <div className="space-y-4">
-                      <input
-                        className={WF_INPUT_COMFY}
-                        placeholder="TTS endpoint"
-                        value={aiAssistantConfig.ttsEndpoint}
-                        onChange={(e) => onAiAssistantConfigChange({ ttsEndpoint: e.target.value })}
-                      />
-                      <input
-                        className={WF_INPUT_COMFY}
-                        placeholder="TTS API Key（可选）"
-                        value={aiAssistantConfig.ttsApiKey}
-                        onChange={(e) => onAiAssistantConfigChange({ ttsApiKey: e.target.value })}
-                      />
-                      <input
-                        className={WF_INPUT_COMFY}
-                        placeholder="TTS 模型名"
-                        value={aiAssistantConfig.ttsModel}
-                        onChange={(e) => onAiAssistantConfigChange({ ttsModel: e.target.value })}
-                      />
-                      <input
-                        className={WF_INPUT_COMFY}
-                        placeholder="TTS 音色"
-                        value={aiAssistantConfig.ttsVoice}
-                        onChange={(e) => onAiAssistantConfigChange({ ttsVoice: e.target.value })}
-                      />
-                    </div>
-                    <div className="space-y-5 rounded-2xl border border-white/5 bg-black/25 p-5 sm:p-6">
-                      <div className="text-[12px] font-black uppercase tracking-widest text-white/40">
-                        克隆参考音频
+              <div className="space-y-8">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={startNewAiCorePreset}>
+                      新增助手模型
+                    </button>
+                    {aiCoreTestMsg ? (
+                      <div className="text-[12px] font-mono text-white/35">{aiCoreTestMsg}</div>
+                    ) : null}
+                  </div>
+                  {editingAiCoreId ? (
+                    <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="text-[13px] font-black uppercase tracking-widest text-white/60">助手模型设置</div>
+                        <button type="button" className={WF_BTN_CAPSULE_MUTED} onClick={() => setEditingAiCoreId(null)}>
+                          关闭
+                        </button>
                       </div>
-                      <div className="flex flex-wrap items-center gap-4">
-                        <button
-                          type="button"
-                          className="wf-json-import-pill"
-                          onClick={() => aiCloneAudioInputRef.current?.click()}
-                        >
-                          上传参考音频
-                        </button>
-                        <button
-                          type="button"
-                          className={`${WF_BTN_CAPSULE_MUTED} px-5 py-2.5 text-[13px]`}
-                          onClick={() =>
-                            onAiAssistantConfigChange({
-                              ttsCloneAudioDataUrl: '',
-                              ttsCloneAudioName: '',
-                            })
-                          }
-                          disabled={!aiAssistantConfig.ttsCloneAudioDataUrl}
-                        >
-                          清除参考音频
-                        </button>
+                      <input
+                        className={WF_INPUT}
+                        value={aiCoreDraft.name}
+                        placeholder="名称"
+                        onChange={(e) => setAiCoreDraft((p) => ({ ...p, name: e.target.value }))}
+                      />
+                      <select
+                        className="w-full rounded-xl border border-white/10 bg-black/60 py-3 pl-3.5 pr-10 text-[15px] text-white/90 outline-none"
+                        value={aiCoreDraft.provider}
+                        onChange={(e) =>
+                          setAiCoreDraft((p) => ({
+                            ...p,
+                            provider: e.target.value === 'cloud' ? 'cloud' : 'ollama',
+                          }))
+                        }
+                      >
+                        <option value="ollama">Ollama 本地</option>
+                        <option value="cloud">云端模型</option>
+                      </select>
+                      <input
+                        className={WF_INPUT}
+                        value={aiCoreDraft.endpoint}
+                        placeholder="endpoint（OpenAI 兼容，例如 http://127.0.0.1:11434/v1/chat/completions）"
+                        onChange={(e) => setAiCoreDraft((p) => ({ ...p, endpoint: e.target.value }))}
+                      />
+                      {aiCoreDraft.provider === 'cloud' ? (
                         <input
-                          ref={aiCloneAudioInputRef}
-                          type="file"
-                          accept="audio/*"
-                          className="visually-hidden"
-                          onChange={(e) => {
-                            void onAiCloneAudioChange(e)
-                          }}
+                          className={WF_INPUT}
+                          type="password"
+                          autoComplete="off"
+                          value={String(aiCoreDraft.apiKey || '')}
+                          type="password"
+                          placeholder="API Key（云端必填）"
+                          onChange={(e) => setAiCoreDraft((p) => ({ ...p, apiKey: e.target.value }))}
                         />
+                      ) : null}
+                      <input
+                        className={WF_INPUT}
+                        value={aiCoreDraft.model}
+                        placeholder="模型名（如 qwen3:14b / gpt-4o-mini）"
+                        onChange={(e) => setAiCoreDraft((p) => ({ ...p, model: e.target.value }))}
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={saveAiCoreDraft}>
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          className={WF_BTN_CAPSULE_MUTED}
+                          onClick={() => void testAiCorePreset(aiCoreDraft)}
+                        >
+                          测试
+                        </button>
                       </div>
-                      <div className="space-y-1">
-                        <p className="m-0 text-[13px] leading-relaxed tracking-wide text-white/45">
-                          当前参考音频：{aiAssistantConfig.ttsCloneAudioName || '未上传'}
-                        </p>
-                        {aiAssistantConfig.ttsCloneAudioDataUrl ? (
-                          <audio
-                            controls
-                            preload="metadata"
-                            src={aiAssistantConfig.ttsCloneAudioDataUrl}
-                            className="workflow-settings-panel__audioPreview workflow-settings-panel__audioPreview--flowid w-full max-w-full"
-                          />
+                    </div>
+                  ) : null}
+                  <div className="space-y-2">
+                    {aiCorePresets.map((p) => {
+                      const isActive =
+                        aiAssistantConfig.provider === p.provider &&
+                        aiAssistantConfig.endpoint.trim() === p.endpoint.trim() &&
+                        aiAssistantConfig.model.trim() === p.model.trim()
+                      return (
+                        <div
+                          key={p.id}
+                          className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
+                            isActive ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/30'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-[13px] font-black uppercase tracking-widest text-white/70">
+                              {p.name}
+                            </div>
+                            <div className="truncate font-mono text-[11px] text-white/30">{p.endpoint || '-'}</div>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <button type="button" className={WF_BTN_CAPSULE_COMPACT} onClick={() => applyAiCorePreset(p)}>
+                              使用
+                            </button>
+                            <button type="button" className={WF_BTN_CAPSULE_COMPACT} onClick={() => startEditAiCorePreset(p)}>
+                              设置
+                            </button>
+                            <button type="button" className={WF_BTN_CAPSULE_DARK_COMPACT} onClick={() => void testAiCorePreset(p)}>
+                              测试
+                            </button>
+                            <button
+                              type="button"
+                              className={WF_BTN_CAPSULE_DARK_COMPACT}
+                              onClick={() => {
+                                if (!window.confirm(`确定删除「${p.name}」吗？`)) return
+                                setAiCorePresets(removeAiAssistantCorePreset(p.id))
+                                if (editingAiCoreId === p.id) setEditingAiCoreId(null)
+                              }}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="space-y-3 border-t border-white/5 pt-6">
+                  <label className="flex cursor-pointer items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 shrink-0 accent-orange-600 rounded"
+                      checked={aiAssistantConfig.ttsEnabled}
+                      onChange={(e) => onAiAssistantConfigChange({ ttsEnabled: e.target.checked })}
+                    />
+                    <span className="text-[14px] font-black uppercase tracking-widest text-white/50">
+                      自动语音播报 (TTS)
+                    </span>
+                  </label>
+                  {aiAssistantConfig.ttsEnabled ? (
+                    <div className="space-y-6">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={startNewTtsPreset}>
+                          新增 TTS
+                        </button>
+                        {ttsTestMsg ? (
+                          <div className="text-[12px] font-mono text-white/35">{ttsTestMsg}</div>
                         ) : null}
                       </div>
+                      {editingTtsId ? (
+                        <div className="rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="text-[13px] font-black uppercase tracking-widest text-white/60">TTS 设置</div>
+                            <button type="button" className={WF_BTN_CAPSULE_MUTED} onClick={() => setEditingTtsId(null)}>
+                              关闭
+                            </button>
+                          </div>
+                          <input
+                            className={WF_INPUT}
+                            value={ttsDraft.name}
+                            placeholder="名称"
+                            onChange={(e) => setTtsDraft((p) => ({ ...p, name: e.target.value }))}
+                          />
+                          <input
+                            className={WF_INPUT}
+                            value={ttsDraft.endpoint}
+                            placeholder="TTS endpoint（Gradio 或 OpenAI 兼容 /v1/audio/speech）"
+                            onChange={(e) => setTtsDraft((p) => ({ ...p, endpoint: e.target.value }))}
+                          />
+                          <input
+                            className={WF_INPUT}
+                            value={String(ttsDraft.apiKey || '')}
+                            type="password"
+                            placeholder="TTS API Key（可选）"
+                            onChange={(e) => setTtsDraft((p) => ({ ...p, apiKey: e.target.value }))}
+                          />
+                          <input
+                            className={WF_INPUT}
+                            value={ttsDraft.model}
+                            placeholder="TTS 模型名"
+                            onChange={(e) => setTtsDraft((p) => ({ ...p, model: e.target.value }))}
+                          />
+                          <input
+                            className={WF_INPUT}
+                            value={ttsDraft.voice}
+                            placeholder="TTS 音色"
+                            onChange={(e) => setTtsDraft((p) => ({ ...p, voice: e.target.value }))}
+                          />
+                          <div className="flex flex-wrap gap-2">
+                            <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={saveTtsDraft}>
+                              保存
+                            </button>
+                            <button type="button" className={WF_BTN_CAPSULE_MUTED} onClick={() => void testTtsPreset(ttsDraft)}>
+                              测试
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="space-y-2">
+                        {ttsPresets.map((p) => {
+                          const isActive =
+                            aiAssistantConfig.ttsEndpoint.trim() === p.endpoint.trim() &&
+                            aiAssistantConfig.ttsModel.trim() === p.model.trim() &&
+                            aiAssistantConfig.ttsVoice.trim() === p.voice.trim()
+                          return (
+                            <div
+                              key={p.id}
+                              className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
+                                isActive ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/30'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="truncate text-[13px] font-black uppercase tracking-widest text-white/70">{p.name}</div>
+                                <div className="truncate font-mono text-[11px] text-white/30">{p.endpoint || '-'}</div>
+                              </div>
+                              <div className="flex shrink-0 flex-wrap gap-2">
+                                <button type="button" className={WF_BTN_CAPSULE_COMPACT} onClick={() => applyTtsPreset(p)}>
+                                  使用
+                                </button>
+                                <button type="button" className={WF_BTN_CAPSULE_COMPACT} onClick={() => startEditTtsPreset(p)}>
+                                  设置
+                                </button>
+                                <button type="button" className={WF_BTN_CAPSULE_DARK_COMPACT} onClick={() => void testTtsPreset(p)}>
+                                  测试
+                                </button>
+                                <button
+                                  type="button"
+                                  className={WF_BTN_CAPSULE_DARK_COMPACT}
+                                  onClick={() => {
+                                    if (!window.confirm(`确定删除「${p.name}」吗？`)) return
+                                    setTtsPresets(removeTtsPreset(p.id))
+                                    if (editingTtsId === p.id) setEditingTtsId(null)
+                                  }}
+                                >
+                                  删除
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      <div className="space-y-5 rounded-2xl border border-white/5 bg-black/25 p-5 sm:p-6">
+                        <div className="text-[12px] font-black uppercase tracking-widest text-white/40">克隆参考音频</div>
+                        <div className="flex flex-wrap items-center gap-4">
+                          <button
+                            type="button"
+                            className="wf-json-import-pill"
+                            onClick={() => aiCloneAudioInputRef.current?.click()}
+                          >
+                            上传参考音频
+                          </button>
+                          <button
+                            type="button"
+                            className={`${WF_BTN_CAPSULE_MUTED} px-5 py-2.5 text-[13px]`}
+                            onClick={() =>
+                              onAiAssistantConfigChange({
+                                ttsCloneAudioDataUrl: '',
+                                ttsCloneAudioName: '',
+                              })
+                            }
+                            disabled={!aiAssistantConfig.ttsCloneAudioDataUrl}
+                          >
+                            清除参考音频
+                          </button>
+                          <input
+                            ref={aiCloneAudioInputRef}
+                            type="file"
+                            accept="audio/*"
+                            className="visually-hidden"
+                            onChange={(e) => {
+                              void onAiCloneAudioChange(e)
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <p className="m-0 text-[13px] leading-relaxed tracking-wide text-white/45">
+                            当前参考音频：{aiAssistantConfig.ttsCloneAudioName || '未上传'}
+                          </p>
+                          {aiAssistantConfig.ttsCloneAudioDataUrl ? (
+                            <audio
+                              controls
+                              preload="metadata"
+                              src={aiAssistantConfig.ttsCloneAudioDataUrl}
+                              className="workflow-settings-panel__audioPreview workflow-settings-panel__audioPreview--flowid w-full max-w-full"
+                            />
+                          ) : null}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ) : null}
+                  ) : null}
+                </div>
+
                 <div className="space-y-3 border-t border-white/5 pt-4">
                   <label className="flex cursor-pointer items-center gap-3">
                     <input
