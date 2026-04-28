@@ -330,7 +330,21 @@ export function WorkflowSettingsPanel({
   }
 
   const testCloudModelPreset = async (preset: CloudModelPreset) => {
-    const baseUrl = String(preset.baseUrl || '').trim().replace(/\/+$/, '')
+    const normalizeOpenAICompatibleBaseUrl = (raw: string): string => {
+      // Accept user inputs like:
+      // - https://host/compatible-mode
+      // - https://host/compatible-mode/v1
+      // - https://host/compatible-mode/v1/models
+      // And normalize to the base URL WITHOUT the trailing /v1 so we can safely append /v1/...
+      let url = String(raw || '').trim()
+      url = url.replace(/\/+$/, '')
+      url = url.replace(/\/v1\/models$/i, '')
+      url = url.replace(/\/models$/i, '')
+      url = url.replace(/\/v1$/i, '')
+      return url.replace(/\/+$/, '')
+    }
+
+    const baseUrl = normalizeOpenAICompatibleBaseUrl(preset.baseUrl || '')
     if (!baseUrl) {
       setCloudModelTestMsg('请先填写模型地址。')
       return
