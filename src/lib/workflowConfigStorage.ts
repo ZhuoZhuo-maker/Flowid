@@ -187,5 +187,9 @@ export function loadWorkflowConfig(): WorkflowConfigSnapshot {
  * 将工作流配置持久化到 localStorage。
  */
 export function saveWorkflowConfig(snapshot: WorkflowConfigSnapshot) {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+  } catch (error) {
+    console.warn('[Flowid] 保存工作流配置失败（localStorage 配额不足）', error)
+  }
 }

@@ -152,7 +152,7 @@ export function HistoryPanel({
       }
       const outputPath = String(loadLocalDiskPathsSettings().outputPath || '').trim()
       if (!outputPath) {
-        if (!cancelled) setDiskHistoryItems([])
+        if (!cancelled) setDiskHistoryItems(null)
         if (!cancelled) {
           setDiskDebug({
             outputPath: '',
@@ -166,7 +166,7 @@ export function HistoryPanel({
       const res = await desktop.readDirectory(outputPath, { recursive: true, maxFiles: 4000, maxDepth: 6 })
       if (cancelled) return
       if (!res?.ok || !Array.isArray(res.files)) {
-        setDiskHistoryItems([])
+        setDiskHistoryItems(null)
         setDiskDebug({
           outputPath,
           scannedFiles: 0,
@@ -207,7 +207,16 @@ export function HistoryPanel({
     }
   }, [historyItems.length, diskPathsTick])
 
-  const sourceItems = diskHistoryItems ?? historyItems
+  /**
+   * 桌面端会扫描 output 目录得到 diskHistoryItems；若目录为空，diskHistoryItems 为 []。
+   * 不能用 `[] ?? historyItems`（空数组不是 nullish），否则本地流水 historyItems 会被整表盖住。
+   */
+  const sourceItems = useMemo(() => {
+    if (diskHistoryItems === null) return historyItems
+    const merged = [...historyItems, ...diskHistoryItems]
+    merged.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))
+    return merged
+  }, [diskHistoryItems, historyItems])
 
   const displayItems = useMemo<DisplayHistoryItem[]>(() => {
     const mediaItems = sourceItems
@@ -236,21 +245,20 @@ export function HistoryPanel({
       return item.mediaKind === 'music'
     })
     const sliced = filtered.slice(0, OUTPUT_HISTORY_LIMIT).map((entry) => entry.item)
-    const musicCounter = new Map<string, number>()
+    const titleCounter = new Map<string, number>()
+    const normalizeTitleBase = (raw: string): string => {
+      const v = String(raw || '').trim()
+      if (!v) return ''
+      // 若标题本身已带 "(数字)"，先去掉，避免重复追加成 "xxx(1)(1)"。
+      return v.replace(/\(\d+\)$/u, '').trim()
+    }
     return sliced.map((item) => {
       const mediaKind = resolveMediaKind(item)
-      const rawTitle = (item.title || '').trim()
-      if (mediaKind !== 'music') {
-        return {
-          ...item,
-          mediaKind,
-          displayTitle: rawTitle || item.text.slice(0, 8) || '记录',
-        }
-      }
-      const baseTitle = rawTitle.startsWith('音乐节点') ? rawTitle : '音乐节点1'
-      const count = musicCounter.get(baseTitle) ?? 0
-      musicCounter.set(baseTitle, count + 1)
-      const displayTitle = count === 0 ? baseTitle : `${baseTitle}（${count}）`
+      const rawTitle = (item.title || '').trim() || item.text.slice(0, 8) || '记录'
+      const baseTitle = normalizeTitleBase(rawTitle) || '记录'
+      const count = titleCounter.get(baseTitle) ?? 0
+      titleCounter.set(baseTitle, count + 1)
+      const displayTitle = count === 0 ? baseTitle : `${baseTitle}(${count})`
       return {
         ...item,
         mediaKind,
@@ -339,7 +347,8 @@ export function HistoryPanel({
 
   const deleteSelected = () => {
     if (!selectedIds.length) return
-    if (diskHistoryItems) {
+    // 空数组仍为 truthy；仅在有实际扫描到的磁盘条目时才走「只改 disk 列表」分支
+    if (diskHistoryItems !== null && diskHistoryItems.length > 0) {
       setDiskHistoryItems((prev) => (prev ? prev.filter((item) => !selectedIds.includes(item.id)) : prev))
       setSelectedIds([])
       setBatchMode(false)

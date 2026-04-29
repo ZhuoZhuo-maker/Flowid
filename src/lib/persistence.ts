@@ -125,7 +125,11 @@ export function loadStoredProject(): ProjectSnapshot {
  * 将工程写入 localStorage。
  */
 export function saveStoredProject(snapshot: ProjectSnapshot): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+  } catch (error) {
+    console.warn('[Flowid] 保存工程到 localStorage 失败，已跳过本次写入', error)
+  }
 }
 
 /**

@@ -3,6 +3,22 @@ export {}
 declare global {
   interface Window {
     flowidDesktop?: {
+      /** 主进程发起 OpenAI 兼容请求（绕过渲染进程 CORS；不经过 auth /proxy/openai） */
+      openAiCompatFetch?: (payload: {
+        url: string
+        method: 'GET' | 'POST'
+        headers?: Record<string, string>
+        json?: unknown
+      }) => Promise<
+        | {
+            ok: true
+            status: number
+            statusText: string
+            headers: Record<string, string>
+            body: ArrayBuffer
+          }
+        | { ok: false; error: string }
+      >
       getAppVersion: () => Promise<string>
       checkForUpdates: () => Promise<{ ok: boolean; hasUpdate?: boolean; reason?: string }>
       /** 读取本地 UTF-8 文件（桌面端） */

@@ -9,6 +9,8 @@ lerna-debug.log*
 
 node_modules
 dist
+# 本地生成的 YouMind 提示词导出（npm run export:youmind-prompts）
+exports/youmind-gpt-image-2-prompts
 release
 release-analyzer
 dist-ssr

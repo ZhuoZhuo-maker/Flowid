@@ -6,6 +6,12 @@ const { autoUpdater } = require('electron-updater')
 const isDev = !app.isPackaged
 
 /**
+ * Windows 上部分核显/远程桌面环境会出现 Electron 偶发黑屏；
+ * 关闭硬件加速可显著提升稳定性（Flowid 以 2D UI 为主，影响可接受）。
+ */
+app.disableHardwareAcceleration()
+
+/**
  * 顶部菜单：便于打开开发者工具（用户无需记忆快捷键组合时可走菜单）。
  */
 function installApplicationMenu() {
@@ -53,6 +59,8 @@ function createMainWindow() {
     minWidth: 1200,
     minHeight: 760,
     autoHideMenuBar: true,
+    backgroundColor: '#060b16',
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -66,6 +74,51 @@ function createMainWindow() {
   } else {
     win.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'))
   }
+
+  win.once('ready-to-show', () => {
+    if (!win.isDestroyed()) win.show()
+  })
+
+  win.webContents.on('did-fail-load', async (_event, code, desc, url) => {
+    const detail = `${String(desc || 'unknown')} (code=${code})\n${String(url || '')}`
+    const result = await dialog.showMessageBox(win, {
+      type: 'error',
+      title: '页面加载失败',
+      message: 'Flowid 页面加载失败，可能是开发服务未启动或网络/本地文件异常。',
+      detail,
+      buttons: ['重试', '关闭'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (result.response === 0 && !win.isDestroyed()) {
+      if (isDev) {
+        void win.loadURL('http://127.0.0.1:5173')
+      } else {
+        void win.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'))
+      }
+    } else if (!win.isDestroyed()) {
+      win.close()
+    }
+  })
+
+  win.webContents.on('render-process-gone', async (_event, details) => {
+    const reason = String(details?.reason || 'unknown')
+    const exitCode = Number(details?.exitCode ?? 0)
+    const result = await dialog.showMessageBox(win, {
+      type: 'error',
+      title: '渲染进程异常退出',
+      message: '界面进程异常退出（可能表现为黑屏）。',
+      detail: `reason=${reason}, exitCode=${exitCode}`,
+      buttons: ['重新加载', '关闭应用'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (result.response === 0 && !win.isDestroyed()) {
+      win.reload()
+    } else {
+      app.quit()
+    }
+  })
 }
 
 /**
@@ -107,6 +160,54 @@ function setupAutoUpdate() {
 }
 
 ipcMain.handle('desktop:get-app-version', () => app.getVersion())
+
+const OPENAI_COMPAT_FETCH_MAX_BYTES = 48 * 1024 * 1024
+
+/**
+ * 桌面端主进程转发 OpenAI 兼容请求（聊天 / TTS 等），避免渲染进程 CORS，且不强制经过用户自建的 auth 代理。
+ * payload: { url, method: 'GET'|'POST', headers?, json? }
+ */
+ipcMain.handle('flowid:openai-compat-fetch', async (_event, payload) => {
+  try {
+    const url = String(payload?.url || '').trim()
+    const methodRaw = String(payload?.method || 'GET').trim().toUpperCase()
+    const method = methodRaw === 'POST' ? 'POST' : 'GET'
+    const headers = payload?.headers && typeof payload.headers === 'object' ? payload.headers : {}
+    const json = payload?.json
+    let u
+    try {
+      u = new URL(url)
+    } catch {
+      return { ok: false, error: 'bad-url' }
+    }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      return { ok: false, error: 'unsupported-protocol' }
+    }
+    const upstream = await fetch(url, {
+      method,
+      headers,
+      body: json != null && method !== 'GET' ? JSON.stringify(json) : undefined,
+    })
+    const buf = Buffer.from(await upstream.arrayBuffer())
+    if (buf.length > OPENAI_COMPAT_FETCH_MAX_BYTES) {
+      return { ok: false, error: `response-too-large:${buf.length}` }
+    }
+    const headersOut = {}
+    upstream.headers.forEach((v, k) => {
+      headersOut[k] = v
+    })
+    const body = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+    return {
+      ok: true,
+      status: upstream.status,
+      statusText: upstream.statusText || '',
+      headers: headersOut,
+      body,
+    }
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err || 'fetch-failed') }
+  }
+})
 
 /**
  * 读取 UTF-8 文本文件（供 Flowid 工程 JSON 等使用）。

@@ -5,8 +5,10 @@
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  SelectionMode,
   addEdge,
   applyNodeChanges,
+  useStoreApi,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -65,7 +67,7 @@ import { AuthModal } from './panels/AuthModal'
 import { useAssetsHistory } from '../hooks/useAssetsHistory'
 import { useWorkflowRunner } from '../hooks/useWorkflowRunner'
 import { useWorkflowIntegration } from '../hooks/useWorkflowIntegration'
-import { loadAuthSession, saveAuthSession, type AuthSession } from '../lib/auth'
+import { loadAuthApiConfig, loadAuthSession, saveAuthSession, type AuthSession } from '../lib/auth'
 import {
   getLicenseSubmitBlockMessage,
   isLicenseReadOnly,
@@ -102,7 +104,13 @@ import {
   type AiAssistantAction,
   type AiAssistantConfig,
 } from '../lib/aiAssistantAgent'
-import { normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
+import { dashScopeCompatibleModeTts404Hint, normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
+import {
+  isDashScopeCompatibleModeMisusedForTts,
+  isQwenTtsMultimodalEndpoint,
+  normalizeQwenTtsMultimodalUrl,
+  type QwenTtsMultimodalResponse,
+} from '../lib/qwenTtsMultimodal'
 import { fetchOpenAICompat } from '../lib/openaiProxy'
 import {
   buildMentionToken,
@@ -425,12 +433,20 @@ function sanitizeTitleForImageDerivedName(raw: string): string {
 /**
  * 判断标题是否仍为「图片节点 + 纯数字」的自动命名形态。
  */
-function isDefaultStyledImageNodeTitle(title: string): boolean {
+function isNumberedKindNodeTitle(kind: 'image' | 'video', title: string): boolean {
   const t = String(title ?? '').trim()
-  const prefix = `${NODE_KIND_LABEL.image}节点`
+  const prefix = `${NODE_KIND_LABEL[kind]}节点`
   if (!t.startsWith(prefix)) return false
   const rest = t.slice(prefix.length).trim()
   return /^\d+$/.test(rest)
+}
+
+function isDefaultStyledImageNodeTitle(title: string): boolean {
+  return isNumberedKindNodeTitle('image', title)
+}
+
+function isDefaultStyledVideoNodeTitle(title: string): boolean {
+  return isNumberedKindNodeTitle('video', title)
 }
 
 /**
@@ -442,6 +458,51 @@ function buildImageLinkedNewNodeBaseTitle(anchor: Node<StudioNodeData>): string 
   if (!t || isDefaultStyledImageNodeTitle(t)) return ''
   const safe = sanitizeTitleForImageDerivedName(t).slice(0, 120)
   return safe ? `图-${safe}` : ''
+}
+
+/**
+ * 形如 `图-文字节点3`、`图-剧本节点2`、`图-图片节点1` 等：仍为「类型默认名」的占位标题，
+ * 与上游真实标题派生的 `图-xxx` 区分，便于在连线后随上游改名强制对齐。
+ */
+function isDefaultLinkedVisualNodeTitle(title: string): boolean {
+  const t = String(title ?? '').trim()
+  const m = t.match(
+    /^图[\s\u200b]*(?:[\u002D\u2013\u2014\uFF0D\u2212])[\s\u200b]*(.+)$/u,
+  )
+  const rest = (m ? m[1] : '').trim()
+  if (!rest) return false
+  for (const kind of Object.keys(NODE_KIND_LABEL) as StudioNodeKind[]) {
+    const prefix = `${NODE_KIND_LABEL[kind]}节点`
+    if (!rest.startsWith(prefix)) continue
+    const suffix = rest.slice(prefix.length).trim()
+    if (/^\d+$/.test(suffix)) return true
+  }
+  return false
+}
+
+/**
+ * 图/视频节点与上游文字/剧本的连线：优先「文 → 图」（source 为文本），兼容反向拖拽（source 为图）。
+ */
+function findUpstreamTextAnchorForVisual(
+  visualId: string,
+  nodeList: Array<Node<StudioNodeData>>,
+  edgeList: Edge[],
+): Node<StudioNodeData> | null {
+  for (const e of edgeList) {
+    if (e.target !== visualId) continue
+    const n = nodeList.find((x) => x.id === e.source)
+    if (n?.data?.kind === 'text' || n?.data?.kind === 'script') {
+      return n as Node<StudioNodeData>
+    }
+  }
+  for (const e of edgeList) {
+    if (e.source !== visualId) continue
+    const n = nodeList.find((x) => x.id === e.target)
+    if (n?.data?.kind === 'text' || n?.data?.kind === 'script') {
+      return n as Node<StudioNodeData>
+    }
+  }
+  return null
 }
 
 type SplitCategory = 'role' | 'scene' | 'asset'
@@ -1445,6 +1506,79 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     sourceNodesAtDragStart: [],
   })
   const [edges, setEdges, onEdgesChange] = useEdgesState(loaded.edges)
+
+  /**
+   * 占位图/视频标题随上游「可派生标题」对齐：在打开工程、改上游标题、改连线后都能收敛，
+   * 不依赖用户再提交一次标题编辑。
+   */
+  const linkedVisualTitleSyncKey = useMemo(() => {
+    const edgePart = edges
+      .map((e) => `${e.source}>${e.target}`)
+      .sort()
+      .join(',')
+    const titlePart = nodes
+      .map((n) => {
+        const k = n.data.kind
+        if (k === 'text' || k === 'script' || k === 'image' || k === 'video') {
+          return `${n.id}:${k}:${String(n.data.title ?? '').trim()}`
+        }
+        return ''
+      })
+      .filter(Boolean)
+      .sort()
+      .join('|')
+    return `${edgePart}::${titlePart}`
+  }, [edges, nodes])
+
+  useEffect(() => {
+    setNodes((prev) => {
+      const proposed = new Map<string, string>()
+      for (const n of prev) {
+        if (n.data.kind !== 'image' && n.data.kind !== 'video') continue
+        const anchor = findUpstreamTextAnchorForVisual(n.id, prev, edges)
+        if (!anchor) continue
+        const ct = String(n.data.title ?? '').trim()
+        const derived = buildImageLinkedNewNodeBaseTitle(
+          anchor as Node<StudioNodeData>,
+        )
+        if (!derived || ct === derived) continue
+        const syncPlaceholder = isDefaultLinkedVisualNodeTitle(ct)
+        const syncPlainDefault =
+          (n.data.kind === 'image' && isDefaultStyledImageNodeTitle(ct)) ||
+          (n.data.kind === 'video' && isDefaultStyledVideoNodeTitle(ct))
+        if (!syncPlaceholder && !syncPlainDefault) continue
+        proposed.set(n.id, derived)
+      }
+      if (proposed.size === 0) return prev
+
+      const allocated = new Set(
+        prev.map((x) => String(x.data.title ?? '').trim()).filter(Boolean),
+      )
+      for (const id of proposed.keys()) {
+        const cur = String(prev.find((x) => x.id === id)?.data.title ?? '').trim()
+        if (cur) allocated.delete(cur)
+      }
+
+      const finalById = new Map<string, string>()
+      for (const [id, base] of proposed) {
+        finalById.set(id, allocateUniqueNodeTitle(allocated, base))
+      }
+
+      let changed = false
+      const next = prev.map((n) => {
+        const nextTitle = finalById.get(n.id)
+        if (!nextTitle) return n
+        if (String(n.data.title ?? '').trim() === nextTitle) return n
+        changed = true
+        return {
+          ...n,
+          data: { ...n.data, title: nextTitle } as StudioNodeData,
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [linkedVisualTitleSyncKey, setNodes, edges])
+
   const [viewportVersion, setViewportVersion] = useState(0)
   /** 节点拖动结束后递增，配合 `nodeCanvasDragActiveRef` 在撤销栈中合并为一步 */
   const [postDragUndoTick, setPostDragUndoTick] = useState(0)
@@ -1648,6 +1782,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     assets,
     historyItems,
     appendHistory,
+    appendCloudTaskRecord,
     onUploadFiles,
     removeAsset,
     removeHistoryItems,
@@ -1678,7 +1813,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const { screenToFlowPosition, fitView, getViewport, setViewport, zoomIn, zoomOut, getZoom } =
     useReactFlow()
+  const rfStore = useStoreApi()
+  const reactFlowRootRef = useRef<HTMLDivElement | null>(null)
   const viewport = useViewport()
+  /** 覆盖框选命中后，避免 setNodes 触发 selectionChange 递归循环 */
+  const selectionOverrideInFlightRef = useRef(false)
 
   /**
    * 启动顺序：若存在「桌面 JSON 路径 / 浏览器绑定工程文件」则优先加载并写回默认槽；
@@ -1752,10 +1891,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const [promptPanelExpanded, setPromptPanelExpanded] = useState(false)
   /** 文本节点「自动拆分」下拉：选完后重置 key，便于再次选择同一项。 */
   const [textSplitSelectKey, setTextSplitSelectKey] = useState(0)
-  /**
-   * 底部面板同一节点可多次排队执行：按节点递增代数，旧任务完成时不再写回节点/进度，避免覆盖较新任务。
-   */
-  const promptPanelRunGenerationByNodeIdRef = useRef(new Map<string, number>())
+  /** 正在轮询中的云端 taskId，避免重复拉状态。 */
+  const cloudTaskPollingIdsRef = useRef(new Set<string>())
+  /** 防重复提交：同一节点任务运行中再次点击执行直接拦截。 */
+  const promptPanelSubmittingNodeIdsRef = useRef(new Set<string>())
   const [clipboard, setClipboard] = useState<CanvasClipboard | null>(null)
   const undoStackRef = useRef<Omit<ProjectSnapshot, 'version' | 'name'>[]>([])
   const redoStackRef = useRef<Omit<ProjectSnapshot, 'version' | 'name'>[]>([])
@@ -1937,7 +2076,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   const promptPanelModelOptions = useMemo(() => {
     if (!promptPanel) return [] as PromptPanelDropdownOption[]
-    const presets = loadCloudModelPresets()
+    const presets = loadCloudModelPresets(promptPanel.kind)
     const base = presets.map((item) => ({ value: item.id, label: item.name }))
     const current = String((promptPanel.node.data as any)?.cloudModelName || '').trim()
     if (current && !base.some((i) => i.label === current)) {
@@ -1950,17 +2089,16 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const promptPanelModelSelectValue = useMemo(() => {
     if (!promptPanel) return ''
     const current = String((promptPanel.node.data as any)?.cloudModelName || '').trim()
-    const found = loadCloudModelPresets().find((i) => i.name === current)
+    const presets = loadCloudModelPresets(promptPanel.kind)
+    const found = presets.find((i) => i.name === current)
     if (found) return found.id
     if (current) return 'custom-current'
-    return loadCloudModelPresets()[0]?.id || ''
+    return presets[0]?.id || ''
   }, [nodeConfigs, promptPanel])
 
   /** 底部提示框：节点级切换「工作流」还是「模型」 */
   const promptPanelPickerMode = useMemo(() => {
     if (!promptPanel) return 'workflow' as const
-    // 目前仅文本/脚本节点支持“模型模式”，其它节点固定为工作流模式。
-    if (!(promptPanel.kind === 'text' || promptPanel.kind === 'script')) return 'workflow' as const
     const mode = (promptPanel.node.data as any)?.promptPickerMode
     return mode === 'model' ? 'model' : 'workflow'
   }, [promptPanel])
@@ -2151,18 +2289,70 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   const updateNodeData = useCallback(
     (nodeId: string, patch: Partial<StudioNodeData>) => {
-      setNodes((nds) =>
-        nds.map((n) =>
+      setNodes((nds) => {
+        const prevNode = nds.find((n) => n.id === nodeId)
+        if (!prevNode) return nds
+
+        const prevTitle = String(prevNode.data.title ?? '').trim()
+        const nextTitle =
+          typeof patch.title === 'string'
+            ? String(patch.title).trim()
+            : prevTitle
+
+        let next = nds.map((n) =>
           n.id === nodeId
             ? {
                 ...n,
                 data: { ...n.data, ...patch } as StudioNodeData,
               }
             : n,
-        ),
-      )
+        )
+
+        const sk = prevNode.data.kind
+        const titleChanged =
+          typeof patch.title === 'string' && nextTitle !== prevTitle
+        if (titleChanged && (sk === 'text' || sk === 'script')) {
+          const mergedData = {
+            ...prevNode.data,
+            ...patch,
+            title: nextTitle,
+          } as StudioNodeData
+          const anchorNext = {
+            ...prevNode,
+            data: mergedData,
+          } as Node<StudioNodeData>
+          const expectedNew = buildImageLinkedNewNodeBaseTitle(anchorNext)
+          if (expectedNew) {
+            const expectedOld = buildImageLinkedNewNodeBaseTitle(
+              prevNode as Node<StudioNodeData>,
+            )
+            const linkedTargets = new Set<string>()
+            for (const e of edges) {
+              if (e.source === nodeId) linkedTargets.add(e.target)
+              if (e.target === nodeId) linkedTargets.add(e.source)
+            }
+            next = next.map((n) => {
+              if (!linkedTargets.has(n.id)) return n
+              if (n.data.kind !== 'image' && n.data.kind !== 'video')
+                return n
+              const ct = String(n.data.title ?? '').trim()
+              const syncFromDerived =
+                expectedOld !== '' && ct === expectedOld
+              const syncFromPlaceholder = isDefaultLinkedVisualNodeTitle(ct)
+              if (!syncFromDerived && !syncFromPlaceholder) return n
+              if (ct === expectedNew) return n
+              return {
+                ...n,
+                data: { ...n.data, title: expectedNew } as StudioNodeData,
+              }
+            })
+          }
+        }
+
+        return next
+      })
     },
-    [setNodes],
+    [setNodes, edges],
   )
 
   /**
@@ -4016,16 +4206,81 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         const target = prev.find((n) => n.id === targetId)
         if (!source || !target) return prev
         const sourceTitle = String(source.data.title || '').trim()
-        const patch = buildInheritedPatchForTarget(target.data, sourceTitle, source.id)
-        if (!patch) return prev
-        return prev.map((node) =>
-          node.id === targetId
-            ? {
-                ...node,
-                data: { ...node.data, ...patch } as StudioNodeData,
-              }
-            : node,
+        const patch = buildInheritedPatchForTarget(
+          target.data,
+          sourceTitle,
+          source.id,
         )
+        const sk = source.data.kind
+        const tk = target.data.kind
+
+        /**
+         * 图片节点 <-> VR 全景节点：直接把图片资源覆盖到 panorama 的纹理上。
+         * PanoramaNode 仅依赖 `data.src` 渲染贴图；不写 `src` 就不会刷新预览。
+         *
+         * 连接方向不确定（可能 image->panorama，也可能 panorama->image），所以两端都要兜底。
+         */
+        const panoramaNodeId =
+          tk === 'panorama' ? targetId : sk === 'panorama' ? sourceId : ''
+        const imageNode =
+          tk === 'panorama'
+            ? (source as Node<StudioNodeData>)
+            : sk === 'panorama'
+              ? (target as Node<StudioNodeData>)
+              : null
+
+        const panoramaSrcPatch: Partial<StudioNodeData> | null =
+          panoramaNodeId && imageNode?.data.kind === 'image'
+            ? ({
+                src: String((imageNode.data as any).src || '').trim(),
+                srcAssetId: (imageNode.data as any).srcAssetId,
+                srcFileName: (imageNode.data as any).srcFileName,
+                rectilinearSrc: undefined, // 换全景后旧“当前视角导出”作废
+              } as Partial<StudioNodeData>)
+            : null
+        const titlePatches = new Map<string, string>()
+        const tryAlignVisualToAnchor = (
+          anchor: Node<StudioNodeData>,
+          visual: Node<StudioNodeData>,
+        ) => {
+          if (visual.data.kind !== 'image' && visual.data.kind !== 'video') return
+          const derived = buildImageLinkedNewNodeBaseTitle(anchor)
+          const ct = String(visual.data.title ?? '').trim()
+          if (!derived || ct === derived) return
+          const syncPlaceholder = isDefaultLinkedVisualNodeTitle(ct)
+          const syncPlainDefault =
+            (visual.data.kind === 'image' && isDefaultStyledImageNodeTitle(ct)) ||
+            (visual.data.kind === 'video' && isDefaultStyledVideoNodeTitle(ct))
+          if (syncPlaceholder || syncPlainDefault) {
+            titlePatches.set(visual.id, derived)
+          }
+        }
+        if (sk === 'text' || sk === 'script') {
+          if (tk === 'image' || tk === 'video') {
+            tryAlignVisualToAnchor(source as Node<StudioNodeData>, target as Node<StudioNodeData>)
+          }
+        }
+        if (tk === 'text' || tk === 'script') {
+          if (sk === 'image' || sk === 'video') {
+            tryAlignVisualToAnchor(target as Node<StudioNodeData>, source as Node<StudioNodeData>)
+          }
+        }
+        if (!patch && !panoramaSrcPatch && titlePatches.size === 0) return prev
+        return prev.map((node) => {
+          let nextData = node.data as StudioNodeData
+          if (node.id === targetId && patch) {
+            nextData = { ...nextData, ...patch } as StudioNodeData
+          }
+          if (node.id === panoramaNodeId && panoramaSrcPatch) {
+            nextData = { ...nextData, ...panoramaSrcPatch } as StudioNodeData
+          }
+          const tp = titlePatches.get(node.id)
+          if (tp) {
+            nextData = { ...nextData, title: tp } as StudioNodeData
+          }
+          if (nextData === node.data) return node
+          return { ...node, data: nextData }
+        })
       })
     },
     [setEdges, setNodes],
@@ -4174,22 +4429,143 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     [dismissMultiSelectContextMenu],
   )
 
-  const onSelectionChange = useCallback((params: OnSelectionChangeParams) => {
-    const eligibleSelected = params.nodes.filter(
-      (node) => node.type !== 'ghost' && node.type !== 'group',
-    )
-    /**
-     * 仅单选业务节点时展示底部提示框；框选/多选时不弹，避免批量操作被遮挡。
-     */
-    if (eligibleSelected.length === 1) {
-      setSelectedNodeId(eligibleSelected[0]!.id)
-    } else {
-      setSelectedNodeId(null)
-    }
-    if (eligibleSelected.length < 1) {
-      dismissMultiSelectContextMenu()
-    }
-  }, [dismissMultiSelectContextMenu])
+  const onSelectionChange = useCallback(
+    (params: OnSelectionChangeParams) => {
+      if (selectionOverrideInFlightRef.current) return
+
+      const st: any = rfStore.getState()
+      const rect = st?.userSelectionRect
+      const root = reactFlowRootRef.current
+
+      /**
+       * 关键修复：React Flow 在某些环境下框选命中会漂移，导致“框一点选一大片”。
+       * 若当前存在 userSelectionRect，则以我们自己换算的 flowRect + 节点 bbox 重新计算命中结果并覆盖 selected。
+       */
+      if (rect && root) {
+        const bounds = root.getBoundingClientRect()
+        const p1 = screenToFlowPosition({ x: bounds.left + rect.x, y: bounds.top + rect.y })
+        const p2 = screenToFlowPosition({
+          x: bounds.left + rect.x + rect.width,
+          y: bounds.top + rect.y + rect.height,
+        })
+        const zoomNow = Number(getViewport()?.zoom ?? 1) || 1
+        // 选区容错：缩放越大（更“近”）padding 越小；缩放越小 padding 越大，避免“框很准但选不中”的不灵敏感
+        const pad = 10 / zoomNow
+        const sel = {
+          minX: Math.min(p1.x, p2.x) - pad,
+          minY: Math.min(p1.y, p2.y) - pad,
+          maxX: Math.max(p1.x, p2.x) + pad,
+          maxY: Math.max(p1.y, p2.y) + pad,
+        }
+
+        // 手感优先：擦边也算（同时保留 pad，避免轻微抖动/像素误差导致漏选）
+        const shouldUseFull = false
+        const snapshotNodes = nodesRef.current
+        const hitIds = new Set<string>()
+        for (const n of snapshotNodes) {
+          if (n.type === 'ghost' || n.type === 'group') continue
+          const { width, height } = getNodeSize(n)
+          const box = {
+            x1: n.position.x,
+            y1: n.position.y,
+            x2: n.position.x + width,
+            y2: n.position.y + height,
+          }
+          const fullyInside =
+            box.x1 >= sel.minX && box.y1 >= sel.minY && box.x2 <= sel.maxX && box.y2 <= sel.maxY
+          const overlap =
+            box.x1 <= sel.maxX && box.x2 >= sel.minX && box.y1 <= sel.maxY && box.y2 >= sel.minY
+          const hit = shouldUseFull ? fullyInside : overlap
+          if (hit) hitIds.add(n.id)
+        }
+
+        selectionOverrideInFlightRef.current = true
+        setNodes((prev) => prev.map((n) => ({ ...n, selected: hitIds.has(n.id) })))
+        setEdges((prev) => prev.map((e) => ({ ...e, selected: false })))
+        queueMicrotask(() => {
+          selectionOverrideInFlightRef.current = false
+        })
+
+        const eligibleSelected = snapshotNodes.filter(
+          (n) => hitIds.has(n.id) && n.type !== 'ghost' && n.type !== 'group',
+        )
+        if (eligibleSelected.length === 1) {
+          setSelectedNodeId(eligibleSelected[0]!.id)
+        } else {
+          setSelectedNodeId(null)
+        }
+        if (eligibleSelected.length < 1) {
+          dismissMultiSelectContextMenu()
+        }
+
+        if (import.meta.env.DEV) {
+          try {
+            // eslint-disable-next-line no-console
+            console.log('[Flowid select-debug:override]', { rectPx: rect, flowRect: sel, hitCount: hitIds.size })
+          } catch {
+            // ignore
+          }
+        }
+        return
+      }
+
+      // 无框选矩形（点击单选/程序性选择）走默认逻辑
+      const eligibleSelected = params.nodes.filter((node) => node.type !== 'ghost' && node.type !== 'group')
+      if (eligibleSelected.length === 1) {
+        setSelectedNodeId(eligibleSelected[0]!.id)
+      } else {
+        setSelectedNodeId(null)
+      }
+      if (eligibleSelected.length < 1) {
+        dismissMultiSelectContextMenu()
+      }
+    },
+    [dismissMultiSelectContextMenu, rfStore, screenToFlowPosition, setNodes, setEdges, getViewport],
+  )
+
+  /**
+   * 框选开始时默认清空旧选区（除非用户按住 Ctrl/Meta 明确要“追加选中”）。
+   * 目的：避免分组区域/历史选区导致“框右边却把左边也一起选中”的错觉。
+   */
+  const onSelectionStart = useCallback(
+    (event: ReactMouseEvent) => {
+      const native = event.nativeEvent as MouseEvent
+      // 注意：部分键盘右 Alt(AltGr) 会以 Ctrl+Alt 的形式上报；
+      // 若把 ctrlKey 直接当作“追加多选”，会导致按了 Alt 后框选不清空旧选区。
+      const isAdditive = Boolean((native?.ctrlKey && !native?.altKey) || native?.metaKey)
+      if (isAdditive) return
+      setNodes((prev) =>
+        prev.some((n) => n.selected) ? prev.map((n) => (n.selected ? { ...n, selected: false } : n)) : prev,
+      )
+      setEdges((prev) =>
+        prev.some((e) => e.selected) ? prev.map((e) => (e.selected ? { ...e, selected: false } : e)) : prev,
+      )
+    },
+    [setEdges, setNodes],
+  )
+
+  /**
+   * 兜底：按住 Shift 在画布空白处准备框选时，先清空旧选区（除非 Ctrl/Meta 追加）。
+   * 某些情况下（例如命中 RF 的 selection-rect 层）不会触发 `onSelectionStart`，导致旧选区残留。
+   */
+  const onCanvasMouseDown = useCallback(
+    (event: ReactMouseEvent) => {
+      const native = event.nativeEvent as MouseEvent
+      const el = event.target as HTMLElement | null
+      // 仅在画布区域内生效（避免顶部栏/面板点击触发清空）
+      if (!el || !el.closest?.('.react-flow')) return
+      if (!native?.shiftKey) return
+      const isAdditive = Boolean((native?.ctrlKey && !native?.altKey) || native?.metaKey)
+      if (isAdditive) return
+      setNodes((prev) =>
+        prev.some((n) => n.selected) ? prev.map((n) => (n.selected ? { ...n, selected: false } : n)) : prev,
+      )
+      setEdges((prev) =>
+        prev.some((e) => e.selected) ? prev.map((e) => (e.selected ? { ...e, selected: false } : e)) : prev,
+      )
+    },
+    [setEdges, setNodes],
+  )
 
   /**
    * 从字符串中提取「分镜」编号（支持 `分镜12`、`分镜5-1` 等）。
@@ -5286,13 +5662,15 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
    * 将工作流执行结果回填到节点并写入历史（供顶部执行入口与底部面板入口共用）。
    */
   const applyWorkflowResultToNode = useCallback(
-    (
+    async (
       fresh: Node<StudioNodeData>,
       kind: StudioNodeKind,
       result: { previewUrl: string | null; audioUrl: string | null; resultUrl: string | null; textResult?: string | null },
     ) => {
       const id = fresh.id
       const mediaUrl = result.audioUrl || result.previewUrl || result.resultUrl || null
+      const authToken = String(loadAuthSession()?.token || '').trim()
+      const mirrorHeaders = authToken ? ({ Authorization: `Bearer ${authToken}` } as Record<string, string>) : undefined
 
       if (kind === 'music') {
         if (!result.audioUrl) {
@@ -5311,6 +5689,17 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           src: nextSources[0],
           resultSources: nextSources,
         })
+        const mirror = await mirrorComfyOutputToDisk({
+          url: result.audioUrl,
+          mediaKind: 'music',
+          title: fresh.data.title,
+          requestHeaders: mirrorHeaders,
+        })
+        if (!mirror.saved) {
+          appendHistory(`输出目录写入失败（音乐）：${mirror.reason || '未知原因'}`)
+        } else if (mirror.filePath) {
+          appendHistory(`已保存到输出目录（音乐）：${mirror.filePath}`)
+        }
         appendHistory({
           text: '音乐生成成功',
           kind: 'music',
@@ -5318,11 +5707,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           title: fresh.data.title,
         })
         appendHistory(`音乐节点执行成功：${(fresh.data as AudioNodeData).model || '未命名工作流'}`)
-        void mirrorComfyOutputToDisk({
-          url: result.audioUrl,
-          mediaKind: 'music',
-          title: fresh.data.title,
-        })
         return
       }
 
@@ -5343,6 +5727,17 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           src: nextSources[0],
           resultSources: nextSources,
         })
+        const mirror = await mirrorComfyOutputToDisk({
+          url: result.audioUrl,
+          mediaKind: 'audio',
+          title: fresh.data.title,
+          requestHeaders: mirrorHeaders,
+        })
+        if (!mirror.saved) {
+          appendHistory(`输出目录写入失败（配音）：${mirror.reason || '未知原因'}`)
+        } else if (mirror.filePath) {
+          appendHistory(`已保存到输出目录（配音）：${mirror.filePath}`)
+        }
         appendHistory({
           text: '配音生成成功',
           kind: 'audio',
@@ -5350,11 +5745,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           title: fresh.data.title,
         })
         appendHistory(`配音节点执行成功：${(fresh.data as AudioNodeData).model || '未命名工作流'}`)
-        void mirrorComfyOutputToDisk({
-          url: result.audioUrl,
-          mediaKind: 'audio',
-          title: fresh.data.title,
-        })
         return
       }
 
@@ -5362,22 +5752,61 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         if (!mediaUrl) {
           throw new Error('执行完成但未检测到图片或视频输出，请检查工作流输出节点')
         }
-        /** 清除本地主图资产 id，避免下次 hydrate 用旧本地图覆盖 Comfy 返回的 URL */
+        let nextSrc = mediaUrl
+        let nextSrcAssetId: string | undefined
+        let nextSrcFileName: string | undefined
+        if (kind === 'image') {
+          try {
+            const res = await fetch(mediaUrl, { mode: 'cors', credentials: 'include' })
+            if (res.ok) {
+              const blob = await res.blob()
+              if (blob.size > 0 && String(blob.type || '').startsWith('image/')) {
+                const ext =
+                  blob.type.includes('png')
+                    ? 'png'
+                    : blob.type.includes('jpeg') || blob.type.includes('jpg')
+                      ? 'jpg'
+                      : blob.type.includes('webp')
+                        ? 'webp'
+                        : 'png'
+                const fileName = `${String(fresh.data.title || 'image').trim() || 'image'}.${ext}`
+                const file = new File([blob], fileName, {
+                  type: blob.type || 'image/png',
+                })
+                const aid = await saveLocalImageAsset(file)
+                const restored = await getLocalImageAssetObjectUrl(aid)
+                if (restored) {
+                  nextSrc = restored
+                  nextSrcAssetId = aid
+                  nextSrcFileName = fileName
+                }
+              }
+            }
+          } catch {
+            // 远端 URL 无法直接 fetch（防盗链/CORS）时，回退使用原始媒体 URL。
+          }
+        }
         updateNodeData(id, {
           kind,
-          src: mediaUrl,
-          srcAssetId: undefined,
-          srcFileName: undefined,
+          src: nextSrc,
+          srcAssetId: nextSrcAssetId,
+          srcFileName: nextSrcFileName,
         } as Partial<StudioNodeData>)
+        const mirror = await mirrorComfyOutputToDisk({
+          url: mediaUrl,
+          mediaKind: kind === 'video' ? 'video' : 'image',
+          title: fresh.data.title,
+          requestHeaders: mirrorHeaders,
+        })
+        if (!mirror.saved) {
+          appendHistory(`输出目录写入失败（${kind === 'image' ? '图片' : '视频'}）：${mirror.reason || '未知原因'}`)
+        } else if (mirror.filePath) {
+          appendHistory(`已保存到输出目录（${kind === 'image' ? '图片' : '视频'}）：${mirror.filePath}`)
+        }
         appendHistory({
           text: kind === 'image' ? '图片生成成功' : '视频生成成功',
           kind,
           src: mediaUrl,
-          title: fresh.data.title,
-        })
-        void mirrorComfyOutputToDisk({
-          url: mediaUrl,
-          mediaKind: kind === 'video' ? 'video' : 'image',
           title: fresh.data.title,
         })
         return
@@ -5409,20 +5838,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       // 其它节点：若模型返回了文本结果，按节点类型回填到提示框字段（用于“模型模式”生成提示词/描述）
       const textResult = String(result.textResult || '').trim()
       if (!textResult) return
-      if (kind === 'image' || kind === 'video') {
+      if (kind === 'script') {
         updateNodeData(id, {
           kind,
-          prompt: textResult,
+          body: textResult,
         } as any)
-        appendHistory({ text: '模型已生成提示词并回填', kind: 'action' })
-        return
-      }
-      if (kind === 'audio' || kind === 'music') {
-        updateNodeData(id, {
-          kind,
-          note: textResult,
-        } as any)
-        appendHistory({ text: '模型已生成描述并回填', kind: 'action' })
+        appendHistory({ text: '模型已生成脚本并回填', kind: 'action' })
         return
       }
     },
@@ -5443,7 +5864,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const result = await runNodeWorkflow(prepared, {
         allNodes: nodes,
         runNodeTitle: String(latest.data.title || latest.id),
-        executionTarget: promptPanelPickerMode,
+        executionTarget:
+          (latest.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow',
         rawPromptText:
           latest.data.kind === 'image' || latest.data.kind === 'video'
             ? String((latest.data as ImageNodeData | VideoNodeData).prompt || '')
@@ -5465,7 +5887,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             ),
           ),
       })
-      applyWorkflowResultToNode(latest, kind, result)
+      await applyWorkflowResultToNode(latest, kind, result)
     },
   })
 
@@ -5481,6 +5903,98 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (!ensureLicenseCanSubmit()) return
     void runAllWorkflow()
   }, [ensureLicenseCanSubmit, runAllWorkflow])
+
+  const pollPendingCloudTaskAndBackfill = useCallback(async (
+    taskId: string,
+    nodeId: string,
+    kind: StudioNodeKind,
+  ) => {
+    const tid = String(taskId || '').trim()
+    if (!tid) return
+    if (cloudTaskPollingIdsRef.current.has(tid)) return
+    cloudTaskPollingIdsRef.current.add(tid)
+    try {
+      const api = loadAuthApiConfig()
+      const session = loadAuthSession()
+      const base = String(api.baseUrl || '').trim().replace(/\/+$/, '')
+      if (!base || !session?.token) {
+        appendHistory(`云端任务 ${tid} 轮询失败：未配置认证服务地址或登录态已失效`)
+        return
+      }
+      const endpoint = `${base}/tasks/${encodeURIComponent(tid)}/status`
+      const deadline = Date.now() + 10 * 60 * 1000
+      while (Date.now() < deadline) {
+        const res = await fetch(endpoint, {
+          headers: { Authorization: `Bearer ${session.token}` },
+        })
+        const json = (await res.json().catch(() => ({}))) as {
+          status?: string
+          result?: { mediaUrls?: string[] }
+          error?: string
+          message?: string
+        }
+        if (!res.ok) {
+          await new Promise((resolve) => setTimeout(resolve, 2500))
+          continue
+        }
+        const status = String(json.status || '').trim().toLowerCase()
+        if (status === 'success') {
+          const mediaUrls = Array.isArray(json.result?.mediaUrls) ? json.result?.mediaUrls ?? [] : []
+          const outputUrl = String(mediaUrls[0] || '').trim()
+          if (!outputUrl) {
+            appendHistory(`云端任务 ${tid} 已完成，但未返回可回填媒体 URL`)
+            return
+          }
+          const lower = outputUrl.toLowerCase()
+          const isAudio =
+            lower.endsWith('.mp3') ||
+            lower.endsWith('.wav') ||
+            lower.endsWith('.flac') ||
+            lower.endsWith('.m4a') ||
+            lower.endsWith('.ogg') ||
+            lower.endsWith('.aac')
+          const latest = nodesRef.current.find((n) => n.id === nodeId)
+          if (!latest) return
+          await applyWorkflowResultToNode(latest, kind, {
+            previewUrl: isAudio ? null : outputUrl,
+            audioUrl: isAudio ? outputUrl : null,
+            resultUrl: outputUrl,
+          })
+          updateNodeData(nodeId, {
+            kind,
+            runStatus: 'success',
+            runProgress: undefined,
+            lastRunAt: Date.now(),
+          } as Partial<StudioNodeData>)
+          appendHistory(`${NODE_KIND_LABEL[kind]}节点任务已完成并回填：${latest.data.title || nodeId}`)
+          return
+        }
+        if (status === 'error') {
+          const msg = String(json.error || json.message || '任务失败')
+          updateNodeData(nodeId, {
+            kind,
+            runStatus: 'error',
+            runProgress: undefined,
+            lastRunAt: Date.now(),
+          } as Partial<StudioNodeData>)
+          appendHistory(`${NODE_KIND_LABEL[kind]}节点任务失败：${msg}`)
+          return
+        }
+        updateNodeData(nodeId, {
+          kind,
+          runStatus: 'queued',
+          runProgress: {
+            percent: 52,
+            label: `云端任务处理中（${tid}）`,
+          },
+        } as Partial<StudioNodeData>)
+        await new Promise((resolve) => setTimeout(resolve, 2500))
+      }
+      appendHistory(`云端任务 ${tid} 轮询超时，请稍后重试`)
+    } finally {
+      cloudTaskPollingIdsRef.current.delete(tid)
+    }
+  }, [appendHistory, applyWorkflowResultToNode, updateNodeData])
 
   const handleAuthSuccess = useCallback((session: AuthSession | null) => {
     setAuthSession(session)
@@ -5499,47 +6013,48 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   }, [])
 
   /**
-   * 双击节点主体（非标题/输入区）快捷执行当前节点，等价于右键菜单「执行」单选。
-   * 右键本身只负责打开菜单，不会直接发 Comfy 任务。
-   */
-  const onNodeDoubleClick = useCallback(
-    (event: ReactMouseEvent, node: Node<StudioNodeData>) => {
-      if (!ensureLicenseCanSubmit()) return
-      if (node.type === 'ghost' || node.type === 'group') return
-      const t = event.target as HTMLElement | null
-      if (t?.closest('.studio-node__title, textarea, input, a, button')) return
-      const kind = node.data.kind
-      // 文本节点双击由 TextNode 自身用于进入编辑，不在此触发执行
-      if (
-        kind !== 'image' &&
-        kind !== 'video' &&
-        kind !== 'audio' &&
-        kind !== 'music'
-      ) {
-        return
-      }
-      void executeNodeIds([node.id], `双击执行：${node.data.title || node.id}`)
-    },
-    [ensureLicenseCanSubmit, executeNodeIds],
-  )
-
-  /**
    * 右键菜单批量执行：按当前选中业务节点 id 调用 `executeNodeIds`（拓扑顺序、串行）。
    * 与 `batchContextMenuEligibleCount` 一致，不含 ghost / group；单选时菜单文案为「执行」，多选为「全部执行」。
    */
   const runBatchExecuteFromContextMenuSelection = useCallback(async () => {
     if (!ensureLicenseCanSubmit()) return
-    const ids = nodes
+    const selectedIds = nodes
       .filter((node) => node.selected && node.type !== 'ghost' && node.type !== 'group')
       .map((node) => node.id)
-    if (!ids.length) {
+    if (!selectedIds.length) {
       window.alert('没有可执行节点')
       return
     }
     dismissMultiSelectContextMenu()
-    const runName = ids.length === 1 ? '执行选中节点' : '全部执行选中节点'
+
+    // 「全部执行」用户预期是执行选中子图：包含下游连线节点，而不只执行被选中的那几个。
+    const allowedNodeIds = new Set(
+      nodes.filter((n) => n.type !== 'ghost' && n.type !== 'group').map((n) => n.id),
+    )
+    const reachable = new Set<string>()
+    const queue: string[] = []
+    selectedIds.forEach((id) => {
+      if (!allowedNodeIds.has(id)) return
+      reachable.add(id)
+      queue.push(id)
+    })
+    while (queue.length) {
+      const curr = queue.shift()
+      if (!curr) continue
+      for (const e of edges) {
+        if (e.source !== curr) continue
+        const nxt = e.target
+        if (!nxt || !allowedNodeIds.has(nxt)) continue
+        if (reachable.has(nxt)) continue
+        reachable.add(nxt)
+        queue.push(nxt)
+      }
+    }
+
+    const ids = Array.from(reachable)
+    const runName = selectedIds.length === 1 ? '执行选中节点（含下游）' : '全部执行选中节点（含下游）'
     await executeNodeIds(ids, runName)
-  }, [dismissMultiSelectContextMenu, ensureLicenseCanSubmit, executeNodeIds, nodes])
+  }, [dismissMultiSelectContextMenu, ensureLicenseCanSubmit, executeNodeIds, nodes, edges])
 
   /**
    * 按标题关键字或 id 定位节点（优先精确匹配，再模糊包含）。
@@ -5818,6 +6333,63 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       } catch (error) {
         lastError = `Gradio TTS -> ${(error as Error)?.message || '请求失败'}`
       }
+    } else if (isQwenTtsMultimodalEndpoint(endpoint)) {
+      try {
+        const genUrl = normalizeQwenTtsMultimodalUrl(endpoint)
+        const model = aiConfig.ttsModel.trim()
+        const voice = aiConfig.ttsVoice.trim()
+        const apiKey = aiConfig.ttsApiKey.trim()
+        if (!model) throw new Error('请填写 TTS 模型名（如 qwen3-tts-vd-2026-01-26）')
+        if (!voice) throw new Error('请填写 TTS 音色 voice（VD 系列需先在百炼「声音设计」生成并与 model 一致）')
+        if (!apiKey) throw new Error('请填写 TTS API Key')
+        const res = await fetchOpenAICompat(genUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          json: {
+            model,
+            input: {
+              text,
+              voice,
+              language_type: 'Chinese',
+            },
+          },
+        })
+        if (!res.ok) {
+          const msg = await readHttpErrorMessage(res)
+          throw new Error(`千问 TTS -> HTTP ${res.status}${msg ? ` (${msg})` : ''}`)
+        }
+        const data = (await res.json()) as QwenTtsMultimodalResponse
+        if (data.code) {
+          throw new Error(`千问 TTS -> ${data.code}: ${data.message || ''}`)
+        }
+        if (data.status_code != null && data.status_code !== 200) {
+          throw new Error(`千问 TTS -> ${data.status_code}: ${data.message || ''}`)
+        }
+        const audioUrl = String(data.output?.audio?.url || '').trim()
+        const audioB64 = String(data.output?.audio?.data || '').trim()
+        if (audioB64) {
+          const bytes = atob(audioB64)
+          const arr = new Uint8Array(bytes.length)
+          for (let i = 0; i < bytes.length; i += 1) arr[i] = bytes.charCodeAt(i)
+          blob = new Blob([arr], { type: 'audio/wav' })
+        } else if (audioUrl) {
+          const audioRes = await fetch(audioUrl)
+          if (!audioRes.ok) {
+            throw new Error(`下载合成音频失败（${audioRes.status}）。若在浏览器中报 CORS，请用桌面端测试。`)
+          }
+          blob = await audioRes.blob()
+        } else {
+          throw new Error('千问 TTS 响应中无 output.audio.url / data')
+        }
+      } catch (error) {
+        lastError = (error as Error)?.message || '千问 TTS 请求失败'
+      }
+    } else if (isDashScopeCompatibleModeMisusedForTts(endpoint)) {
+      lastError =
+        'TTS 不能使用百炼 compatible-mode 地址（仅用于聊天）。请改为 endpoint：qwen-tts-multimodal；模型：qwen3-tts-flash；音色：Cherry；API Key 与聊天相同即可。'
     } else {
       const endpointCandidates = buildTtsEndpointCandidates(endpoint)
       const model = aiConfig.ttsModel.trim()
@@ -5843,7 +6415,9 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           })
           if (!res.ok) {
             const msg = await readHttpErrorMessage(res)
-            lastError = `${speechUrl} -> HTTP ${res.status}${msg ? ` (${msg})` : ''}`
+            const base = normalizeOpenAICompatibleBaseUrl(item)
+            const dsHint = res.status === 404 ? dashScopeCompatibleModeTts404Hint(base) : null
+            lastError = `${speechUrl} -> HTTP ${res.status}${msg ? ` (${msg})` : ''}${dsHint ? `。${dsHint}` : ''}`
             continue
           }
           const contentType = String(res.headers.get('content-type') || '').toLowerCase()
@@ -6152,9 +6726,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const fresh = latestNodes.find((n) => n.id === panelNode.id) ?? panelNode
       const prepared = withResolvedNodeMentions(fresh, latestNodes)
       const id = fresh.id
-      const prevGen = promptPanelRunGenerationByNodeIdRef.current.get(id) ?? 0
-      const runSeq = prevGen + 1
-      promptPanelRunGenerationByNodeIdRef.current.set(id, runSeq)
+      if (promptPanelSubmittingNodeIdsRef.current.has(id)) {
+        const tip = '任务已提交，请勿重复点击'
+        appendHistory(`${fresh.data.title || fresh.id}：${tip}`)
+        window.alert(tip)
+        return
+      }
+      promptPanelSubmittingNodeIdsRef.current.add(id)
       appendHistory(`开始执行：${fresh.data.title || fresh.id}`)
       updateNodeData(id, {
         kind,
@@ -6178,17 +6756,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               : undefined,
           onPreflightMessage: (message) => appendHistory(message),
           onProgress: (info) => {
-            if (promptPanelRunGenerationByNodeIdRef.current.get(id) !== runSeq) return
             updateNodeData(id, { kind, runProgress: info } as Partial<StudioNodeData>)
           },
         })
-        if (promptPanelRunGenerationByNodeIdRef.current.get(id) !== runSeq) {
-          appendHistory(
-            `较早一次任务已结束，但已有更新的提交，该次结果未写入节点：${fresh.data.title || id}`,
-          )
-          return
-        }
-        applyWorkflowResultToNode(fresh, kind, result)
+        await applyWorkflowResultToNode(fresh, kind, result)
 
         updateNodeData(id, {
           kind,
@@ -6197,7 +6768,28 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           runProgress: undefined,
         } as Partial<StudioNodeData>)
       } catch (error) {
-        if (promptPanelRunGenerationByNodeIdRef.current.get(id) !== runSeq) {
+        const message = (error as Error)?.message || '执行失败'
+        const pendingMatch = message.match(/任务仍在处理中（taskId=([^)]+)）/)
+        if (pendingMatch) {
+          const taskId = String(pendingMatch[1] || '').trim()
+          appendCloudTaskRecord({
+            taskId,
+            nodeId: id,
+            nodeKind: kind,
+            title: String(fresh.data.title || ''),
+          })
+          updateNodeData(id, {
+            kind,
+            runStatus: 'queued',
+            runProgress: {
+              percent: 52,
+              label: taskId ? `云端任务处理中（${taskId}）` : '云端任务处理中…',
+            },
+            lastRunAt: Date.now(),
+          } as Partial<StudioNodeData>)
+          appendHistory(`${NODE_KIND_LABEL[kind]}节点任务已提交：${taskId || '处理中'}，请稍候查看结果`)
+          window.alert(`任务已提交，正在云端处理中${taskId ? `（${taskId}）` : ''}，请勿重复点击。`)
+          void pollPendingCloudTaskAndBackfill(taskId, id, kind)
           return
         }
         updateNodeData(id, {
@@ -6206,9 +6798,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           lastRunAt: Date.now(),
           runProgress: undefined,
         } as Partial<StudioNodeData>)
-        const message = (error as Error)?.message || '执行失败'
         appendHistory(`${NODE_KIND_LABEL[kind]}节点执行失败：${message}`)
         window.alert(`执行失败：${message}`)
+      } finally {
+        promptPanelSubmittingNodeIdsRef.current.delete(id)
       }
     } catch (error) {
       const message = (error as Error)?.message || '执行失败（执行前准备阶段）'
@@ -6217,9 +6810,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     }
   }, [
     appendHistory,
+    appendCloudTaskRecord,
     applyWorkflowResultToNode,
     ensureLicenseCanSubmit,
     nodes,
+    pollPendingCloudTaskAndBackfill,
     promptPanel,
     runNodeWorkflow,
     selectedNodeId,
@@ -7032,6 +7627,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             : null}
 
           <ReactFlow
+            ref={reactFlowRootRef}
             className="dark"
             nodes={nodes}
             edges={edges}
@@ -7046,10 +7642,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             onDragOver={onCanvasDragOver}
             onDrop={onCanvasDrop}
             onSelectionChange={onSelectionChange}
+            onSelectionStart={onSelectionStart}
+            onMouseDown={onCanvasMouseDown}
             onPaneClick={onPaneClick}
             onPaneContextMenu={onPaneContextMenu}
             onNodeContextMenu={onNodeContextMenu}
-            onNodeDoubleClick={onNodeDoubleClick}
             onSelectionContextMenu={onSelectionContextMenu}
             nodeTypes={nodeTypes}
             defaultViewport={loaded.viewport}
@@ -7060,9 +7657,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             preventScrolling
             proOptions={{ hideAttribution: true }}
             deleteKeyCode={['Backspace', 'Delete']}
+            /** 避免节点 DOM 盒模型异常导致“轻微碰到就全选” */
+            selectionMode={SelectionMode.Full}
             selectionOnDrag={false}
-            selectionKeyCode={['Control', 'Meta']}
-            multiSelectionKeyCode={['Control', 'Meta', 'Shift']}
+            /** Shift 框选；Ctrl/Meta 追加多选（避免与框选键冲突导致“越选越多”） */
+            selectionKeyCode={['Shift']}
+            multiSelectionKeyCode={['Control', 'Meta']}
             panOnDrag
             defaultEdgeOptions={{
               animated: true,
@@ -7151,14 +7751,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         onClick={(event) => {
                           event.stopPropagation()
                           if (!visiblePromptPanel) return
-                          if (!(visiblePromptPanel.kind === 'text' || visiblePromptPanel.kind === 'script')) {
-                            // 非文本节点不允许切换到“模型”模式
-                            updateNodeData(visiblePromptPanel.node.id, {
-                              kind: visiblePromptPanel.kind,
-                              promptPickerMode: 'workflow',
-                            } as any)
-                            return
-                          }
                           const nid = visiblePromptPanel.node.id
                           const current = (visiblePromptPanel.node.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow'
                           const next = current === 'workflow' ? 'model' : 'workflow'
@@ -7187,91 +7779,136 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       </button>
                     </div>
                   </div>
-                  {promptPanelMentionImages.length > 0 ? (
-                    <div className="studio-music-prompt-panel__mentionStrip" aria-label="@ 引用图片">
-                      {promptPanelMentionImages.map((item, idx) => (
-                        (() => {
-                          const chipKey = `${item.mention}-${item.url}-${idx}`
-                          const isBroken = brokenMentionChipKeys.has(chipKey)
-                          return (
-                        <div
-                          key={`${item.url}-${idx}`}
-                          className="studio-music-prompt-panel__mentionChip"
-                          draggable
-                          onDragStart={(event) => {
-                            mentionDragIndexRef.current = idx
-                            event.dataTransfer.effectAllowed = 'move'
-                            event.dataTransfer.setData('text/plain', String(idx))
-                          }}
-                          onDragOver={(event) => {
-                            event.preventDefault()
-                            event.dataTransfer.dropEffect = 'move'
-                            const fromIndex = mentionDragIndexRef.current
-                            if (fromIndex == null || fromIndex === idx) return
-                            movePanelMentionImageByIndex(fromIndex, idx)
-                            mentionDragIndexRef.current = idx
-                          }}
-                          onDrop={(event) => {
-                            event.preventDefault()
-                            const fromIndex = mentionDragIndexRef.current
-                            mentionDragIndexRef.current = null
-                            if (fromIndex == null || fromIndex === idx) return
-                            movePanelMentionImageByIndex(fromIndex, idx)
-                          }}
-                          onDragEnd={() => {
-                            mentionDragIndexRef.current = null
-                          }}
-                          title="可拖拽调整参考图顺序"
-                        >
-                          <img
-                            src={item.url}
-                            alt=""
-                            onError={() =>
-                              setBrokenMentionChipKeys((prev) => {
-                                const next = new Set(prev)
-                                next.add(chipKey)
-                                return next
-                              })
-                            }
-                          />
-                          <span className="studio-music-prompt-panel__mentionBadge">{idx + 1}</span>
-                          {isBroken ? (
-                            <>
-                              <button
-                                type="button"
-                                className="studio-music-prompt-panel__refChipRemove"
-                                title="该引用图片当前不可读，点击尝试修复来源图片"
-                                aria-label="修复失效引用"
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  void repairPanelMentionByToken(item.mention, chipKey).then((ok) => {
-                                    if (!ok) {
-                                      window.alert('引用修复失败：未找到可恢复的来源图片，可改为手动移除该 @ 引用。')
-                                    }
-                                  })
-                                }}
-                              >
-                                ↺
-                              </button>
-                              <button
-                                type="button"
-                                className="studio-music-prompt-panel__refChipRemove"
-                                title="从提示词中移除该 @ 引用"
-                                aria-label="移除失效引用"
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  removePanelMentionByToken(item.mention)
-                                }}
-                                style={{ right: 22 }}
-                              >
-                                ×
-                              </button>
-                            </>
-                          ) : null}
-                        </div>
-                          )
-                        })()
-                      ))}
+                  {/* 统一参考图条：@ 引用图 + 本地拖入图 同行展示 */}
+                  {promptPanelMentionImages.length > 0 ||
+                  ((visiblePromptPanel.kind === 'image'
+                    ? (visiblePromptPanel.node.data as ImageNodeData).referenceImageSources
+                    : visiblePromptPanel.kind === 'video'
+                      ? (visiblePromptPanel.node.data as VideoNodeData).referenceImageSources
+                      : visiblePromptPanel.kind === 'audio'
+                        ? (visiblePromptPanel.node.data as AudioNodeData).referenceImageSources
+                        : []) ?? []).filter(Boolean).length > 0 ? (
+                    <div
+                      className="studio-music-prompt-panel__refStripUnified"
+                      aria-label="参考图（@ 引用 + 本地）"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {promptPanelMentionImages.map((item, idx) => {
+                        const chipKey = `${item.mention}-${item.url}-${idx}`
+                        const isBroken = brokenMentionChipKeys.has(chipKey)
+                        return (
+                          <div
+                            key={`m-${item.url}-${idx}`}
+                            className="studio-music-prompt-panel__mentionChip"
+                            draggable
+                            onDragStart={(event) => {
+                              mentionDragIndexRef.current = idx
+                              event.dataTransfer.effectAllowed = 'move'
+                              event.dataTransfer.setData('text/plain', String(idx))
+                            }}
+                            onDragOver={(event) => {
+                              event.preventDefault()
+                              event.dataTransfer.dropEffect = 'move'
+                              const fromIndex = mentionDragIndexRef.current
+                              if (fromIndex == null || fromIndex === idx) return
+                              movePanelMentionImageByIndex(fromIndex, idx)
+                              mentionDragIndexRef.current = idx
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault()
+                              const fromIndex = mentionDragIndexRef.current
+                              mentionDragIndexRef.current = null
+                              if (fromIndex == null || fromIndex === idx) return
+                              movePanelMentionImageByIndex(fromIndex, idx)
+                            }}
+                            onDragEnd={() => {
+                              mentionDragIndexRef.current = null
+                            }}
+                            title="@ 引用参考图（可拖拽调整顺序）"
+                          >
+                            <img
+                              src={item.url}
+                              alt=""
+                              onError={() =>
+                                setBrokenMentionChipKeys((prev) => {
+                                  const next = new Set(prev)
+                                  next.add(chipKey)
+                                  return next
+                                })
+                              }
+                            />
+                            <span className="studio-music-prompt-panel__mentionBadge">@{idx + 1}</span>
+                            {isBroken ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="studio-music-prompt-panel__refChipRemove"
+                                  title="该引用图片当前不可读，点击尝试修复来源图片"
+                                  aria-label="修复失效引用"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    void repairPanelMentionByToken(item.mention, chipKey).then((ok) => {
+                                      if (!ok) {
+                                        window.alert('引用修复失败：未找到可恢复的来源图片，可改为手动移除该 @ 引用。')
+                                      }
+                                    })
+                                  }}
+                                >
+                                  ↺
+                                </button>
+                                <button
+                                  type="button"
+                                  className="studio-music-prompt-panel__refChipRemove"
+                                  title="从提示词中移除该 @ 引用"
+                                  aria-label="移除失效引用"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    removePanelMentionByToken(item.mention)
+                                  }}
+                                  style={{ right: 22 }}
+                                >
+                                  ×
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                      {((visiblePromptPanel.kind === 'image'
+                        ? (visiblePromptPanel.node.data as ImageNodeData).referenceImageSources
+                        : visiblePromptPanel.kind === 'video'
+                          ? (visiblePromptPanel.node.data as VideoNodeData).referenceImageSources
+                          : visiblePromptPanel.kind === 'audio'
+                            ? (visiblePromptPanel.node.data as AudioNodeData).referenceImageSources
+                            : []) ?? [])
+                        ?.filter(Boolean)
+                        .map((src, idx) => (
+                          <div
+                            key={`r-${src}-${idx}`}
+                            className="studio-music-prompt-panel__refChip"
+                            draggable
+                            onDragStart={(event) => onRefChipDragStart(idx, event)}
+                            onDragOver={(event) => onRefChipDragOverIndex(idx, event)}
+                            onDrop={(event) => onRefChipDropToIndex(idx, event)}
+                            onDragEnd={() => {
+                              refChipDragIndexRef.current = null
+                            }}
+                            title="本地参考图（可拖拽调整顺序）"
+                          >
+                            <img src={src} alt="" />
+                            <button
+                              type="button"
+                              className="studio-music-prompt-panel__refChipRemove"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                removePanelReferenceImage(src, idx)
+                              }}
+                              aria-label="移除参考图"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
                     </div>
                   ) : null}
                   {(visiblePromptPanel.kind === 'image' ||
@@ -7310,73 +7947,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         <span className="studio-music-prompt-panel__dropPadText">本地参考图（可选）</span>
                         <span className="studio-music-prompt-panel__dropPadHint">点击或拖拽 · 多图</span>
                       </div>
-                      <div
-                        className="studio-music-prompt-panel__refStrip"
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        {((visiblePromptPanel.kind === 'image'
-                          ? (visiblePromptPanel.node.data as ImageNodeData).referenceImageSources
-                          : visiblePromptPanel.kind === 'video'
-                            ? (visiblePromptPanel.node.data as VideoNodeData).referenceImageSources
-                            : (visiblePromptPanel.node.data as AudioNodeData).referenceImageSources
-                        ) ?? [])
-                          ?.filter(Boolean)
-                          .map((src, idx, arr) => (
-                            <div
-                              key={`${src}-${idx}`}
-                              className="studio-music-prompt-panel__refChip"
-                              draggable
-                              onDragStart={(event) => onRefChipDragStart(idx, event)}
-                              onDragOver={(event) => onRefChipDragOverIndex(idx, event)}
-                              onDrop={(event) => onRefChipDropToIndex(idx, event)}
-                              onDragEnd={() => {
-                                refChipDragIndexRef.current = null
-                              }}
-                              title="可拖拽调整参考图顺序"
-                            >
-                              <img src={src} alt="" />
-                              <div className="studio-music-prompt-panel__refChipOrder">
-                                <button
-                                  type="button"
-                                  className="studio-music-prompt-panel__refChipMove"
-                                  disabled={idx === 0}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    movePanelReferenceImage(idx, -1)
-                                  }}
-                                  aria-label="参考图左移"
-                                  title="左移（更早上传）"
-                                >
-                                  ←
-                                </button>
-                                <button
-                                  type="button"
-                                  className="studio-music-prompt-panel__refChipMove"
-                                  disabled={idx === arr.length - 1}
-                                  onClick={(event) => {
-                                    event.stopPropagation()
-                                    movePanelReferenceImage(idx, 1)
-                                  }}
-                                  aria-label="参考图右移"
-                                  title="右移（更晚上传）"
-                                >
-                                  →
-                                </button>
-                              </div>
-                              <button
-                                type="button"
-                                className="studio-music-prompt-panel__refChipRemove"
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  removePanelReferenceImage(src, idx)
-                                }}
-                                aria-label="移除参考图"
-                              >
-                                ×
-                              </button>
-                            </div>
-                          ))}
-                      </div>
+                      {/* refStrip 已合并到上方 unified strip */}
                     </div>
                   )}
                   <textarea
@@ -7557,7 +8128,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         onChange={(pickedId) => {
                           const kind = visiblePromptPanel.kind
                           if (pickedId === 'custom-current') return
-                          const preset = loadCloudModelPresets().find((i) => i.id === pickedId)
+                          const preset = loadCloudModelPresets(kind).find((i) => i.id === pickedId)
                           if (!preset) return
                           updateNodeData(visiblePromptPanel.node.id, {
                             kind,

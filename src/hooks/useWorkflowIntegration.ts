@@ -16,7 +16,11 @@ import {
   saveWorkflowConfig,
   type WorkflowConfigSnapshot,
 } from '../lib/workflowConfigStorage'
-import { collectMentionImageSources, listMentionImageAttachments } from '../lib/nodeMentions'
+import {
+  listMentionImageAttachments,
+  parseMentionRefs,
+  resolveMentionRefToNode,
+} from '../lib/nodeMentions'
 import { fetchLicenseStatusRemote, loadAuthSession, saveAuthSession } from '../lib/auth'
 import { loadAuthApiConfig } from '../lib/auth'
 import {
@@ -27,6 +31,8 @@ import {
 import { matchStudioNodeWorkflow } from '../lib/matchStudioNodeWorkflow'
 import { persistWorkflowJsonToDisk } from '../lib/localAssetDiskMirror'
 import { normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
+import { fetchOpenAICompat } from '../lib/openaiProxy'
+import { readLocalImageAssetBlob } from '../lib/localImageAssetStore'
 import {
   buildComfyPromptDigest,
   checkComfyHealth,
@@ -166,23 +172,58 @@ function extractNodeInputs(
     return { ...common, body: node.data.body, refImages: '' }
   }
   if (node.data.kind === 'image' || node.data.kind === 'video') {
-    const refs = node.data.referenceImageSources?.filter(Boolean) ?? []
     const promptText = String(node.data.prompt || '')
-    const fromMentions =
-      allNodes?.length && promptText.includes('@')
-        ? collectMentionImageSources(promptText, allNodes, node.id)
-        : []
-    /** 若提示词里存在 @ 引用，则以 @ 出现顺序优先，避免执行时主/参考顺序与文案不一致。 */
-    const mergedRefs = Array.from(
-      new Set(fromMentions.length > 0 ? [...fromMentions, ...refs] : [...refs, ...fromMentions]),
-    )
-    const primarySrc = (node.data.src || mergedRefs[0] || '').trim()
-    const pureRefs = mergedRefs.filter((url) => String(url || '').trim() && String(url || '').trim() !== primarySrc)
+    const refs = node.data.referenceImageSources?.filter(Boolean) ?? []
+    const refIds = (node.data as any)?.referenceImageAssetIds as string[] | undefined
+
+    const pairs: Array<{ url: string; assetId?: string }> = []
+    // 1) @ 引用：按 nodeId 精确解析，尽量带上被引用节点的 srcAssetId
+    if (allNodes?.length && promptText.includes('@')) {
+      const mentionRefs = parseMentionRefs(promptText)
+      for (const ref of mentionRefs) {
+        const hit = resolveMentionRefToNode(ref, allNodes, node.id)
+        if (!hit) continue
+        const kind = (hit.data as StudioNodeData).kind
+        if (kind !== 'image' && kind !== 'video' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music')
+          continue
+        const u =
+          kind === 'panorama'
+            ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
+            : String((hit.data as any)?.src || '').trim()
+        if (!u) continue
+        const aid = String((hit.data as any)?.srcAssetId || '').trim()
+        pairs.push({ url: u, assetId: aid || undefined })
+      }
+    }
+
+    // 2) 节点自身参考图：按 referenceImageSources 顺序，绑定同索引 assetId
+    refs.forEach((u, i) => {
+      const url = String(u || '').trim()
+      if (!url) return
+      const aid = Array.isArray(refIds) && i < refIds.length ? String(refIds[i] || '').trim() : ''
+      pairs.push({ url, assetId: aid || undefined })
+    })
+
+    // 去重：先按 url 去重（保留第一个有 assetId 的）
+    const mergedPairs: Array<{ url: string; assetId?: string }> = []
+    for (const p of pairs) {
+      const existing = mergedPairs.find((x) => x.url === p.url)
+      if (!existing) mergedPairs.push(p)
+      else if (!existing.assetId && p.assetId) existing.assetId = p.assetId
+    }
+
+    const primarySrc = String(node.data.src || mergedPairs[0]?.url || '').trim()
+    const primaryAssetId =
+      String((node.data as any)?.srcAssetId || '').trim() ||
+      (mergedPairs.find((p) => p.url === primarySrc)?.assetId ?? '')
+    const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
     return {
       ...common,
       prompt: node.data.prompt,
       src: primarySrc,
-      refImages: pureRefs.join('\n'),
+      srcAssetId: primaryAssetId,
+      refImages: purePairs.map((p) => p.url).join('\n'),
+      refImageAssetIds: purePairs.map((p) => String(p.assetId || '').trim()).filter(Boolean),
     }
   }
   if (node.data.kind === 'panorama') {
@@ -190,40 +231,98 @@ function extractNodeInputs(
     return { ...common, prompt: '', src: flat, refImages: '' }
   }
   if (node.data.kind === 'music') {
-    const refs = node.data.referenceImageSources?.filter(Boolean) ?? []
     const noteText = String(node.data.note || '')
-    const fromMentions =
-      allNodes?.length && noteText.includes('@')
-        ? collectMentionImageSources(noteText, allNodes, node.id)
-        : []
-    const mergedRefs = Array.from(
-      new Set(fromMentions.length > 0 ? [...fromMentions, ...refs] : [...refs, ...fromMentions]),
-    )
-    const primarySrc = String(node.data.src || '').trim() || mergedRefs[0] || ''
-    const pureRefs = mergedRefs.filter((url) => String(url || '').trim() && String(url || '').trim() !== primarySrc)
+    const refs = node.data.referenceImageSources?.filter(Boolean) ?? []
+    const refIds = (node.data as any)?.referenceImageAssetIds as string[] | undefined
+    const pairs: Array<{ url: string; assetId?: string }> = []
+    if (allNodes?.length && noteText.includes('@')) {
+      const mentionRefs = parseMentionRefs(noteText)
+      for (const ref of mentionRefs) {
+        const hit = resolveMentionRefToNode(ref, allNodes, node.id)
+        if (!hit) continue
+        const kind = (hit.data as StudioNodeData).kind
+        if (kind !== 'image' && kind !== 'video' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music')
+          continue
+        const u =
+          kind === 'panorama'
+            ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
+            : String((hit.data as any)?.src || '').trim()
+        if (!u) continue
+        const aid = String((hit.data as any)?.srcAssetId || '').trim()
+        pairs.push({ url: u, assetId: aid || undefined })
+      }
+    }
+    refs.forEach((u, i) => {
+      const url = String(u || '').trim()
+      if (!url) return
+      const aid = Array.isArray(refIds) && i < refIds.length ? String(refIds[i] || '').trim() : ''
+      pairs.push({ url, assetId: aid || undefined })
+    })
+    const mergedPairs: Array<{ url: string; assetId?: string }> = []
+    for (const p of pairs) {
+      const existing = mergedPairs.find((x) => x.url === p.url)
+      if (!existing) mergedPairs.push(p)
+      else if (!existing.assetId && p.assetId) existing.assetId = p.assetId
+    }
+    const primarySrc = String(node.data.src || '').trim() || mergedPairs[0]?.url || ''
+    const primaryAssetId =
+      String((node.data as any)?.srcAssetId || '').trim() ||
+      (mergedPairs.find((p) => p.url === primarySrc)?.assetId ?? '')
+    const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
     return {
       ...common,
       note: node.data.note,
       src: primarySrc,
-      refImages: pureRefs.join('\n'),
+      srcAssetId: primaryAssetId,
+      refImages: purePairs.map((p) => p.url).join('\n'),
+      refImageAssetIds: purePairs.map((p) => String(p.assetId || '').trim()).filter(Boolean),
     }
   }
-  const audioRefs = node.data.referenceImageSources?.filter(Boolean) ?? []
   const noteText = String(node.data.note || '')
-  const fromMentions =
-    allNodes?.length && noteText.includes('@')
-      ? collectMentionImageSources(noteText, allNodes, node.id)
-      : []
-  const mergedRefs = Array.from(
-    new Set(fromMentions.length > 0 ? [...fromMentions, ...audioRefs] : [...audioRefs, ...fromMentions]),
-  )
-  const primarySrc = (node.data.src || mergedRefs[0] || '').trim()
-  const pureRefs = mergedRefs.filter((url) => String(url || '').trim() && String(url || '').trim() !== primarySrc)
+  const audioRefs = node.data.referenceImageSources?.filter(Boolean) ?? []
+  const refIds = (node.data as any)?.referenceImageAssetIds as string[] | undefined
+  const pairs: Array<{ url: string; assetId?: string }> = []
+  if (allNodes?.length && noteText.includes('@')) {
+    const mentionRefs = parseMentionRefs(noteText)
+    for (const ref of mentionRefs) {
+      const hit = resolveMentionRefToNode(ref, allNodes, node.id)
+      if (!hit) continue
+      const kind = (hit.data as StudioNodeData).kind
+      if (kind !== 'image' && kind !== 'video' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music')
+        continue
+      const u =
+        kind === 'panorama'
+          ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
+          : String((hit.data as any)?.src || '').trim()
+      if (!u) continue
+      const aid = String((hit.data as any)?.srcAssetId || '').trim()
+      pairs.push({ url: u, assetId: aid || undefined })
+    }
+  }
+  audioRefs.forEach((u, i) => {
+    const url = String(u || '').trim()
+    if (!url) return
+    const aid = Array.isArray(refIds) && i < refIds.length ? String(refIds[i] || '').trim() : ''
+    pairs.push({ url, assetId: aid || undefined })
+  })
+  const mergedPairs: Array<{ url: string; assetId?: string }> = []
+  for (const p of pairs) {
+    const existing = mergedPairs.find((x) => x.url === p.url)
+    if (!existing) mergedPairs.push(p)
+    else if (!existing.assetId && p.assetId) existing.assetId = p.assetId
+  }
+  const primarySrc = String(node.data.src || mergedPairs[0]?.url || '').trim()
+  const primaryAssetId =
+    String((node.data as any)?.srcAssetId || '').trim() ||
+    (mergedPairs.find((p) => p.url === primarySrc)?.assetId ?? '')
+  const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
   return {
     ...common,
     note: node.data.note,
     src: primarySrc,
-    refImages: pureRefs.join('\n'),
+    srcAssetId: primaryAssetId,
+    refImages: purePairs.map((p) => p.url).join('\n'),
+    refImageAssetIds: purePairs.map((p) => String(p.assetId || '').trim()).filter(Boolean),
   }
 }
 
@@ -234,6 +333,120 @@ function devTruncateUrl(url: string, max = 120): string {
   const u = url.trim()
   if (u.length <= max) return u
   return `${u.slice(0, max)}…(共${u.length}字符)`
+}
+
+function devUrlKind(url: string): string {
+  const u = String(url || '').trim().toLowerCase()
+  if (!u) return 'empty'
+  if (u.startsWith('data:')) return 'data'
+  if (u.startsWith('blob:')) return 'blob'
+  if (u.startsWith('file:')) return 'file'
+  if (u.startsWith('https://')) return 'https'
+  if (u.startsWith('http://')) return 'http'
+  return 'other'
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer()
+  const bytes = new Uint8Array(buf)
+  let binary = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  const b64 = btoa(binary)
+  const mime = blob.type || 'application/octet-stream'
+  return `data:${mime};base64,${b64}`
+}
+
+async function ensureOpenAiImageUrlFromAssetId(assetId: string): Promise<string> {
+  const id = String(assetId || '').trim()
+  if (!id) return ''
+  try {
+    const blob = await readLocalImageAssetBlob(id)
+    if (!blob) return ''
+    return await blobToDataUrl(blob)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 将本地 `blob:` / `file:` 等不可外网访问的引用图转为 `data:` URL，
+ * 以便云端 OpenAI 兼容接口能真正“看到”参考图。
+ */
+async function ensureOpenAiImageUrl(raw: string): Promise<string> {
+  const url = String(raw || '').trim()
+  if (!url) return ''
+  if (url.startsWith('data:')) return url
+  // http(s) 直接透传（是否可访问由服务端决定）
+  if (url.startsWith('http://') || url.startsWith('https://')) return url
+  // blob/file 等尝试读为 data url
+  try {
+    const res = await fetch(url)
+    const blob = await res.blob()
+    const buf = await blob.arrayBuffer()
+    const bytes = new Uint8Array(buf)
+    let binary = ''
+    const chunk = 0x8000
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+    }
+    const b64 = btoa(binary)
+    const mime = blob.type || 'application/octet-stream'
+    return `data:${mime};base64,${b64}`
+  } catch {
+    return url
+  }
+}
+
+function pickModelReferenceImages(
+  nodeInputs: { src?: string; srcAssetId?: string; refImages?: string; refImageAssetIds?: string[] },
+  max = 6,
+): Array<{ url?: string; assetId?: string }> {
+  const out: Array<{ url?: string; assetId?: string }> = []
+  const push = (item: { url?: string; assetId?: string }) => {
+    const url = String(item.url || '').trim()
+    const assetId = String(item.assetId || '').trim()
+    if (!url && !assetId) return
+    if (out.some((x) => String(x.assetId || '').trim() === assetId && assetId)) return
+    if (out.some((x) => String(x.url || '').trim() === url && url)) return
+    out.push({ url: url || undefined, assetId: assetId || undefined })
+  }
+
+  const srcAssetId = String((nodeInputs as any)?.srcAssetId || '').trim()
+  const src = String((nodeInputs as any)?.src || '').trim()
+  if (srcAssetId) push({ assetId: srcAssetId, url: src })
+  else if (src) push({ url: src })
+
+  const refUrls = String((nodeInputs as any)?.refImages || '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const refIds = Array.isArray((nodeInputs as any)?.refImageAssetIds)
+    ? ((nodeInputs as any).refImageAssetIds as string[])
+    : Array.isArray((nodeInputs as any)?.refImageAssetIds)
+      ? ((nodeInputs as any).refImageAssetIds as string[])
+      : Array.isArray((nodeInputs as any)?.refImageAssetIds)
+        ? ((nodeInputs as any).refImageAssetIds as string[])
+        : (Array.isArray((nodeInputs as any)?.referenceImageAssetIds)
+            ? ((nodeInputs as any).referenceImageAssetIds as string[])
+            : (Array.isArray((nodeInputs as any)?.refImageAssetIds)
+                ? ((nodeInputs as any).refImageAssetIds as string[])
+                : []))
+  // 按 URL 顺序优先，但若有 assetId 则绑定上，避免 blob URL 失效导致无法上传
+  for (let i = 0; i < refUrls.length && out.length < max; i += 1) {
+    const url = refUrls[i]
+    const aid = i < refIds.length ? String(refIds[i] || '').trim() : ''
+    if (aid) push({ assetId: aid, url })
+    else push({ url })
+  }
+  // 若有更多 assetId（但 URL 缺失），也补进来
+  for (let i = refUrls.length; i < refIds.length && out.length < max; i += 1) {
+    const aid = String(refIds[i] || '').trim()
+    if (aid) push({ assetId: aid })
+  }
+  return out
 }
 
 /**
@@ -1922,10 +2135,6 @@ export function useWorkflowIntegration() {
         // 对“只用模型、不懂 ComfyUI”的用户：当节点配置了云端模型且本地/云端执行未启用时，默认走模型。
         ((!snapshot.local.enabled && !snapshot.cloud.enabled && hasCloudModelConfigured) ? 'model' : 'workflow')
       if (executionTarget === 'model') {
-        if (!(nodeKind === 'text' || nodeKind === 'script')) {
-          // 目前仅文本/脚本节点支持“模型模式”执行；其它节点必须走 ComfyUI 工作流。
-          throw new Error('当前节点类型不支持“模型”执行，请切换到 COMFYUI 模式后再执行')
-        }
         const model = String((node.data as any)?.cloudModelName || nodeConfig.cloudModelName || '').trim()
         const baseUrl = normalizeOpenAICompatibleBaseUrl(
           String((node.data as any)?.cloudModelUrl || nodeConfig.cloudModelUrl || ''),
@@ -1948,33 +2157,515 @@ export function useWorkflowIntegration() {
         if (!inputText) {
           throw new Error('输入内容为空，无法调用模型。请先在节点提示框填写内容再执行。')
         }
+        const shouldRetryRateLimit = (status: number, payload: any): boolean => {
+          if (status === 429) return true
+          const msg = String(payload?.error?.message || payload?.message || '').toLowerCase()
+          return msg.includes('rate limit') || msg.includes('rate-limit') || msg.includes('too many requests')
+        }
+        const requestWithBackoff = async (
+          endpoint: string,
+          req: { method: 'GET' | 'POST'; headers?: Record<string, string>; json?: unknown },
+          options?: { maxAttempts?: number },
+        ): Promise<{ ok: boolean; status: number; json: any; response: Response }> => {
+          const maxAttempts = Math.max(1, options?.maxAttempts ?? 3)
+          let last: { ok: boolean; status: number; json: any; response: Response } | null = null
+          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const response = await fetchOpenAICompat(endpoint, req)
+            const json = (await response.json().catch(() => ({}))) as any
+            last = { ok: response.ok, status: response.status, json, response }
+            if (response.ok) return last
+            if (!shouldRetryRateLimit(response.status, json) || attempt >= maxAttempts) return last
+            const waitMs = attempt === 1 ? 1200 : attempt === 2 ? 2600 : 4200
+            options?.maxAttempts
+            await new Promise((resolve) => setTimeout(resolve, waitMs))
+          }
+          return last as { ok: boolean; status: number; json: any; response: Response }
+        }
+        if (nodeKind === 'image') {
+          options?.onProgress?.({ percent: 8, label: '正在调用云端生图模型…' })
+          const normalizePromptForCloudImage = (raw: string): string => {
+            const s = String(raw || '')
+            // 保留 @ 引用中的文本语义，仅移除链接壳（例如：@[女模特](node-id) -> 女模特）。
+            const withoutMentions = s.replace(/@\[(.*?)\]\([^)]+\)/g, '$1')
+            // 过滤本地/临时 URL，避免百炼返回 url error。
+            const withoutLocalUrls = withoutMentions
+              .replace(/\bblob:[^\s)]+/gi, ' ')
+              .replace(/\bfile:[^\s)]+/gi, ' ')
+              .replace(/\bdata:[^\s)]+/gi, ' ')
+            // @ 解析后可能含 http(s) 链接；对 qwen-image 文生图接口同样会触发 url error，统一剥离。
+            const withoutHttpUrls = withoutLocalUrls.replace(/\bhttps?:\/\/[^\s)]+/gi, ' ')
+            // 兼容 MJ 风格尾参数（--ar/--v/--style...）：百炼接口通常不识别，可能报 url error。
+            const withoutMjArgs = withoutHttpUrls
+              .replace(/--ar\s+\S+/gi, ' ')
+              .replace(/--v\s+\S+/gi, ' ')
+              .replace(/--style\s+\S+/gi, ' ')
+              .replace(/--q\s+\S+/gi, ' ')
+              .replace(/--chaos\s+\S+/gi, ' ')
+              .replace(/--seed\s+\S+/gi, ' ')
+            return withoutMjArgs.replace(/\s{2,}/g, ' ').trim()
+          }
+          const promptForImage = normalizePromptForCloudImage(inputText) || inputText
+          const isDashscopeQwenImage =
+            /dashscope\.aliyuncs\.com|dashscope-intl\.aliyuncs\.com/i.test(baseUrl) &&
+            /^qwen-image/i.test(model)
+          const readImageUrl = (payload: any): string => {
+            const candidates = [
+              payload?.data?.[0]?.url,
+              payload?.output?.results?.[0]?.url,
+              payload?.output?.images?.[0]?.url,
+              payload?.output?.result_url,
+              payload?.output?.image_url,
+              payload?.output?.imageUrl,
+              payload?.output?.image_url,
+              payload?.output?.url,
+              payload?.task_result?.images?.[0]?.url,
+              payload?.task_result?.results?.[0]?.url,
+              payload?.task_result?.output?.images?.[0]?.url,
+              payload?.task_result?.output?.results?.[0]?.url,
+              payload?.task_result?.url,
+              payload?.result?.url,
+              payload?.url,
+            ]
+            for (const item of candidates) {
+              const v = String(item || '').trim()
+              if (v) return v
+            }
+            return ''
+          }
+          const readTaskId = (payload: any): string => {
+            const candidates = [
+              payload?.task_id,
+              payload?.taskId,
+              payload?.id,
+              payload?.request_id,
+              payload?.requestId,
+              payload?.output?.task_id,
+              payload?.output?.taskId,
+              payload?.output?.id,
+            ]
+            for (const item of candidates) {
+              const v = String(item || '').trim()
+              if (v) return v
+            }
+            return ''
+          }
+          let imageUrl = ''
+          let json: any = null
+          let createErr = ''
+          if (isDashscopeQwenImage) {
+            const isIntl = /dashscope-intl\.aliyuncs\.com/i.test(baseUrl)
+            const host = isIntl ? 'https://dashscope-intl.aliyuncs.com' : 'https://dashscope.aliyuncs.com'
+            const endpoint = `${host}/api/v1/services/aigc/multimodal-generation/generation`
+            const nodeInputs = extractNodeInputs(node, options?.allNodes)
+            const refCandidates = pickModelReferenceImages(nodeInputs as any, 4)
+            const dashscopeRefImages = (
+              await Promise.all(
+                refCandidates.map(async (c) => {
+                  const fromAsset = c.assetId ? await ensureOpenAiImageUrlFromAssetId(c.assetId) : ''
+                  if (fromAsset) return fromAsset
+                  return c.url ? await ensureOpenAiImageUrl(c.url) : ''
+                }),
+              )
+            ).filter(Boolean)
+            if (import.meta.env.DEV) {
+              // eslint-disable-next-line no-console
+              console.log('[Flowid cloud-image] dashscope refs', {
+                nodeId: node.id,
+                model,
+                endpoint,
+                refCount: dashscopeRefImages.length,
+                refs: dashscopeRefImages.map((u) => ({ kind: devUrlKind(u), url: devTruncateUrl(u, 140) })),
+              })
+            }
+            try {
+              const call = await requestWithBackoff(
+                endpoint,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${apiKey}`,
+                  },
+                  json: {
+                    model,
+                    input: {
+                      messages: [
+                        {
+                          role: 'user',
+                          // DashScope multimodal-generation: content item keys are `text` / `image`
+                          content:
+                            dashscopeRefImages.length > 0
+                              ? [{ text: promptForImage }, ...dashscopeRefImages.map((image) => ({ image }))]
+                              : [{ text: promptForImage }],
+                        },
+                      ],
+                    },
+                    parameters: {
+                      size: '1024*1024',
+                      image_count: 1,
+                    },
+                  },
+                },
+                { maxAttempts: 3 },
+              )
+              const res = call.response
+              const candidateJson = call.json
+              if (!res.ok) {
+                const msg = String(candidateJson?.error?.message || candidateJson?.message || `HTTP ${res.status}`)
+                throw new Error(`${endpoint} -> ${msg}`)
+              }
+              json = candidateJson
+              imageUrl = readImageUrl(candidateJson)
+              if (!imageUrl) {
+                const taskId = readTaskId(candidateJson)
+                if (!taskId) throw new Error(`${endpoint} -> 调用成功但未返回图片 URL / taskId`)
+                const pollCandidates = [
+                  `${host}/api/v1/tasks/${encodeURIComponent(taskId)}`,
+                ]
+                const deadline = Date.now() + 300_000
+                while (Date.now() < deadline && !imageUrl) {
+                  options?.onProgress?.({ percent: 48, label: '云端生图生成中…' })
+                  for (const pollUrl of pollCandidates) {
+                    const statusRes = await fetchOpenAICompat(pollUrl, {
+                      method: 'GET',
+                      headers: { Authorization: `Bearer ${apiKey}` },
+                    })
+                    if (!statusRes.ok) continue
+                    const statusJson = (await statusRes.json().catch(() => ({}))) as any
+                    imageUrl = readImageUrl(statusJson)
+                    if (imageUrl) {
+                      json = statusJson
+                      break
+                    }
+                    const taskStatus = String(
+                      statusJson?.output?.task_status || statusJson?.output?.status || statusJson?.status || '',
+                    )
+                      .trim()
+                      .toUpperCase()
+                    if (taskStatus === 'FAILED' || taskStatus === 'CANCELED') {
+                      const msg = String(
+                        statusJson?.output?.results?.[0]?.code ||
+                          statusJson?.output?.results?.[0]?.message ||
+                          statusJson?.message ||
+                          '任务失败',
+                      )
+                      throw new Error(`${pollUrl} -> ${msg}`)
+                    }
+                  }
+                  if (!imageUrl) await new Promise((resolve) => setTimeout(resolve, 2000))
+                }
+                if (!imageUrl) {
+                  createErr = `${endpoint} -> 任务仍在处理中（taskId=${taskId}），请稍后重试`
+                }
+              }
+            } catch (error) {
+              createErr = String((error as Error)?.message || error)
+            }
+            if (!imageUrl) {
+              throw new Error(`云端生图调用失败：${createErr || '未匹配到可用接口'}`)
+            }
+          } else {
+            const endpoint = `${baseUrl}/v1/images/generations`
+            // 若存在参考图，优先走 Responses 多模态（input_image + image_generation tool）
+            const nodeInputs = extractNodeInputs(node, options?.allNodes)
+            const refCandidates = pickModelReferenceImages(nodeInputs as any, 4)
+            const refImages = (
+              await Promise.all(
+                refCandidates.map(async (c) => {
+                  const fromAsset = c.assetId ? await ensureOpenAiImageUrlFromAssetId(c.assetId) : ''
+                  if (fromAsset) return fromAsset
+                  return c.url ? await ensureOpenAiImageUrl(c.url) : ''
+                }),
+              )
+            ).filter(Boolean)
+
+            const supportsResponsesVision =
+              /^gpt-image-2/i.test(model) || /openai\.com|api\.openai\.com/i.test(baseUrl)
+
+            if (refImages.length > 0 && supportsResponsesVision) {
+              const responsesEndpoint = `${baseUrl}/v1/responses`
+              if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.log('[Flowid cloud-image] responses (multimodal)', {
+                  nodeId: node.id,
+                  model,
+                  endpoint: responsesEndpoint,
+                  refCount: refImages.length,
+                  refs: refImages.map((u) => ({ kind: devUrlKind(u), url: devTruncateUrl(u, 140) })),
+                })
+              }
+              const resp = await fetchOpenAICompat(responsesEndpoint, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${apiKey}`,
+                },
+                json: {
+                  model,
+                  input: [
+                    {
+                      role: 'user',
+                      content: [
+                        { type: 'input_text', text: promptForImage },
+                        ...refImages.map((image_url) => ({ type: 'input_image', image_url, detail: 'low' })),
+                      ],
+                    },
+                  ],
+                  tools: [{ type: 'image_generation' }],
+                },
+              })
+              const respJson = (await resp.json().catch(() => ({}))) as any
+              if (!resp.ok) {
+                const msg = String(respJson?.error?.message || respJson?.message || `HTTP ${resp.status}`)
+                throw new Error(`云端生图调用失败：${responsesEndpoint} -> ${msg}`)
+              }
+              const imageBase64 = String(
+                (Array.isArray(respJson?.output)
+                  ? respJson.output.find((o: any) => o?.type === 'image_generation_call')?.result
+                  : '') || '',
+              ).trim()
+              if (!imageBase64) {
+                throw new Error('云端生图调用成功但未返回 image_generation_call.result（base64）')
+              }
+              json = respJson
+              imageUrl = `data:image/png;base64,${imageBase64}`
+            } else {
+              if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.log('[Flowid cloud-image] images/generations (text-only)', {
+                  nodeId: node.id,
+                  model,
+                  endpoint,
+                  refCount: refImages.length,
+                  note:
+                    refImages.length > 0
+                      ? '当前端点通常不支持参考图（仅 prompt 文生图）。如需参考图请使用支持 /v1/responses 或 images/edits 的服务。'
+                      : '无参考图，走文生图端点。',
+                })
+              }
+              const call = await requestWithBackoff(
+                endpoint,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${apiKey}`,
+                  },
+                  json: {
+                    model,
+                    prompt: promptForImage,
+                    n: 1,
+                    size: '1024x1024',
+                    response_format: 'url',
+                  },
+                },
+                { maxAttempts: 3 },
+              )
+              const res = call.response
+              json = call.json
+              if (!res.ok) {
+                const msg = String(json?.error?.message || json?.message || `HTTP ${res.status}`)
+                throw new Error(`云端生图调用失败：${endpoint} -> ${msg}`)
+              }
+              imageUrl = readImageUrl(json)
+              if (!imageUrl) {
+                throw new Error('云端生图调用成功但未返回图片 URL')
+              }
+            }
+          }
+          options?.onProgress?.({ percent: 96, label: '模型已返回，正在回填…' })
+          return {
+            previewUrl: imageUrl,
+            audioUrl: null,
+            resultUrl: imageUrl,
+            historyEntry: json,
+          }
+        }
+        if (nodeKind === 'video') {
+          options?.onProgress?.({ percent: 8, label: '正在调用云端视频模型…' })
+          const generationCandidates = [
+            `${baseUrl}/v1/videos/generations`,
+            `${baseUrl}/v1/video/generations`,
+          ]
+          const readVideoUrl = (payload: any): string => {
+            const candidates = [
+              payload?.data?.[0]?.url,
+              payload?.data?.[0]?.video_url,
+              payload?.output?.video_url,
+              payload?.output?.url,
+              payload?.result?.url,
+              payload?.video_url,
+              payload?.url,
+            ]
+            for (const item of candidates) {
+              const v = String(item || '').trim()
+              if (v) return v
+            }
+            return ''
+          }
+          const readTaskId = (payload: any): string => {
+            const candidates = [
+              payload?.id,
+              payload?.task_id,
+              payload?.taskId,
+              payload?.data?.id,
+              payload?.output?.task_id,
+            ]
+            for (const item of candidates) {
+              const v = String(item || '').trim()
+              if (v) return v
+            }
+            return ''
+          }
+          let createJson: any = null
+          let createRes: Response | null = null
+          let createErr = ''
+          for (const endpoint of generationCandidates) {
+            try {
+                const call = await requestWithBackoff(
+                  endpoint,
+                  {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      Authorization: `Bearer ${apiKey}`,
+                    },
+                    json: {
+                      model,
+                      prompt: inputText,
+                    },
+                  },
+                  { maxAttempts: 3 },
+                )
+                const res = call.response
+                const json = call.json
+                if (!res.ok) {
+                  const msg = String(json?.error?.message || json?.message || `HTTP ${res.status}`)
+                  createErr = `${endpoint} -> ${msg}`
+                  continue
+                }
+                createRes = res
+                createJson = json
+              break
+              } catch (error) {
+                createErr = `${endpoint} -> ${String((error as Error)?.message || error)}`
+              }
+          }
+          if (!createRes || !createJson) {
+            throw new Error(`云端视频调用失败：${createErr || '未匹配到可用接口'}`)
+          }
+          let videoUrl = readVideoUrl(createJson)
+          if (!videoUrl) {
+            const taskId = readTaskId(createJson)
+            if (!taskId) {
+              throw new Error('云端视频调用成功但未返回视频 URL / taskId')
+            }
+            const pollCandidates = [
+              `${baseUrl}/v1/videos/generations/${encodeURIComponent(taskId)}`,
+              `${baseUrl}/v1/video/generations/${encodeURIComponent(taskId)}`,
+            ]
+            const deadline = Date.now() + 180_000
+            while (Date.now() < deadline && !videoUrl) {
+              options?.onProgress?.({ percent: 48, label: '云端视频生成中…' })
+              for (const pollUrl of pollCandidates) {
+                try {
+                  const statusRes = await fetchOpenAICompat(pollUrl, {
+                    method: 'GET',
+                    headers: {
+                      Authorization: `Bearer ${apiKey}`,
+                    },
+                  })
+                  const statusJson = (await statusRes.json().catch(() => ({}))) as any
+                  if (!statusRes.ok) continue
+                  videoUrl = readVideoUrl(statusJson)
+                  if (videoUrl) {
+                    createJson = statusJson
+                    break
+                  }
+                  const statusText = String(
+                    statusJson?.status || statusJson?.state || statusJson?.output?.status || '',
+                  )
+                    .trim()
+                    .toLowerCase()
+                  if (statusText === 'failed' || statusText === 'error') {
+                    const msg = String(statusJson?.error?.message || statusJson?.message || '生成失败')
+                    throw new Error(msg)
+                  }
+                } catch (error) {
+                  createErr = String((error as Error)?.message || error)
+                }
+              }
+              if (videoUrl) break
+              await new Promise((resolve) => setTimeout(resolve, 2000))
+            }
+          }
+          if (!videoUrl) {
+            throw new Error(`云端视频任务超时或无结果 URL${createErr ? `：${createErr}` : ''}`)
+          }
+          options?.onProgress?.({ percent: 96, label: '模型已返回，正在回填…' })
+          return {
+            previewUrl: videoUrl,
+            audioUrl: null,
+            resultUrl: videoUrl,
+            historyEntry: createJson,
+          }
+        }
         const systemPrompt =
-          nodeKind === 'image' || nodeKind === 'video'
-            ? '你是提示词工程助手。请把用户输入改写成适合图像/视频生成的高质量提示词，输出纯文本，不要解释。'
-            : nodeKind === 'audio' || nodeKind === 'music'
-              ? '你是配音/音乐生成提示词助手。请把用户描述改写成更清晰可执行的提示词，输出纯文本，不要解释。'
+          nodeKind === 'audio' || nodeKind === 'music'
+            ? '你是配音/音乐生成提示词助手。请把用户描述改写成更清晰可执行的提示词，输出纯文本，不要解释。'
+            : nodeKind === 'script'
+              ? '你是分镜/脚本生成助手。请根据用户输入输出结构清晰、可直接用于短片/漫剧的脚本正文，输出纯文本，不要解释。'
               : '你是 Flowid 文本节点助手。请直接输出最终文本，不要输出额外解释。'
-        options?.onProgress?.({ percent: 8, label: '正在调用文本模型…' })
+        options?.onProgress?.({ percent: 8, label: '正在调用云端模型…' })
+        const nodeInputs = extractNodeInputs(node, options?.allNodes)
+        const refCandidates = pickModelReferenceImages(nodeInputs as any, 6)
+        const refImages = (
+          await Promise.all(
+            refCandidates.map(async (c) => {
+              const fromAsset = c.assetId ? await ensureOpenAiImageUrlFromAssetId(c.assetId) : ''
+              if (fromAsset) return fromAsset
+              return c.url ? await ensureOpenAiImageUrl(c.url) : ''
+            }),
+          )
+        ).filter(Boolean)
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.log('[Flowid cloud-model] chat/completions refs', {
+            nodeId: node.id,
+            kind: nodeKind,
+            model,
+            endpoint: `${baseUrl}/v1/chat/completions`,
+            refCount: refImages.length,
+            refs: refImages.map((u) => ({ kind: devUrlKind(u), url: devTruncateUrl(u, 140) })),
+          })
+        }
         const endpoint = `${baseUrl}/v1/chat/completions`
-        const res = await fetch(endpoint, {
+        const userContent =
+          refImages.length > 0
+            ? ([
+                { type: 'text', text: inputText },
+                ...refImages.map((url) => ({ type: 'image_url', image_url: { url, detail: 'low' } })),
+              ] as any)
+            : inputText
+        const res = await fetchOpenAICompat(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${apiKey}`,
           },
-          body: JSON.stringify({
+          json: {
             model,
             temperature: 0.7,
             messages: [
               { role: 'system', content: systemPrompt },
-              { role: 'user', content: inputText },
+              { role: 'user', content: userContent },
             ],
-          }),
+          },
         })
         const json = (await res.json().catch(() => ({}))) as any
         if (!res.ok) {
           const msg = String(json?.error?.message || json?.message || `HTTP ${res.status}`)
-          throw new Error(`文本模型调用失败：${msg}`)
+          throw new Error(`云端模型调用失败：${msg}`)
         }
         const content = String(json?.choices?.[0]?.message?.content || '').trim()
         options?.onProgress?.({ percent: 96, label: '模型已返回，正在回填…' })

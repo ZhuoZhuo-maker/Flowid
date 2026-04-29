@@ -4394,11 +4394,23 @@ body,
 }
 
 .studio-music-prompt-panel__mentionStrip {
+  display: none;
+}
+
+/* 统一参考图条：同行横向滚动（@ 引用 + 本地） */
+.studio-music-prompt-panel__refStripUnified {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
   padding: 8px 10px 0;
   align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+}
+
+.studio-music-prompt-panel__refStripUnified::-webkit-scrollbar {
+  height: var(--studio-scrollbar-width);
 }
 
 .studio-music-prompt-panel__mentionChip {

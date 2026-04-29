@@ -17,7 +17,8 @@
     "desktop:build": "npm run build && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis",
     "desktop:dir": "npm run build && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win dir",
     "analyzer:dev": "electron electron/analyzer-main.cjs",
-    "analyzer:build": "cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --config electron-builder.analyzer.json"
+    "analyzer:build": "cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --config electron-builder.analyzer.json",
+    "export:youmind-prompts": "node scripts/export-youmind-gpt-image-prompts.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.2",

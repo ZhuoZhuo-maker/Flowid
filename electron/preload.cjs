@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron')
  * 暴露桌面端能力给前端。
  */
 contextBridge.exposeInMainWorld('flowidDesktop', {
+  /** OpenAI 兼容 HTTP（主进程 fetch，供桌面端直连厂商 API） */
+  openAiCompatFetch: (payload) => ipcRenderer.invoke('flowid:openai-compat-fetch', payload),
   getAppVersion: () => ipcRenderer.invoke('desktop:get-app-version'),
   checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
   readUtf8File: (filePath) => ipcRenderer.invoke('flowid:fs-read-utf8', filePath),

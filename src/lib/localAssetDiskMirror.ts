@@ -6,6 +6,7 @@ import {
 } from './browserFolderHandleStore'
 import { readLocalImageAssetBlob } from './localImageAssetStore'
 import { loadLocalDiskPathsSettings } from './localDiskPathsSettings'
+import { readKvFromIndexedDb, writeKvToIndexedDb } from './historyIndexedDb'
 
 /** 画布「自动延迟镜像」两次实际落盘之间的最短间隔（毫秒），避免拖拽等高频变更刷盘。 */
 const MIRROR_INPUT_AUTO_MIN_INTERVAL_MS = 12_000
@@ -29,44 +30,56 @@ const INPUT_MIRROR_CACHE_STORAGE_KEY = 'flowid.diskMirror.inputCache.v1'
  */
 const inputMirrorWriteCache = new Map<string, number>()
 
-function loadMirrorCacheFromStorage(storageKey: string, max: number): Map<string, number> {
+async function restoreMirrorCacheFromIndexedDb(
+  storageKey: string,
+  max: number,
+  target: Map<string, number>,
+): Promise<void> {
   try {
-    if (typeof window === 'undefined') return new Map()
-    const raw = window.localStorage.getItem(storageKey)
-    if (!raw) return new Map()
-    const parsed = JSON.parse(raw) as Array<[string, number]>
-    if (!Array.isArray(parsed)) return new Map()
-    const out = new Map<string, number>()
-    const start = Math.max(0, parsed.length - max)
-    for (let i = start; i < parsed.length; i += 1) {
-      const row = parsed[i]
+    const rows = await readKvFromIndexedDb<Array<[string, number]>>(storageKey)
+    if (!Array.isArray(rows) || rows.length < 1) return
+    const start = Math.max(0, rows.length - max)
+    for (let i = start; i < rows.length; i += 1) {
+      const row = rows[i]
       if (!Array.isArray(row) || row.length < 1) continue
       const key = String(row[0] || '').trim()
       if (!key) continue
       const ts = Number(row[1])
-      out.set(key, Number.isFinite(ts) ? ts : Date.now())
+      target.set(key, Number.isFinite(ts) ? ts : Date.now())
     }
-    return out
   } catch {
-    return new Map()
+    // ignore
   }
 }
 
-function saveMirrorCacheToStorage(storageKey: string, cache: Map<string, number>, max: number): void {
-  try {
-    if (typeof window === 'undefined') return
+const mirrorCachePersistTimerByKey = new Map<string, number>()
+function queuePersistMirrorCacheToIndexedDb(storageKey: string, cache: Map<string, number>, max: number): void {
+  if (typeof window === 'undefined') return
+  const prev = mirrorCachePersistTimerByKey.get(storageKey)
+  if (prev) {
+    window.clearTimeout(prev)
+  }
+  const tid = window.setTimeout(() => {
+    mirrorCachePersistTimerByKey.delete(storageKey)
     const rows = Array.from(cache.entries())
     const keep = rows.slice(Math.max(0, rows.length - max))
-    window.localStorage.setItem(storageKey, JSON.stringify(keep))
-  } catch {
-    /* 忽略存储异常（如隐私模式或容量不足） */
-  }
+    void writeKvToIndexedDb(storageKey, keep).catch(() => {
+      // ignore
+    })
+  }, 120)
+  mirrorCachePersistTimerByKey.set(storageKey, tid)
 }
 
-;(() => {
-  const restored = loadMirrorCacheFromStorage(INPUT_MIRROR_CACHE_STORAGE_KEY, INPUT_MIRROR_CACHE_MAX)
-  restored.forEach((v, k) => inputMirrorWriteCache.set(k, v))
-})()
+void restoreMirrorCacheFromIndexedDb(
+  INPUT_MIRROR_CACHE_STORAGE_KEY,
+  INPUT_MIRROR_CACHE_MAX,
+  inputMirrorWriteCache,
+)
+try {
+  window.localStorage.removeItem(INPUT_MIRROR_CACHE_STORAGE_KEY)
+} catch {
+  // ignore cleanup failures
+}
 
 /**
  * 标记本次镜像已写入成功，并维护一个轻量 FIFO 上限。
@@ -82,7 +95,11 @@ function markInputMirrorCached(cacheKey: string): void {
       if (dropped >= overflow) break
     }
   }
-  saveMirrorCacheToStorage(INPUT_MIRROR_CACHE_STORAGE_KEY, inputMirrorWriteCache, INPUT_MIRROR_CACHE_MAX)
+  queuePersistMirrorCacheToIndexedDb(
+    INPUT_MIRROR_CACHE_STORAGE_KEY,
+    inputMirrorWriteCache,
+    INPUT_MIRROR_CACHE_MAX,
+  )
 }
 
 /** output 镜像去重缓存最大条目数，避免同一生成 URL 被重复落盘。 */
@@ -94,10 +111,16 @@ const OUTPUT_MIRROR_CACHE_STORAGE_KEY = 'flowid.diskMirror.outputCache.v1'
  */
 const outputMirrorWriteCache = new Map<string, number>()
 
-;(() => {
-  const restored = loadMirrorCacheFromStorage(OUTPUT_MIRROR_CACHE_STORAGE_KEY, OUTPUT_MIRROR_CACHE_MAX)
-  restored.forEach((v, k) => outputMirrorWriteCache.set(k, v))
-})()
+void restoreMirrorCacheFromIndexedDb(
+  OUTPUT_MIRROR_CACHE_STORAGE_KEY,
+  OUTPUT_MIRROR_CACHE_MAX,
+  outputMirrorWriteCache,
+)
+try {
+  window.localStorage.removeItem(OUTPUT_MIRROR_CACHE_STORAGE_KEY)
+} catch {
+  // ignore cleanup failures
+}
 
 /**
  * 标记本次 output 镜像已写入成功，并维护一个轻量 FIFO 上限。
@@ -113,7 +136,11 @@ function markOutputMirrorCached(cacheKey: string): void {
       if (dropped >= overflow) break
     }
   }
-  saveMirrorCacheToStorage(OUTPUT_MIRROR_CACHE_STORAGE_KEY, outputMirrorWriteCache, OUTPUT_MIRROR_CACHE_MAX)
+  queuePersistMirrorCacheToIndexedDb(
+    OUTPUT_MIRROR_CACHE_STORAGE_KEY,
+    outputMirrorWriteCache,
+    OUTPUT_MIRROR_CACHE_MAX,
+  )
 }
 
 /**
@@ -300,6 +327,88 @@ export async function mirrorUploadToInputDir(file: File, assetId?: string): Prom
 
 export type MirrorComfyOutputKind = 'image' | 'video' | 'music' | 'audio'
 
+function headerGet(headers: Record<string, string> | undefined, name: string): string {
+  if (!headers) return ''
+  const lower = name.toLowerCase()
+  for (const [k, v] of Object.entries(headers)) {
+    if (k.toLowerCase() === lower) return String(v || '')
+  }
+  return ''
+}
+
+/**
+ * 拉取生成物字节：先走渲染进程 fetch（同源/已放行 CORS）；失败时在桌面端用主进程 fetch（绕过 CORS），与 OpenAI 直连 IPC 共用实现。
+ */
+async function fetchMediaBytesForMirror(
+  mediaUrl: string,
+  requestHeaders?: Record<string, string>,
+): Promise<{ buffer: ArrayBuffer; contentType: string } | null> {
+  const raw = String(mediaUrl || '').trim()
+  if (!raw) return null
+  let url = raw
+  try {
+    // 兼容相对路径（如 `/view?...`、`/gradio_api/file=...`），统一补全为绝对 URL 后再抓取。
+    url = new URL(raw, window.location.href).toString()
+  } catch {
+    return null
+  }
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return null
+  const extraHeaders = requestHeaders && typeof requestHeaders === 'object' ? requestHeaders : {}
+  try {
+    const res = await fetch(url, { mode: 'cors', credentials: 'include', headers: extraHeaders })
+    if (res.ok) {
+      const buffer = await res.arrayBuffer()
+      return { buffer, contentType: res.headers.get('content-type') || '' }
+    }
+  } catch {
+    // 常见：跨域图片 URL 在浏览器里 fetch 被 CORS 拦截，改走主进程。
+  }
+  try {
+    // 二次兜底：部分地址不接受携带凭据，退回 omit 再尝试一次。
+    const res = await fetch(url, { mode: 'cors', credentials: 'omit', headers: extraHeaders })
+    if (res.ok) {
+      const buffer = await res.arrayBuffer()
+      return { buffer, contentType: res.headers.get('content-type') || '' }
+    }
+  } catch {
+    // ignore
+  }
+  const desk = window.flowidDesktop
+  if (!desk?.openAiCompatFetch) return null
+  try {
+    const r = await desk.openAiCompatFetch({
+      url,
+      method: 'GET',
+      headers: {
+        Accept: '*/*',
+        Referer: window.location.href,
+        Origin: window.location.origin,
+        ...extraHeaders,
+      },
+    })
+    if (!r.ok || !r.body) return null
+    const ct = headerGet(r.headers, 'content-type')
+    return { buffer: r.body, contentType: ct }
+  } catch {
+    return null
+  }
+}
+
+function parseDataUrl(dataUrl: string): { mime: string; base64: string } | null {
+  const s = String(dataUrl || '').trim()
+  const m = /^data:([^;,]+);base64,(.+)$/i.exec(s)
+  if (!m) return null
+  return { mime: m[1] || 'application/octet-stream', base64: m[2] || '' }
+}
+
+function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bin = atob(String(b64 || '').trim())
+  const len = bin.length
+  const bytes = new Uint8Array(len)
+  for (let i = 0; i < len; i += 1) bytes[i] = bin.charCodeAt(i)
+  return bytes.buffer
+}
+
 /**
  * 将 Comfy 返回的可拉取 URL 对应媒体落盘到「输出」目录（桌面绝对路径或浏览器已绑定 output 句柄）。
  * 跨域拉取失败时静默跳过，不影响画布展示。
@@ -312,26 +421,47 @@ export async function mirrorComfyOutputToDisk(args: {
   url: string
   mediaKind: MirrorComfyOutputKind
   title?: string
-}): Promise<void> {
+  requestHeaders?: Record<string, string>
+}): Promise<{ saved: boolean; reason?: string; fileName?: string; filePath?: string }> {
   const electronOut = hasDesktopBinaryWrite() ? loadLocalDiskPathsSettings().outputPath.trim() : ''
   const browserOut = await loadBrowserFolderHandle('outputPath')
-  if (!electronOut && !browserOut) return
+  if (!electronOut && !browserOut) return { saved: false, reason: 'output-path-not-configured' }
   const targetScope = electronOut
     ? `electron:${electronOut}`
     : `browser:${browserOut?.name || 'bound-output'}`
-  const url = String(args.url || '').trim()
-  if (!url || url.startsWith('blob:') || url.startsWith('data:')) return
+  const rawUrl = String(args.url || '').trim()
+  if (!rawUrl) return { saved: false, reason: 'empty-url' }
+  if (rawUrl.startsWith('blob:')) return { saved: false, reason: 'unsupported-url' }
+  let url = rawUrl
+  try {
+    // data: URL 不参与 URL 归一化
+    if (!rawUrl.startsWith('data:')) {
+      url = new URL(rawUrl, window.location.href).toString()
+    }
+  } catch {
+    return { saved: false, reason: 'bad-url' }
+  }
   const mediaKind: 'image' | 'video' | 'audio' =
     args.mediaKind === 'video' ? 'video' : args.mediaKind === 'image' ? 'image' : 'audio'
   const outputCacheKey = `${targetScope}|${mediaKind}|${url}`
-  if (outputMirrorWriteCache.has(outputCacheKey)) return
+  if (outputMirrorWriteCache.has(outputCacheKey)) return { saved: true, reason: 'cache-hit' }
   try {
-    const res = await fetch(url, { mode: 'cors', credentials: 'omit' })
-    if (!res.ok) {
-      console.warn('[Flowid] 拉取生成物失败，跳过输出目录镜像', res.status, url)
-      return
+    let buf: ArrayBuffer
+    let ct = ''
+    if (url.startsWith('data:')) {
+      const parsed = parseDataUrl(url)
+      if (!parsed?.base64) return { saved: false, reason: 'bad-data-url' }
+      ct = parsed.mime
+      buf = base64ToArrayBuffer(parsed.base64)
+    } else {
+      const got = await fetchMediaBytesForMirror(url, args.requestHeaders)
+      if (!got) {
+        console.warn('[Flowid] 拉取生成物失败，跳过输出目录镜像', url)
+        return { saved: false, reason: 'fetch-media-failed' }
+      }
+      ct = got.contentType
+      buf = got.buffer
     }
-    const ct = res.headers.get('content-type') || ''
     const ext =
       mediaKind === 'image'
         ? extFromMime(ct, 'image')
@@ -340,32 +470,38 @@ export async function mirrorComfyOutputToDisk(args: {
           : extFromMime(ct, 'audio')
     const stem = sanitizeFileStem(args.title || 'output')
     /**
-     * 输出镜像统一按“节点标题”稳定命名，便于按节点回查；
-     * 同节点重复执行会覆盖同名文件，避免 output 目录时间戳文件无限增长。
+     * 输出镜像按“节点标题 + 时间戳”命名：
+     * - 避免同节点重复执行时覆盖旧文件（用户会误判为“没有写入 output”）；
+     * - 仍可通过前缀快速按节点回查。
      */
-    const fileName = `${stem}.${ext}`
-    const buf = await res.arrayBuffer()
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const fileName = `${stem}-${stamp}.${ext}`
     const desk = window.flowidDesktop
     if (electronOut && desk?.writeBinaryFile) {
       const fp = joinPath(electronOut, fileName)
       const wr = await desk.writeBinaryFile(fp, buf)
       if (!wr.ok) {
         console.warn('[Flowid] 写入输出目录失败', wr.error, fp)
+        return { saved: false, reason: 'desktop-write-failed' }
       } else {
         markOutputMirrorCached(outputCacheKey)
+        return { saved: true, fileName, filePath: fp }
       }
-      return
     }
     if (browserOut) {
       const wr = await writeBinaryToDirectoryHandle(browserOut, fileName, buf)
       if (!wr.ok) {
         console.warn('[Flowid] 浏览器写入 output 失败', wr.error, fileName)
+        return { saved: false, reason: 'browser-write-failed' }
       } else {
         markOutputMirrorCached(outputCacheKey)
+        return { saved: true, fileName }
       }
     }
+    return { saved: false, reason: 'no-writer-available' }
   } catch (e) {
     console.warn('[Flowid] 镜像生成物到输出目录异常', e)
+    return { saved: false, reason: 'mirror-exception' }
   }
 }
 

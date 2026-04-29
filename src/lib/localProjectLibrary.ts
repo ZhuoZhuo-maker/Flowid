@@ -4,6 +4,7 @@ const CATALOG_KEY = 'flowid.localProjectCatalog.v1'
 const DATA_PREFIX = 'flowid.localProject.v1:'
 const BACKUP_CATALOG_KEY = 'flowid.localProjectBackupCatalog.v1'
 const BACKUP_DATA_PREFIX = 'flowid.localProjectBackup.v1:'
+const BACKUP_PRUNE_BATCH = 10
 
 /**
  * 与浏览器默认槽 `flowid.project.v1` 对应的第一标签「主工作台」库 id（启动时自动登记，列表里始终可见）。
@@ -78,6 +79,53 @@ function safeParseBackupCatalog(raw: string | null): LibraryProjectBackupMeta[] 
   }
 }
 
+function isQuotaExceededError(error: unknown): boolean {
+  const msg = String((error as { message?: string })?.message || error || '').toLowerCase()
+  return msg.includes('quota') || msg.includes('storage')
+}
+
+function pruneOldestBackups(count: number): void {
+  if (count <= 0) return
+  const all = safeParseBackupCatalog(localStorage.getItem(BACKUP_CATALOG_KEY)).sort(
+    (a, b) => a.createdAt - b.createdAt,
+  )
+  if (all.length < 1) return
+  const drop = all.slice(0, Math.min(count, all.length))
+  for (const row of drop) {
+    localStorage.removeItem(`${BACKUP_DATA_PREFIX}${row.id}`)
+  }
+  const keepIds = new Set(drop.map((x) => x.id))
+  const kept = all.filter((x) => !keepIds.has(x.id))
+  try {
+    localStorage.setItem(BACKUP_CATALOG_KEY, JSON.stringify(kept))
+  } catch {
+    // ignore
+  }
+}
+
+function safeSetStorageJson(key: string, value: unknown): boolean {
+  const raw = JSON.stringify(value)
+  try {
+    localStorage.setItem(key, raw)
+    return true
+  } catch (error) {
+    if (!isQuotaExceededError(error)) {
+      console.warn('[Flowid] localStorage 写入失败', key, error)
+      return false
+    }
+  }
+
+  // 配额不足时优先裁剪历史备份（最不影响当前工作台可用性）。
+  pruneOldestBackups(BACKUP_PRUNE_BATCH)
+  try {
+    localStorage.setItem(key, raw)
+    return true
+  } catch (error) {
+    console.warn('[Flowid] localStorage 配额不足，写入失败（已尝试清理备份）', key, error)
+    return false
+  }
+}
+
 /**
  * 列出本地项目库（按更新时间倒序）。
  */
@@ -112,14 +160,14 @@ export function writeLibraryProject(snapshot: ProjectSnapshot, libraryId: string
     name: snapshot.name || '未命名项目',
   }
 
-  localStorage.setItem(`${DATA_PREFIX}${libraryId}`, JSON.stringify(payload))
+  if (!safeSetStorageJson(`${DATA_PREFIX}${libraryId}`, payload)) return
   const catalog = safeParseCatalog(localStorage.getItem(CATALOG_KEY)).filter((m) => m.id !== libraryId)
   catalog.push({
     id: libraryId,
     name: payload.name,
     updatedAt: now,
   })
-  localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog))
+  void safeSetStorageJson(CATALOG_KEY, catalog)
 }
 
 /**
@@ -128,14 +176,14 @@ export function writeLibraryProject(snapshot: ProjectSnapshot, libraryId: string
 export function deleteLibraryProject(id: string): void {
   localStorage.removeItem(`${DATA_PREFIX}${id}`)
   const catalog = safeParseCatalog(localStorage.getItem(CATALOG_KEY)).filter((m) => m.id !== id)
-  localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog))
+  void safeSetStorageJson(CATALOG_KEY, catalog)
   const backupCatalog = safeParseBackupCatalog(localStorage.getItem(BACKUP_CATALOG_KEY))
   const removed = backupCatalog.filter((b) => b.projectId === id)
   for (const row of removed) {
     localStorage.removeItem(`${BACKUP_DATA_PREFIX}${row.id}`)
   }
   const kept = backupCatalog.filter((b) => b.projectId !== id)
-  localStorage.setItem(BACKUP_CATALOG_KEY, JSON.stringify(kept))
+  void safeSetStorageJson(BACKUP_CATALOG_KEY, kept)
 }
 
 /**

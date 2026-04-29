@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { flushSync } from 'react-dom'
 import { motion } from 'motion/react'
 import {
@@ -46,6 +46,19 @@ import {
   type CloudModelPreset,
 } from '../../lib/cloudModelPresets'
 import { normalizeOpenAICompatibleBaseUrl } from '../../lib/openaiCompat'
+import { fetchOpenAICompat } from '../../lib/openaiProxy'
+import {
+  isDashScopeCompatibleModeMisusedForTts,
+  isQwenTtsMultimodalEndpoint,
+  normalizeQwenTtsMultimodalUrl,
+  type QwenTtsMultimodalResponse,
+} from '../../lib/qwenTtsMultimodal'
+import {
+  enrollQwenVoiceCloneWithBailian,
+  isQwenVcSynthesisModel,
+  QWEN_VC_DEFAULT_TARGET_MODEL,
+  sanitizeQwenVoicePreferredName,
+} from '../../lib/qwenVoiceClone'
 import {
   loadAiAssistantCorePresets,
   removeAiAssistantCorePreset,
@@ -80,8 +93,6 @@ const WF_BTN_CAPSULE_MUTED =
   'rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[12px] font-black uppercase tracking-widest text-white/50 transition-colors hover:bg-white/10 hover:text-white/80 disabled:pointer-events-none disabled:opacity-35'
 const WF_INPUT =
   'w-full rounded-xl border border-white/5 bg-black/40 p-3 text-[15px] font-mono text-white/60 outline-none focus:border-white/20'
-const WF_INPUT_COMFY =
-  'w-full rounded-xl border border-white/10 bg-black/60 p-3.5 text-[16px] font-mono text-white/50 outline-none focus:border-white/20'
 const WF_SELECT =
   'w-full rounded-xl border border-white/10 bg-black/60 py-3 pl-3 pr-10 text-[15px] text-white/70 outline-none focus:border-white/20'
 const WF_CARD = 'bg-[#111114] border border-white/5 rounded-2xl'
@@ -245,9 +256,7 @@ export function WorkflowSettingsPanel({
   const aiCloneAudioInputRef = useRef<HTMLInputElement | null>(null)
   const [diskPaths, setDiskPaths] = useState<LocalDiskPathsSettings>(() => loadLocalDiskPathsSettings())
   const [browserProjectBound, setBrowserProjectBound] = useState(false)
-  const [cloudModelPresets, setCloudModelPresets] = useState<CloudModelPreset[]>(() =>
-    loadCloudModelPresets(),
-  )
+  const [cloudModelPresets, setCloudModelPresets] = useState<CloudModelPreset[]>([])
   const [editingCloudModelId, setEditingCloudModelId] = useState<string | null>(null)
   const [cloudModelDraft, setCloudModelDraft] = useState<{ name: string; baseUrl: string; apiKey: string }>({
     name: '',
@@ -277,6 +286,7 @@ export function WorkflowSettingsPanel({
     voice: '',
   })
   const [ttsTestMsg, setTtsTestMsg] = useState<string>('')
+  const [bailianCloneBusy, setBailianCloneBusy] = useState(false)
   /** 是否 Flowid 桌面壳（可弹出系统文件/文件夹对话框并读写真实路径） */
   const isElectronDesktop = useMemo(
     () =>
@@ -306,12 +316,23 @@ export function WorkflowSettingsPanel({
   const activeComfyApiKey = executionProvider === 'local' ? '' : cloudConfig.apiKey || ''
 
   useEffect(() => {
-    const onChanged = () => setCloudModelPresets(loadCloudModelPresets())
+    if (!activeKind) {
+      setCloudModelPresets([])
+      return
+    }
+    setCloudModelPresets(loadCloudModelPresets(activeKind))
+  }, [activeKind])
+
+  useEffect(() => {
+    const onChanged = () => {
+      if (!activeKind) return
+      setCloudModelPresets(loadCloudModelPresets(activeKind))
+    }
     window.addEventListener('flowid:cloud-model-presets-changed', onChanged as EventListener)
     return () => {
       window.removeEventListener('flowid:cloud-model-presets-changed', onChanged as EventListener)
     }
-  }, [])
+  }, [activeKind])
 
   useEffect(() => {
     const onAi = () => setAiCorePresets(loadAiAssistantCorePresets())
@@ -509,10 +530,65 @@ export function WorkflowSettingsPanel({
         setTtsTestMsg('测试成功：Gradio 接口可访问')
         return
       }
-      // 只做连通性/鉴权检查：避免不同厂商 TTS payload 差异导致测试失败、或产生计费请求。
+      if (isDashScopeCompatibleModeMisusedForTts(endpoint)) {
+        setTtsTestMsg(
+          '不能将百炼「compatible-mode」用作 TTS：它只对接聊天等接口，没有 /v1/audio/speech。请把 endpoint 改成 qwen-tts-multimodal（或完整 multimodal 地址），模型如 qwen3-tts-flash，音色如 Cherry。',
+        )
+        return
+      }
+      if (isQwenTtsMultimodalEndpoint(endpoint)) {
+        const genUrl = normalizeQwenTtsMultimodalUrl(endpoint)
+        if (!String(p.model || '').trim()) {
+          setTtsTestMsg('千问 TTS：请填写模型名（如 qwen3-tts-vd-2026-01-26）。')
+          return
+        }
+        if (!String(p.voice || '').trim()) {
+          setTtsTestMsg('千问 TTS：请填写 voice（声音设计生成的音色名）。')
+          return
+        }
+        if (!String(p.apiKey || '').trim()) {
+          setTtsTestMsg('千问 TTS：请填写 API Key。')
+          return
+        }
+        const res = await fetchOpenAICompat(genUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${String(p.apiKey).trim()}`,
+          },
+          json: {
+            model: String(p.model).trim(),
+            input: {
+              text: '连通性测试。',
+              voice: String(p.voice).trim(),
+              language_type: 'Chinese',
+            },
+          },
+        })
+        if (!res.ok) {
+          setTtsTestMsg(`千问 TTS 测试失败：HTTP ${res.status}`)
+          return
+        }
+        const data = (await res.json()) as QwenTtsMultimodalResponse
+        if (data.code) {
+          setTtsTestMsg(`千问 TTS 测试失败：${data.code} ${data.message || ''}`)
+          return
+        }
+        if (data.status_code != null && data.status_code !== 200) {
+          setTtsTestMsg(`千问 TTS 测试失败：${data.status_code} ${data.message || ''}`)
+          return
+        }
+        if (!data.output?.audio?.url && !data.output?.audio?.data) {
+          setTtsTestMsg('千问 TTS 测试失败：响应中无音频')
+          return
+        }
+        setTtsTestMsg('千问 TTS 测试成功：已合成短句（可再试助手「测试 TTS 播报」）')
+        return
+      }
+      // 与真实播报一致：经 fetchOpenAICompat（浏览器跨域时走认证服务的 /proxy/openai），避免「直连 /v1/models 成功但 /v1/audio/speech 走代理失败」的假阳性。
       const base = normalizeOpenAICompatibleBaseUrl(endpoint)
       const url = `${base}/v1/models`
-      const res = await fetch(url, {
+      const res = await fetchOpenAICompat(url, {
         method: 'GET',
         headers: {
           ...(p.apiKey ? { Authorization: `Bearer ${p.apiKey}` } : {}),
@@ -527,6 +603,50 @@ export function WorkflowSettingsPanel({
       setTtsTestMsg(`测试失败：${String((e as any)?.message || e)}`)
     }
   }
+
+  const runBailianVoiceCloneFromUpload = useCallback(async () => {
+    const dataUrl = aiAssistantConfig.ttsCloneAudioDataUrl.trim()
+    const apiKey = aiAssistantConfig.ttsApiKey.trim()
+    if (!dataUrl) {
+      window.alert('请先上传参考音频。')
+      return
+    }
+    if (!apiKey) {
+      window.alert('请填写 TTS API Key（与千问合成共用百炼 Key）。可在上方 TTS 预设中填写并点「使用」同步到助手。')
+      return
+    }
+    let target = aiAssistantConfig.ttsModel.trim()
+    if (!isQwenVcSynthesisModel(target)) {
+      const ok = window.confirm(
+        `当前 TTS 模型不是 VC 系列（复刻要求 target_model 为 qwen3-tts-vc*）。将使用 ${QWEN_VC_DEFAULT_TARGET_MODEL} 进行复刻，并写入该模型以便后续合成一致。继续？`,
+      )
+      if (!ok) return
+      target = QWEN_VC_DEFAULT_TARGET_MODEL
+    }
+    const preferred = sanitizeQwenVoicePreferredName(
+      aiAssistantConfig.ttsCloneAudioName || `v_${Date.now().toString(36)}`,
+    )
+    setBailianCloneBusy(true)
+    try {
+      const { voice, targetModel } = await enrollQwenVoiceCloneWithBailian({
+        apiKey,
+        targetModel: target,
+        preferredName: preferred,
+        audioDataUrl: dataUrl,
+      })
+      const ep = aiAssistantConfig.ttsEndpoint.trim()
+      onAiAssistantConfigChange({
+        ttsVoice: voice,
+        ttsModel: targetModel,
+        ttsEndpoint: ep && isQwenTtsMultimodalEndpoint(ep) ? ep : 'qwen-tts-multimodal',
+      })
+      window.alert(`复刻成功。\n\n已写入音色（voice）：\n${voice}\n\n可按需保存助手配置。`)
+    } catch (e) {
+      window.alert(String((e as Error)?.message || e || '复刻失败'))
+    } finally {
+      setBailianCloneBusy(false)
+    }
+  }, [aiAssistantConfig, onAiAssistantConfigChange])
 
   const applyTtsPreset = (p: TtsPreset) => {
     onAiAssistantConfigChange({
@@ -556,6 +676,7 @@ export function WorkflowSettingsPanel({
 
   const saveCloudModelDraft = () => {
     if (!editingCloudModelId) return
+    if (!activeKind) return
     if (!cloudModelDraft.apiKey.trim()) {
       setCloudModelTestMsg('请填写 API Key（必填）。')
       return
@@ -569,7 +690,7 @@ export function WorkflowSettingsPanel({
     const merged = cloudModelPresets.some((p) => p.id === next.id)
       ? cloudModelPresets.map((p) => (p.id === next.id ? next : p))
       : [...cloudModelPresets, next]
-    saveCloudModelPresets(merged)
+    saveCloudModelPresets(merged, activeKind)
     setCloudModelPresets(merged)
     setCloudModelTestMsg('已保存。')
   }
@@ -1540,79 +1661,78 @@ export function WorkflowSettingsPanel({
                     </div>
                   ) : null}
 
-                  {activeKind && !(activeKind === 'text' || activeKind === 'script') ? null : (
-                    <div className="space-y-2">
-                      {cloudModelPresets.map((m) => {
-                        const isActive = String(activeNodeConfig.cloudModelName || '').trim() === m.name.trim()
-                        return (
-                          <div
-                            key={m.id}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => startEditCloudModel(m)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') startEditCloudModel(m)
-                            }}
-                            className={`cursor-pointer select-none flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
-                              isActive ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/30'
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className="truncate text-[13px] font-black uppercase tracking-widest text-white/70">
-                                {m.name}
-                              </div>
-                              <div className="truncate font-mono text-[11px] text-white/30">{m.baseUrl || '-'}</div>
+                  <div className="space-y-2">
+                    {cloudModelPresets.map((m) => {
+                      const isActive = String(activeNodeConfig.cloudModelName || '').trim() === m.name.trim()
+                      return (
+                        <div
+                          key={m.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => startEditCloudModel(m)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') startEditCloudModel(m)
+                          }}
+                          className={`cursor-pointer select-none flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
+                            isActive ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/30'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate text-[13px] font-black uppercase tracking-widest text-white/70">
+                              {m.name}
                             </div>
-                            <div className="flex shrink-0 flex-wrap gap-2">
-                              <button
-                                type="button"
-                                className={WF_BTN_CAPSULE_COMPACT}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  applyCloudModelToActiveKind(m)
-                                }}
-                              >
-                                使用
-                              </button>
-                              <button
-                                type="button"
-                                className={WF_BTN_CAPSULE_COMPACT}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  startEditCloudModel(m)
-                                }}
-                              >
-                                设置
-                              </button>
-                              <button
-                                type="button"
-                                className={WF_BTN_CAPSULE_DARK_COMPACT}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  void testCloudModelPreset(m)
-                                }}
-                              >
-                                测试
-                              </button>
-                              <button
-                                type="button"
-                                className={WF_BTN_CAPSULE_DARK_COMPACT}
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  if (!window.confirm(`确定删除云端模型「${m.name}」吗？`)) return
-                                  const next = removeCloudModelPreset(m.id)
-                                  setCloudModelPresets(next)
-                                  if (editingCloudModelId === m.id) setEditingCloudModelId(null)
-                                }}
-                              >
-                                删除
-                              </button>
-                            </div>
+                            <div className="truncate font-mono text-[11px] text-white/30">{m.baseUrl || '-'}</div>
                           </div>
-                        )
-                      })}
-                    </div>
-                  )}
+                          <div className="flex shrink-0 flex-wrap gap-2">
+                            <button
+                              type="button"
+                              className={WF_BTN_CAPSULE_COMPACT}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                applyCloudModelToActiveKind(m)
+                              }}
+                            >
+                              使用
+                            </button>
+                            <button
+                              type="button"
+                              className={WF_BTN_CAPSULE_COMPACT}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                startEditCloudModel(m)
+                              }}
+                            >
+                              设置
+                            </button>
+                            <button
+                              type="button"
+                              className={WF_BTN_CAPSULE_DARK_COMPACT}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                void testCloudModelPreset(m)
+                              }}
+                            >
+                              测试
+                            </button>
+                            <button
+                              type="button"
+                              className={WF_BTN_CAPSULE_DARK_COMPACT}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                if (!window.confirm(`确定删除云端模型「${m.name}」吗？`)) return
+                                  if (!activeKind) return
+                                  const next = removeCloudModelPreset(m.id, activeKind)
+                                setCloudModelPresets(next)
+                                if (editingCloudModelId === m.id) setEditingCloudModelId(null)
+                              }}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -1853,7 +1973,6 @@ export function WorkflowSettingsPanel({
                       {aiCoreDraft.provider === 'cloud' ? (
                         <input
                           className={WF_INPUT}
-                          type="password"
                           autoComplete="off"
                           value={String(aiCoreDraft.apiKey || '')}
                           type="password"
@@ -1942,6 +2061,12 @@ export function WorkflowSettingsPanel({
                   </label>
                   {aiAssistantConfig.ttsEnabled ? (
                     <div className="space-y-6">
+                      <p className="text-[11px] leading-relaxed text-white/35">
+                        若 TTS endpoint 使用阿里云 DashScope 的{' '}
+                        <span className="font-mono text-white/45">compatible-mode</span>：该基址通常只支持聊天等接口，不提供
+                        OpenAI 的 <span className="font-mono text-white/45">/v1/audio/speech</span>，播报会得到 HTTP 404（与桌面/代理无关）。请换支持
+                        Speech API 的服务、本地 Gradio，或百炼语音合成等专用接口。
+                      </p>
                       <div className="flex flex-wrap items-center gap-2">
                         <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={startNewTtsPreset}>
                           新增 TTS
@@ -1967,7 +2092,7 @@ export function WorkflowSettingsPanel({
                           <input
                             className={WF_INPUT}
                             value={ttsDraft.endpoint}
-                            placeholder="TTS endpoint（Gradio 或 OpenAI 兼容 /v1/audio/speech）"
+                            placeholder="TTS：Gradio / OpenAI Speech 基址 / 或填 qwen-tts-multimodal（百炼千问多模态）"
                             onChange={(e) => setTtsDraft((p) => ({ ...p, endpoint: e.target.value }))}
                           />
                           <input
@@ -2056,6 +2181,14 @@ export function WorkflowSettingsPanel({
                           </button>
                           <button
                             type="button"
+                            className={WF_BTN_CAPSULE_DARK}
+                            disabled={bailianCloneBusy || !aiAssistantConfig.ttsCloneAudioDataUrl}
+                            onClick={() => void runBailianVoiceCloneFromUpload()}
+                          >
+                            {bailianCloneBusy ? '百炼复刻中…' : '百炼复刻并填入音色'}
+                          </button>
+                          <button
+                            type="button"
                             className={`${WF_BTN_CAPSULE_MUTED} px-5 py-2.5 text-[13px]`}
                             onClick={() =>
                               onAiAssistantConfigChange({
@@ -2077,6 +2210,14 @@ export function WorkflowSettingsPanel({
                             }}
                           />
                         </div>
+                        <p className="m-0 text-[11px] leading-relaxed text-white/35">
+                          调用百炼「声音复刻」接口（qwen-voice-enrollment），将上传文件作为
+                          <span className="font-mono text-white/45"> audio.data</span>（Data URL）。成功后写入
+                          <span className="font-mono text-white/45"> TTS 音色</span>，并把合成 endpoint 设为{' '}
+                          <span className="font-mono text-white/45">qwen-tts-multimodal</span>、模型与复刻{' '}
+                          <span className="font-mono text-white/45">target_model</span>（须为 qwen3-tts-vc*，默认
+                          {QWEN_VC_DEFAULT_TARGET_MODEL}）一致。单文件建议小于 10MB。
+                        </p>
                         <div className="space-y-1">
                           <p className="m-0 text-[13px] leading-relaxed tracking-wide text-white/45">
                             当前参考音频：{aiAssistantConfig.ttsCloneAudioName || '未上传'}
