@@ -1,5 +1,7 @@
 const path = require('node:path')
 const fs = require('node:fs/promises')
+const os = require('node:os')
+const crypto = require('node:crypto')
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron')
 const { autoUpdater } = require('electron-updater')
 
@@ -160,6 +162,35 @@ function setupAutoUpdate() {
 }
 
 ipcMain.handle('desktop:get-app-version', () => app.getVersion())
+
+/**
+ * 获取稳定的机器标识（用于授权绑定）。
+ * 注意：这是“桌面端最小可用实现”，若后续需要更强的防重装/换用户名能力，可替换为原生方案（如读取 Windows MachineGuid）。
+ */
+ipcMain.handle('desktop:get-machine-id', () => {
+  try {
+    const host = String(os.hostname() || '').trim()
+    const user = (() => {
+      try {
+        return String(os.userInfo()?.username || '').trim()
+      } catch {
+        return ''
+      }
+    })()
+    const base = [
+      'flowid-machine-v1',
+      process.platform,
+      process.arch,
+      host,
+      user,
+      app.getPath('userData'),
+    ].join('|')
+    const hex = crypto.createHash('sha256').update(base, 'utf8').digest('hex')
+    return `MID-${hex.slice(0, 32)}`
+  } catch {
+    return 'MID-unknown'
+  }
+})
 
 const OPENAI_COMPAT_FETCH_MAX_BYTES = 48 * 1024 * 1024
 

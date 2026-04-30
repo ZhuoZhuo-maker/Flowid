@@ -4,11 +4,14 @@ import {
   loadLocalLicenseSnapshot,
   saveLocalLicenseSnapshot,
 } from './lib/license'
-import { Plus, Search, ChevronDown, Wallet, Trash2 } from 'lucide-react'
+import { Plus, Search, ChevronDown, Trash2 } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { StudioApp } from './components/StudioApp'
 import { loadLocalDiskPathsSettings } from './lib/localDiskPathsSettings'
 import { parseProjectFile } from './lib/persistence'
+import { computeAccessState, loadLicenseSnapshotV2 } from './lib/licenseAccess'
+import { LicenseModal } from './components/panels/LicenseModal'
+import { USER_AGREEMENT_TEXT, USER_AGREEMENT_VERSION } from './lib/userAgreement'
 import './App.css'
 
 type View = 'archive' | 'templates' | 'workspace'
@@ -29,6 +32,7 @@ interface Template {
   category: string
   image: string
   description: string
+  tier: 'free' | 'pro'
 }
 
 const MOCK_PROJECTS: Project[] = [
@@ -124,6 +128,7 @@ const MOCK_TEMPLATES: Template[] = [
     image:
       'https://images.unsplash.com/photo-1506146332389-18140ed74d5a?q=80&w=2564&auto=format&fit=crop',
     description: '采用参数化设计风格，强调流动感与现代性。',
+    tier: 'free',
   },
   {
     id: 't2',
@@ -132,6 +137,7 @@ const MOCK_TEMPLATES: Template[] = [
     image:
       'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2564&auto=format&fit=crop',
     description: '硬表面建模参考，包含复杂的机械刻线与发光原件。',
+    tier: 'pro',
   },
   {
     id: 't3',
@@ -140,6 +146,7 @@ const MOCK_TEMPLATES: Template[] = [
     image:
       'https://images.unsplash.com/photo-1614728263952-84ea206f99b6?q=80&w=2564&auto=format&fit=crop',
     description: '结合生物形态与几何结构的奇幻物种设计。',
+    tier: 'pro',
   },
   {
     id: 't4',
@@ -148,15 +155,20 @@ const MOCK_TEMPLATES: Template[] = [
     image:
       'https://images.unsplash.com/photo-1605142127394-ba5f403063f1?q=80&w=2564&auto=format&fit=crop',
     description: '多层级城市架构，光影效果针对夜景极致优化。',
+    tier: 'free',
   },
 ]
 
 function Navigation({
   activeView,
   setView,
+  accessState,
+  onOpenLicense,
 }: {
   activeView: View
   setView: (v: View) => void
+  accessState: 'unauthorized' | 'valid' | 'expired' | 'tampered_need_verify'
+  onOpenLicense: () => void
 }) {
   return (
     <header className="fixed top-6 inset-x-8 h-14 flex items-center justify-between z-50 pointer-events-none">
@@ -195,23 +207,17 @@ function Navigation({
       </div>
 
       <div className="flex items-center gap-3 pointer-events-auto">
-        <div className="flex items-center gap-4 bg-[#111114] border border-white/10 px-6 py-2.5 rounded-full shadow-2xl backdrop-blur-xl">
-          <div className="flex items-center gap-2">
-            <span className="text-[14px] font-mono text-white/50 uppercase tracking-widest">
-              Available
-            </span>
-            <span className="text-[15px] font-black text-orange-500">
-              500.00 PTS
-            </span>
-            <div className="w-[1px] h-3 bg-white/10 mx-1" />
-            <button className="flex items-center gap-2 text-[14px] font-black uppercase text-white/70 hover:text-white transition-colors">
-              <Wallet className="w-3 h-3" />
-              充值
-            </button>
-          </div>
-        </div>
-        <button className="bg-white text-black font-black text-[14px] uppercase tracking-widest px-8 py-2.5 rounded-full hover:bg-orange-500 hover:text-white transition-all shadow-xl">
-          注册 / 登录
+        <button
+          className="bg-white text-black font-black text-[14px] uppercase tracking-widest px-8 py-2.5 rounded-full hover:bg-orange-500 hover:text-white transition-all shadow-xl"
+          onClick={onOpenLicense}
+        >
+          {accessState === 'valid'
+            ? '会员已激活'
+            : accessState === 'expired'
+              ? '授权已过期'
+              : accessState === 'tampered_need_verify'
+                ? '授权需校验'
+                : '输入授权码'}
         </button>
       </div>
     </header>
@@ -345,13 +351,15 @@ function ProjectCard({
 }
 
 function TemplateCard({ template }: { template: Template }) {
+  const access = computeAccessState(loadLicenseSnapshotV2())
+  const locked = template.tier === 'pro' && access !== 'valid'
   return (
     <motion.div
       layout
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       whileHover={{ y: -10 }}
-      className="group bg-[#0A0A0B] border border-white/5 overflow-hidden transition-all duration-500 hover:border-orange-500/30"
+      className={`group bg-[#0A0A0B] border border-white/5 overflow-hidden transition-all duration-500 hover:border-orange-500/30 ${locked ? 'opacity-75' : ''}`}
     >
       <div className="aspect-[16/10] relative overflow-hidden">
         <img
@@ -364,6 +372,11 @@ function TemplateCard({ template }: { template: Template }) {
             {template.category}
           </div>
         </div>
+        {locked ? (
+          <div className="absolute top-4 right-4 bg-black/60 backdrop-blur px-3 py-1 border border-white/10 rounded text-[13px] font-mono uppercase tracking-widest text-white/60">
+            PRO
+          </div>
+        ) : null}
         <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-60" />
       </div>
 
@@ -377,8 +390,12 @@ function TemplateCard({ template }: { template: Template }) {
           {template.description}
         </p>
         <div className="flex items-center gap-2">
-          <button className="flex-1 py-3 bg-white/5 hover:bg-orange-600 hover:text-white transition-all text-[14px] font-black uppercase tracking-widest border border-white/10 group-hover:border-orange-500">
-            调用预设
+          <button
+            className="flex-1 py-3 bg-white/5 hover:bg-orange-600 hover:text-white transition-all text-[14px] font-black uppercase tracking-widest border border-white/10 group-hover:border-orange-500 disabled:opacity-50 disabled:pointer-events-none"
+            disabled={locked}
+            title={locked ? '会员模板：请先输入机器授权码' : undefined}
+          >
+            {locked ? '需要授权' : '调用预设'}
           </button>
           <button className="p-3 bg-white/5 hover:text-red-500 transition-all border border-white/10 opacity-0 group-hover:opacity-100">
             <Trash2 className="w-5 h-5" />
@@ -390,16 +407,56 @@ function TemplateCard({ template }: { template: Template }) {
 }
 
 function App() {
+  const [agreementAccepted, setAgreementAccepted] = useState<boolean>(() => {
+    try {
+      const raw = localStorage.getItem('flowid.userAgreement.accepted.v1')
+      if (!raw) return false
+      const parsed = JSON.parse(raw) as { version?: string; acceptedAtMs?: number } | null
+      return Boolean(parsed && parsed.version === USER_AGREEMENT_VERSION)
+    } catch {
+      return false
+    }
+  })
+  const [agreementShowFull, setAgreementShowFull] = useState(false)
+
   const [view, setView] = useState<View>('archive')
   const [selectedCategory, setSelectedCategory] = useState<string>('全部')
   const [projectQuery, setProjectQuery] = useState('')
+  const [projectPage, setProjectPage] = useState(0)
+  const [templatePage, setTemplatePage] = useState(0)
   const [projects, setProjects] = useState<Project[]>(MOCK_PROJECTS)
   const [projectsLoading, setProjectsLoading] = useState(false)
+  const [licenseSnap, setLicenseSnap] = useState(() => loadLicenseSnapshotV2())
+  const [licenseModalOpen, setLicenseModalOpen] = useState(false)
+  const accessState = computeAccessState(licenseSnap)
   const filteredTemplates = useMemo(() => {
-    return selectedCategory === '全部'
-      ? MOCK_TEMPLATES
-      : MOCK_TEMPLATES.filter((t) => t.category === selectedCategory)
-  }, [selectedCategory])
+    const base =
+      selectedCategory === '全部'
+        ? MOCK_TEMPLATES
+        : MOCK_TEMPLATES.filter((t) => t.category === selectedCategory)
+    if (accessState === 'valid') return base
+    return base.filter((t) => t.tier !== 'pro')
+  }, [accessState, selectedCategory])
+
+  useEffect(() => {
+    setTemplatePage(0)
+  }, [selectedCategory, accessState])
+
+  const pagedTemplates = useMemo(() => {
+    // 参考 @flowid (2)：三列网格时一页两行更舒适（6 个）
+    const pageSize = 6
+    const total = filteredTemplates.length
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
+    const page = Math.max(0, Math.min(totalPages - 1, Math.floor(Number(templatePage || 0) || 0)))
+    const start = page * pageSize
+    return { page, pageSize, total, totalPages, items: filteredTemplates.slice(start, start + pageSize) }
+  }, [filteredTemplates, templatePage])
+
+  useEffect(() => {
+    const onChanged = () => setLicenseSnap(loadLicenseSnapshotV2())
+    window.addEventListener('flowid:license-changed', onChanged as EventListener)
+    return () => window.removeEventListener('flowid:license-changed', onChanged as EventListener)
+  }, [])
 
   const refreshProjectsFromDisk = async () => {
     const desk = window.flowidDesktop
@@ -467,6 +524,33 @@ function App() {
     return projects.filter((p) => p.name.includes(q))
   }, [projectQuery, projects])
 
+  useEffect(() => {
+    setProjectPage(0)
+  }, [projectQuery, projects])
+
+  const archiveItems = useMemo(() => {
+    const base = filteredProjects.slice()
+    base.push({
+      id: '__new__',
+      name: '新建项目',
+      updatedAt: '',
+      createdAt: '',
+      thumbnail: '',
+      type: 'local',
+    })
+    return base
+  }, [filteredProjects])
+
+  const pagedArchive = useMemo(() => {
+    // 参考 @flowid (2)：两列网格更舒适的翻页密度（每页 4 个卡片）
+    const pageSize = 4
+    const total = archiveItems.length
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
+    const page = Math.max(0, Math.min(totalPages - 1, Math.floor(Number(projectPage || 0) || 0)))
+    const start = page * pageSize
+    return { page, pageSize, total, totalPages, items: archiveItems.slice(start, start + pageSize) }
+  }, [archiveItems, projectPage])
+
   const openProject = async (project: Project) => {
     const fp = String(project.filePath || '').trim()
     const desk = window.flowidDesktop
@@ -493,6 +577,23 @@ function App() {
         }
       }
     }
+    setView('workspace')
+  }
+
+  const createNewProject = () => {
+    const name = `未命名项目 ${Math.floor(Math.random() * 900 + 100)}`
+    window.dispatchEvent(
+      new CustomEvent('flowid:archive-open-project', {
+        detail: {
+          name,
+          snapshot: {
+            nodes: [],
+            edges: [],
+            viewport: { x: 0, y: 0, zoom: 1 },
+          },
+        },
+      }),
+    )
     setView('workspace')
   }
 
@@ -534,6 +635,84 @@ function App() {
 
   return (
     <>
+      {!agreementAccepted ? (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="w-[min(880px,calc(100vw-48px))] max-h-[min(82vh,calc(100vh-64px))] rounded-3xl border border-white/10 bg-[#0c0c0e] shadow-[0_0_120px_rgba(0,0,0,0.75)] overflow-hidden">
+            <div className="px-8 py-6 border-b border-white/10 flex items-center justify-between">
+              <div className="space-y-1">
+                <div className="text-[14px] font-black uppercase tracking-[0.35em] text-white/50">
+                  用户协议
+                </div>
+                <div className="text-[18px] font-black tracking-wider text-white/90">
+                  首次启动需同意协议
+                </div>
+              </div>
+              <button
+                type="button"
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-[12px] font-black uppercase tracking-widest text-white/40 hover:text-white hover:bg-white/10 transition-colors"
+                onClick={() => setAgreementShowFull((v) => !v)}
+              >
+                {agreementShowFull ? '收起全文' : '查看全文'}
+              </button>
+            </div>
+            <div className="px-8 py-6 space-y-5 overflow-y-auto custom-scrollbar max-h-[calc(82vh-140px)]">
+              <div className="text-[14px] leading-relaxed text-white/55 space-y-2">
+                <div>感谢您使用本软件。本协议构成您与本软件运营方之间的有效法律约定。</div>
+                <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <div className="text-[14px] font-black text-white/80">摘要要点</div>
+                  <ul className="mt-2 m-0 list-disc pl-6 space-y-1">
+                    <li>本软件为本地工具：调用您自行配置的第三方 API，不内置模型能力</li>
+                    <li>本软件不收集、不存储用户数据；生成内容责任由用户与其 API 服务商承担</li>
+                    <li>不得用于违法用途；违规产生的后果由用户自行承担</li>
+                    <li>第三方服务变更/故障导致的损失，本软件不承担责任</li>
+                  </ul>
+                </div>
+                <div className="text-[12px] text-white/35">
+                  点击「同意并进入」表示您已阅读、理解并同意受本协议约束（版本 {USER_AGREEMENT_VERSION}）。
+                </div>
+              </div>
+
+              {agreementShowFull ? (
+                <textarea
+                  readOnly
+                  value={USER_AGREEMENT_TEXT}
+                  className="custom-scrollbar w-full rounded-2xl border border-white/10 bg-black/40 p-4 text-[13px] font-mono text-white/65 outline-none whitespace-pre-wrap leading-relaxed max-h-[46vh] resize-y"
+                  aria-label="用户协议全文（只读）"
+                />
+              ) : null}
+
+              <div className="flex flex-wrap gap-3 justify-end pt-1">
+                <button
+                  type="button"
+                  className="rounded-full border border-white/10 bg-white/5 px-6 py-2.5 text-[12px] font-black uppercase tracking-widest text-white/45 hover:text-white hover:bg-white/10 transition-colors"
+                  onClick={() => {
+                    try {
+                      window.close()
+                    } catch {
+                      // ignore
+                    }
+                    window.alert('如不同意协议，请关闭软件后停止使用。')
+                  }}
+                >
+                  不同意
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-orange-600/30 bg-orange-600 px-6 py-2.5 text-[12px] font-black uppercase tracking-widest text-white shadow-xl shadow-orange-600/20 hover:bg-orange-500 transition-colors"
+                  onClick={() => {
+                    const payload = { version: USER_AGREEMENT_VERSION, acceptedAtMs: Date.now() }
+                    localStorage.setItem('flowid.userAgreement.accepted.v1', JSON.stringify(payload))
+                    setAgreementAccepted(true)
+                  }}
+                >
+                  同意并进入
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="fixed inset-0" style={{ display: view === 'workspace' ? 'block' : 'none' }}>
         <StudioApp onGoHome={() => setView('archive')} />
       </div>
@@ -551,7 +730,12 @@ function App() {
         }}
       />
 
-      <Navigation activeView={view} setView={setView} />
+      <Navigation
+        activeView={view}
+        setView={setView}
+        accessState={accessState}
+        onOpenLicense={() => setLicenseModalOpen(true)}
+      />
 
       <main className="relative z-10 pt-32 px-16 md:px-32 pb-40">
         <AnimatePresence mode="wait">
@@ -612,21 +796,88 @@ function App() {
                   <div className="col-span-full text-white/40 text-[12px] font-mono uppercase tracking-widest">
                     Loading local projects…
                   </div>
-                ) : filteredProjects.length ? (
-                  filteredProjects.map((p) => (
-                    <ProjectCard
-                      key={p.id}
-                      project={p}
-                      onClick={() => void openProject(p)}
-                      onDelete={() => void deleteProject(p)}
-                    />
-                  ))
+                ) : pagedArchive.items.length ? (
+                  pagedArchive.items.map((p) =>
+                    p.id === '__new__' ? (
+                      <motion.button
+                        key="__new__"
+                        type="button"
+                        onClick={createNewProject}
+                        className="group bg-[#111114] border border-white/5 rounded-2xl overflow-hidden shadow-2xl relative text-left"
+                        whileHover={{ y: -5 }}
+                      >
+                        <div className="aspect-[16/10] bg-[#0A0A0C] relative overflow-hidden flex items-center justify-center">
+                          <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-white/50 group-hover:text-white group-hover:bg-orange-600/20 group-hover:border-orange-500/30 transition-all">
+                            <Plus className="w-6 h-6" />
+                          </div>
+                          <div className="absolute inset-0 bg-gradient-to-t from-[#080809] to-transparent opacity-70" />
+                        </div>
+                        <div className="p-8">
+                          <h3 className="text-3xl font-black tracking-tighter uppercase italic text-white/70 group-hover:text-orange-500 transition-colors mb-3 leading-none">
+                            新建项目
+                          </h3>
+                          <div className="text-[13px] font-mono uppercase tracking-[0.2em] text-white/40">
+                            空白工程 // Start
+                          </div>
+                        </div>
+                      </motion.button>
+                    ) : (
+                      <ProjectCard
+                        key={p.id}
+                        project={p}
+                        onClick={() => void openProject(p)}
+                        onDelete={() => void deleteProject(p)}
+                      />
+                    ),
+                  )
                 ) : (
                   <div className="col-span-full text-white/40 text-[12px] font-mono leading-relaxed tracking-wide">
                     未找到项目。请在「设置 → 本地存储」里配置“工程目录”，或检查目录下是否有工程 JSON 文件。
                   </div>
                 )}
               </div>
+
+              {pagedArchive.totalPages > 1 ? (
+                <div className="mt-16 flex items-center justify-center gap-3 pointer-events-auto">
+                  <button
+                    type="button"
+                    onClick={() => setProjectPage((p) => Math.max(0, p - 1))}
+                    disabled={pagedArchive.page <= 0}
+                    className="w-12 h-12 rounded-full bg-white/5 border border-white/10 text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-35 disabled:pointer-events-none transition-all"
+                    aria-label="上一页"
+                  >
+                    ←
+                  </button>
+                  {Array.from({ length: pagedArchive.totalPages }).map((_, idx) => {
+                    const n = String(idx + 1).padStart(2, '0')
+                    const active = idx === pagedArchive.page
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setProjectPage(idx)}
+                        className={`w-12 h-12 rounded-full border transition-all font-black tracking-widest ${
+                          active
+                            ? 'bg-orange-600 border-orange-500/40 text-white shadow-xl shadow-orange-600/20'
+                            : 'bg-white/5 border-white/10 text-white/55 hover:text-white hover:bg-white/10'
+                        }`}
+                        aria-label={`第 ${idx + 1} 页`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => setProjectPage((p) => Math.min(pagedArchive.totalPages - 1, p + 1))}
+                    disabled={pagedArchive.page >= pagedArchive.totalPages - 1}
+                    className="w-12 h-12 rounded-full bg-white/5 border border-white/10 text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-35 disabled:pointer-events-none transition-all"
+                    aria-label="下一页"
+                  >
+                    →
+                  </button>
+                </div>
+              ) : null}
             </motion.div>
           ) : (
             <motion.div
@@ -668,15 +919,58 @@ function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {filteredTemplates.map((t) => (
+                {pagedTemplates.items.map((t) => (
                   <TemplateCard key={t.id} template={t} />
                 ))}
               </div>
+
+              {pagedTemplates.totalPages > 1 ? (
+                <div className="mt-16 flex items-center justify-center gap-3 pointer-events-auto">
+                  <button
+                    type="button"
+                    onClick={() => setTemplatePage((p) => Math.max(0, p - 1))}
+                    disabled={pagedTemplates.page <= 0}
+                    className="w-12 h-12 rounded-full bg-white/5 border border-white/10 text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-35 disabled:pointer-events-none transition-all"
+                    aria-label="上一页"
+                  >
+                    ←
+                  </button>
+                  {Array.from({ length: pagedTemplates.totalPages }).map((_, idx) => {
+                    const n = String(idx + 1).padStart(2, '0')
+                    const active = idx === pagedTemplates.page
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => setTemplatePage(idx)}
+                        className={`w-12 h-12 rounded-full border transition-all font-black tracking-widest ${
+                          active
+                            ? 'bg-orange-600 border-orange-500/40 text-white shadow-xl shadow-orange-600/20'
+                            : 'bg-white/5 border-white/10 text-white/55 hover:text-white hover:bg-white/10'
+                        }`}
+                        aria-label={`第 ${idx + 1} 页`}
+                      >
+                        {n}
+                      </button>
+                    )
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => setTemplatePage((p) => Math.min(pagedTemplates.totalPages - 1, p + 1))}
+                    disabled={pagedTemplates.page >= pagedTemplates.totalPages - 1}
+                    className="w-12 h-12 rounded-full bg-white/5 border border-white/10 text-white/50 hover:text-white hover:bg-white/10 disabled:opacity-35 disabled:pointer-events-none transition-all"
+                    aria-label="下一页"
+                  >
+                    →
+                  </button>
+                </div>
+              ) : null}
             </motion.div>
           )}
         </AnimatePresence>
       </main>
       </div>
+      <LicenseModal open={licenseModalOpen} onClose={() => setLicenseModalOpen(false)} />
     </>
   )
 }

@@ -3,6 +3,10 @@ import { flushSync } from 'react-dom'
 import { motion } from 'motion/react'
 import {
   Command,
+  Cloud,
+  Eye,
+  EyeOff,
+  FileText,
   HardDrive,
   Image as ImageIconLucide,
   Mic,
@@ -39,12 +43,18 @@ import type {
   WorkflowProviderType,
 } from '../../types'
 import type { AiAssistantConfig } from '../../lib/aiAssistantAgent'
+import { USER_AGREEMENT_TEXT } from '../../lib/userAgreement'
+import { loadLicenseServerConfig } from '../../lib/licenseAccess'
+import { loadCloudCallLogs, type CloudCallLogEntry } from '../../lib/cloudCallLogs'
 import {
-  loadCloudModelPresets,
-  removeCloudModelPreset,
-  saveCloudModelPresets,
-  type CloudModelPreset,
-} from '../../lib/cloudModelPresets'
+  getActiveCloudSelfPreset,
+  loadActiveCloudSelfPresetId,
+  loadCloudSelfPresets,
+  removeCloudSelfPreset,
+  setActiveCloudSelfPresetId,
+  upsertCloudSelfPreset,
+  type CloudSelfPreset,
+} from '../../lib/cloudSelfPresets'
 import { normalizeOpenAICompatibleBaseUrl } from '../../lib/openaiCompat'
 import { fetchOpenAICompat } from '../../lib/openaiProxy'
 import {
@@ -94,15 +104,34 @@ const WF_BTN_CAPSULE_MUTED =
 const WF_INPUT =
   'w-full rounded-xl border border-white/5 bg-black/40 p-3 text-[15px] font-mono text-white/60 outline-none focus:border-white/20'
 const WF_SELECT =
-  'w-full rounded-xl border border-white/10 bg-black/60 py-3 pl-3 pr-10 text-[15px] text-white/70 outline-none focus:border-white/20'
+  'flowid-dark-select w-full rounded-xl border border-white/10 bg-black/60 py-3 pl-3 pr-10 text-[15px] text-white/70 outline-none focus:border-white/20'
 const WF_CARD = 'bg-[#111114] border border-white/5 rounded-2xl'
 const WF_SYNC_BTN =
   'w-full rounded-xl border border-white/5 bg-[#1e1e22] py-4 text-[15px] font-black uppercase tracking-[0.3em] text-white/40 transition-all hover:bg-orange-600 hover:text-white'
 
-type SettingsTab = 'comfy' | 'ai-assistant' | StudioNodeKind | 'shortcuts' | 'local-storage'
+type CloudProviderId = 'doubao' | 'gemini' | 'openai'
+const CLOUD_PROVIDERS: Array<{ id: CloudProviderId; label: string; models: string[] }> = [
+  { id: 'doubao', label: 'doubao', models: ['seedream-5.0', 'seedream-4.5', 'seedream-4.0'] },
+  { id: 'gemini', label: 'gemini', models: ['nano-banana-2', 'nano-banana-pro'] },
+  { id: 'openai', label: 'openai', models: ['gpt-image-2', 'dall-e-3', 'dall-e-2'] },
+]
+
+function asProviderId(x: string): CloudProviderId {
+  return (x === 'doubao' || x === 'gemini' || x === 'openai' ? x : 'doubao') as CloudProviderId
+}
+
+type SettingsTab =
+  | 'comfy'
+  | 'cloud-models'
+  | 'ai-assistant'
+  | StudioNodeKind
+  | 'shortcuts'
+  | 'local-storage'
+  | 'user-agreement'
 
 const SETTINGS_SIDEBAR: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
   { id: 'comfy', label: 'COMFYUI', icon: Server },
+  { id: 'cloud-models', label: '云端模型', icon: Cloud },
   { id: 'text', label: KIND_LABELS.text, icon: Type },
   { id: 'image', label: KIND_LABELS.image, icon: ImageIconLucide },
   { id: 'video', label: KIND_LABELS.video, icon: Video },
@@ -111,10 +140,13 @@ const SETTINGS_SIDEBAR: Array<{ id: SettingsTab; label: string; icon: LucideIcon
   { id: 'ai-assistant', label: 'AI 助手', icon: Terminal },
   { id: 'shortcuts', label: '快捷键', icon: Command },
   { id: 'local-storage', label: '本地存储', icon: HardDrive },
+  { id: 'user-agreement', label: '用户协议', icon: FileText },
 ]
 
 /** 与 @flowid (2) SettingsPanel 一致：侧栏文案 + 「核心参数」 */
 function settingsMainTitle(tab: SettingsTab): string {
+  if (tab === 'user-agreement') return '用户协议'
+  if (tab === 'cloud-models') return '云端模型'
   const row = SETTINGS_SIDEBAR.find((i) => i.id === tab)
   return row ? `${row.label} 核心参数` : '设置'
 }
@@ -187,7 +219,6 @@ export function WorkflowSettingsPanel({
   onTestProviderConnection,
   connectionTestMessage,
   officialTemplates,
-  onExecutionModeChange,
   onRefreshOfficialTemplates,
   aiAssistantConfig,
   onAiAssistantConfigChange,
@@ -243,7 +274,6 @@ export function WorkflowSettingsPanel({
   ) => Promise<{ ok: boolean; message: string }>
   connectionTestMessage: string
   officialTemplates: OfficialTemplateMeta[]
-  onExecutionModeChange: (mode: WorkflowExecutionMode) => void
   onRefreshOfficialTemplates: () => Promise<OfficialTemplateMeta[]>
   aiAssistantConfig: AiAssistantConfig
   onAiAssistantConfigChange: (patch: Partial<AiAssistantConfig>) => void
@@ -251,19 +281,165 @@ export function WorkflowSettingsPanel({
   onClose: () => void
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('comfy')
-  const [nodeSubTab, setNodeSubTab] = useState<'workflow' | 'cloud-model'>('workflow')
   const [bindingCommand, setBindingCommand] = useState<ShortcutCommandId | null>(null)
   const aiCloneAudioInputRef = useRef<HTMLInputElement | null>(null)
   const [diskPaths, setDiskPaths] = useState<LocalDiskPathsSettings>(() => loadLocalDiskPathsSettings())
   const [browserProjectBound, setBrowserProjectBound] = useState(false)
-  const [cloudModelPresets, setCloudModelPresets] = useState<CloudModelPreset[]>([])
-  const [editingCloudModelId, setEditingCloudModelId] = useState<string | null>(null)
-  const [cloudModelDraft, setCloudModelDraft] = useState<{ name: string; baseUrl: string; apiKey: string }>({
-    name: '',
-    baseUrl: '',
-    apiKey: '',
+  const [cloudKeyVisible, setCloudKeyVisible] = useState(false)
+  const [cloudModelsSubTab, setCloudModelsSubTab] = useState<'self' | 'assist' | 'logs'>('self')
+  const [cloudSelfPresets, setCloudSelfPresets] = useState<CloudSelfPreset[]>(() => loadCloudSelfPresets())
+  const [activeCloudSelfPresetId, setActiveCloudSelfPresetIdState] = useState<string>(() =>
+    loadActiveCloudSelfPresetId(),
+  )
+  const [editingCloudSelfId, setEditingCloudSelfId] = useState<string | null>(null)
+  const [cloudSelfDraft, setCloudSelfDraft] = useState<{
+    nodeKind: StudioNodeKind | ''
+    providerId: CloudProviderId
+    baseUrl: string
+    apiKey: string
+    model: string
+  }>(() => {
+    const active = getActiveCloudSelfPreset()
+    return {
+      nodeKind: (String((active as any)?.nodeKind || '') as any) || '',
+      providerId: asProviderId(active?.providerId || 'doubao'),
+      baseUrl: String(active?.baseUrl || ''),
+      apiKey: String(active?.apiKey || ''),
+      model: String(active?.model || (CLOUD_PROVIDERS.find((p) => p.id === 'doubao')?.models?.[0] || '')),
+    }
   })
-  const [cloudModelTestMsg, setCloudModelTestMsg] = useState<string>('')
+  const [cloudSelfMsg, setCloudSelfMsg] = useState<string>('')
+  const [cloudLogsPage, setCloudLogsPage] = useState(1)
+  const [cloudAssistMsg, setCloudAssistMsg] = useState<string>('')
+  type CloudAssistTokenPreset = {
+    id: string
+    /** 对应 Provider 分类（例如 openai/doubao/gemini），空字符串代表通用 */
+    providerId: string
+    name: string
+    token: string
+    updatedAtMs: number
+  }
+  const [cloudAssistConfig, setCloudAssistConfig] = useState<
+    null | {
+      providers: Array<{
+        id: string
+        label: string
+        baseUrl: string
+        models: Array<{ name: string; nodeKind?: string }>
+      }>
+    }
+  >(() => {
+    try {
+      const raw = window.localStorage.getItem('flowid.cloud.assist.config.v1')
+      return raw ? (JSON.parse(raw) as any) : null
+    } catch {
+      return null
+    }
+  })
+  const loadCloudAssistTokenPresets = () => {
+    try {
+      const raw = window.localStorage.getItem('flowid.cloud.assist.tokens.v1')
+      const parsed = raw ? JSON.parse(raw) : []
+      const list = Array.isArray(parsed) ? parsed : []
+      return list
+        .map((x: any) => ({
+          id: String(x?.id || ''),
+          providerId: String(x?.providerId || ''),
+          name: String(x?.name || ''),
+          token: String(x?.token || ''),
+          updatedAtMs: Number(x?.updatedAtMs || 0) || 0,
+        }))
+        .filter((x) => x.id && x.name)
+    } catch {
+      return [] as CloudAssistTokenPreset[]
+    }
+  }
+
+  const persistCloudAssistTokenPresets = (next: CloudAssistTokenPreset[]) => {
+    try {
+      window.localStorage.setItem('flowid.cloud.assist.tokens.v1', JSON.stringify(next))
+    } catch {
+      // ignore
+    }
+  }
+
+  const [cloudAssistTokenPresets, setCloudAssistTokenPresets] = useState<CloudAssistTokenPreset[]>(() => {
+    const list = loadCloudAssistTokenPresets()
+    // 兼容旧单值：flowid.cloud.assist.token.v1
+    try {
+      const legacy = String(window.localStorage.getItem('flowid.cloud.assist.token.v1') || '').trim()
+      if (legacy && !list.length) {
+        const migrated: CloudAssistTokenPreset[] = [
+          { id: crypto.randomUUID(), providerId: '', name: '默认', token: legacy, updatedAtMs: Date.now() },
+        ]
+        persistCloudAssistTokenPresets(migrated)
+        return migrated
+      }
+    } catch {
+      // ignore
+    }
+    return list
+  })
+  const [editingCloudAssistTokenId, setEditingCloudAssistTokenId] = useState<string>('')
+  const [cloudAssistTokenEditingMode, setCloudAssistTokenEditingMode] = useState<'none' | 'new' | 'edit'>('none')
+  const editingCloudAssistToken = useMemo(() => {
+    const id = String(editingCloudAssistTokenId || '').trim()
+    if (!id) return null
+    return cloudAssistTokenPresets.find((x) => x.id === id) || null
+  }, [cloudAssistTokenPresets, editingCloudAssistTokenId])
+  const [cloudAssistTokenProviderDraft, setCloudAssistTokenProviderDraft] = useState<string>(() =>
+    String(editingCloudAssistToken?.providerId || ''),
+  )
+  const [cloudAssistTokenNameDraft, setCloudAssistTokenNameDraft] = useState<string>(() =>
+    String(editingCloudAssistToken?.name || ''),
+  )
+  const [cloudAssistTokenDraft, setCloudAssistTokenDraft] = useState<string>(() =>
+    String(editingCloudAssistToken?.token || ''),
+  )
+  const [cloudAssistTokenVisible, setCloudAssistTokenVisible] = useState(false)
+  useEffect(() => {
+    if (!cloudAssistTokenPresets.length && cloudAssistTokenEditingMode !== 'new') {
+      setCloudAssistTokenEditingMode('none')
+      setEditingCloudAssistTokenId('')
+    }
+    if (editingCloudAssistTokenId && !cloudAssistTokenPresets.some((x) => x.id === editingCloudAssistTokenId)) {
+      setEditingCloudAssistTokenId('')
+      if (cloudAssistTokenEditingMode === 'edit') setCloudAssistTokenEditingMode('none')
+    }
+  }, [cloudAssistTokenPresets, editingCloudAssistTokenId])
+  useEffect(() => {
+    if (cloudAssistTokenEditingMode === 'new') return
+    setCloudAssistTokenProviderDraft(String(editingCloudAssistToken?.providerId || ''))
+    setCloudAssistTokenNameDraft(String(editingCloudAssistToken?.name || ''))
+    setCloudAssistTokenDraft(String(editingCloudAssistToken?.token || ''))
+    setCloudAssistTokenVisible(false)
+  }, [editingCloudAssistToken?.id])
+  const effectiveCloudAssistToken = useCallback(
+    (providerId: string) => {
+      const draft = String(cloudAssistTokenDraft || '').trim()
+      const draftProvider = String(cloudAssistTokenProviderDraft || '').trim()
+      // 编辑中：允许直接用未保存 draft 去测试（但仅当 provider 匹配或 draftProvider 为空）
+      if (draft && cloudAssistTokenEditingMode !== 'none') {
+        if (!draftProvider || draftProvider === String(providerId || '').trim()) return draft
+      }
+      const wanted = String(providerId || '').trim()
+      const best =
+        (wanted ? cloudAssistTokenPresets.find((x) => String(x.providerId || '').trim() === wanted && String(x.token || '').trim()) : null) ||
+        cloudAssistTokenPresets.find((x) => !String(x.providerId || '').trim() && String(x.token || '').trim()) ||
+        cloudAssistTokenPresets.find((x) => String(x.token || '').trim()) ||
+        null
+      return String(best?.token || '').trim()
+    },
+    [cloudAssistTokenDraft, cloudAssistTokenEditingMode, cloudAssistTokenPresets, cloudAssistTokenProviderDraft],
+  )
+  const [cloudAssistModelStatus, setCloudAssistModelStatus] = useState<Record<string, string>>({})
+  const [cloudCallLogs, setCloudCallLogs] = useState<CloudCallLogEntry[]>(() => {
+    try {
+      return loadCloudCallLogs()
+    } catch {
+      return []
+    }
+  })
   const [aiCorePresets, setAiCorePresets] = useState<AiAssistantCorePreset[]>(() => loadAiAssistantCorePresets())
   const [ttsPresets, setTtsPresets] = useState<TtsPreset[]>(() => loadTtsPresets())
   const [editingAiCoreId, setEditingAiCoreId] = useState<string | null>(null)
@@ -294,6 +470,8 @@ export function WorkflowSettingsPanel({
       Boolean(window.flowidDesktop?.pickDirectory && window.flowidDesktop?.pickJsonFile),
     [],
   )
+
+  const sidebarItems = useMemo(() => SETTINGS_SIDEBAR, [])
   const [editingWorkflow, setEditingWorkflow] = useState<{
     kind: StudioNodeKind
     workflowId: string
@@ -316,23 +494,35 @@ export function WorkflowSettingsPanel({
   const activeComfyApiKey = executionProvider === 'local' ? '' : cloudConfig.apiKey || ''
 
   useEffect(() => {
-    if (!activeKind) {
-      setCloudModelPresets([])
-      return
+    const onChanged = () => {
+      setCloudSelfPresets(loadCloudSelfPresets())
+      setActiveCloudSelfPresetIdState(loadActiveCloudSelfPresetId())
     }
-    setCloudModelPresets(loadCloudModelPresets(activeKind))
-  }, [activeKind])
+    window.addEventListener('flowid:cloud-self-presets-changed', onChanged as EventListener)
+    return () => window.removeEventListener('flowid:cloud-self-presets-changed', onChanged as EventListener)
+  }, [])
+
+  const pagedCloudLogs = useMemo(() => {
+    const pageSize = 20
+    const total = cloudCallLogs.length
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
+    const page = Math.min(Math.max(1, cloudLogsPage), totalPages)
+    const start = (page - 1) * pageSize
+    const items = cloudCallLogs.slice(start, start + pageSize)
+    return { items, page, totalPages, total }
+  }, [cloudCallLogs, cloudLogsPage])
 
   useEffect(() => {
     const onChanged = () => {
-      if (!activeKind) return
-      setCloudModelPresets(loadCloudModelPresets(activeKind))
+      try {
+        setCloudCallLogs(loadCloudCallLogs())
+      } catch {
+        setCloudCallLogs([])
+      }
     }
-    window.addEventListener('flowid:cloud-model-presets-changed', onChanged as EventListener)
-    return () => {
-      window.removeEventListener('flowid:cloud-model-presets-changed', onChanged as EventListener)
-    }
-  }, [activeKind])
+    window.addEventListener('flowid:cloud-call-logs-changed', onChanged as EventListener)
+    return () => window.removeEventListener('flowid:cloud-call-logs-changed', onChanged as EventListener)
+  }, [])
 
   useEffect(() => {
     const onAi = () => setAiCorePresets(loadAiAssistantCorePresets())
@@ -657,87 +847,182 @@ export function WorkflowSettingsPanel({
     })
   }
 
-  const startEditCloudModel = (preset: CloudModelPreset) => {
-    setEditingCloudModelId(preset.id)
-    setCloudModelDraft({
-      name: String(preset.name || ''),
-      baseUrl: String(preset.baseUrl || ''),
-      apiKey: String(preset.apiKey || ''),
+  const startNewCloudSelf = useCallback(() => {
+    setEditingCloudSelfId('new')
+    const models = CLOUD_PROVIDERS.find((p) => p.id === cloudSelfDraft.providerId)?.models || []
+    setCloudSelfDraft({
+      nodeKind: '',
+      providerId: cloudSelfDraft.providerId,
+      baseUrl: '',
+      apiKey: '',
+      model: models[0] || '',
     })
-    setCloudModelTestMsg('')
-  }
+    setCloudSelfMsg('')
+  }, [cloudSelfDraft.providerId])
 
-  const startNewCloudModel = () => {
-    const id = crypto.randomUUID()
-    setEditingCloudModelId(id)
-    setCloudModelDraft({ name: '新模型', baseUrl: '', apiKey: '' })
-    setCloudModelTestMsg('')
-  }
+  const startEditCloudSelf = useCallback((p: CloudSelfPreset) => {
+    setEditingCloudSelfId(p.id)
+    setCloudSelfDraft({
+      nodeKind: (String((p as any)?.nodeKind || '') as any) || '',
+      providerId: asProviderId(p.providerId),
+      baseUrl: String(p.baseUrl || ''),
+      apiKey: String(p.apiKey || ''),
+      model: String(p.model || ''),
+    })
+    setCloudSelfMsg('')
+  }, [])
 
-  const saveCloudModelDraft = () => {
-    if (!editingCloudModelId) return
-    if (!activeKind) return
-    if (!cloudModelDraft.apiKey.trim()) {
-      setCloudModelTestMsg('请填写 API Key（必填）。')
+  const saveCloudSelfDraft = useCallback(() => {
+    const providerId = asProviderId(cloudSelfDraft.providerId)
+    const nodeKind = String(cloudSelfDraft.nodeKind || '').trim()
+    const baseUrl = String(cloudSelfDraft.baseUrl || '').trim()
+    const apiKey = String(cloudSelfDraft.apiKey || '').trim()
+    const model = String(cloudSelfDraft.model || '').trim()
+    if (!baseUrl || !model || !apiKey) {
+      setCloudSelfMsg('请填写 API 地址 / 默认模型 / API Key。')
       return
     }
-    const next: CloudModelPreset = {
-      id: editingCloudModelId,
-      name: cloudModelDraft.name.trim() || '未命名模型',
-      baseUrl: cloudModelDraft.baseUrl.trim(),
-      apiKey: cloudModelDraft.apiKey,
-    }
-    const merged = cloudModelPresets.some((p) => p.id === next.id)
-      ? cloudModelPresets.map((p) => (p.id === next.id ? next : p))
-      : [...cloudModelPresets, next]
-    saveCloudModelPresets(merged, activeKind)
-    setCloudModelPresets(merged)
-    setCloudModelTestMsg('已保存。')
-  }
-
-  const applyCloudModelToActiveKind = (preset: CloudModelPreset) => {
-    if (!activeKind) return
-    onNodeConfigChange(activeKind, {
-      cloudModelName: preset.name,
-      cloudModelUrl: preset.baseUrl,
-      cloudApiKey: String(preset.apiKey || ''),
+    const id = editingCloudSelfId && editingCloudSelfId !== 'new' ? editingCloudSelfId : crypto.randomUUID()
+    const saved = upsertCloudSelfPreset({
+      id,
+      nodeKind,
+      providerId,
+      baseUrl,
+      apiKey,
+      model,
     })
-  }
+    setActiveCloudSelfPresetId(saved.id)
+    setCloudSelfMsg('已保存。')
+    setEditingCloudSelfId(null)
+  }, [cloudSelfDraft, editingCloudSelfId])
 
-  const testCloudModelPreset = async (preset: CloudModelPreset) => {
-    const baseUrl = normalizeOpenAICompatibleBaseUrl(preset.baseUrl || '')
+  const testCloudSelfDraft = useCallback(async () => {
+    const baseUrl = normalizeOpenAICompatibleBaseUrl(String(cloudSelfDraft.baseUrl || ''))
+    const key = String(cloudSelfDraft.apiKey || '').trim()
     if (!baseUrl) {
-      setCloudModelTestMsg('请先填写模型地址。')
+      setCloudSelfMsg('请先填写 API 地址。')
       return
     }
-    if (!String(preset.apiKey || '').trim()) {
-      setCloudModelTestMsg('请先填写 API Key（必填）。')
+    if (!key) {
+      setCloudSelfMsg('请先填写 API Key。')
       return
     }
-    setCloudModelTestMsg('测试中…')
+    setCloudSelfMsg('测试中…')
     try {
-      const res = await fetch(`${baseUrl}/v1/models`, {
+      const auth = `Bearer ${key}`
+      const res = await fetchOpenAICompat(`${baseUrl}/v1/models`, { method: 'GET', headers: { Authorization: auth } })
+      if (!res.ok) {
+        setCloudSelfMsg(`测试失败：HTTP ${res.status}`)
+        return
+      }
+      setCloudSelfMsg('测试成功：可访问 /v1/models')
+    } catch (e) {
+      setCloudSelfMsg(`测试失败：${String((e as any)?.message || e)}`)
+    }
+  }, [cloudSelfDraft])
+
+  const pullCloudAssistConfig = useCallback(async () => {
+    // 仅下发配置：不校验 token；token 仅用于用户直连 third-party 时鉴权
+    const base = String(loadLicenseServerConfig().baseUrl || '').trim().replace(/\/+$/, '')
+    if (!base) {
+      setCloudAssistMsg('未配置授权服务地址（无法拉取后台配置）。')
+      return
+    }
+    setCloudAssistMsg('拉取中…')
+    setCloudAssistModelStatus({})
+    try {
+      const res = await fetch(`${base}/cloud-models`, {
         method: 'GET',
-        headers: {
-          Authorization: `Bearer ${String(preset.apiKey || '').trim()}`,
-        },
       })
       if (!res.ok) {
-        setCloudModelTestMsg(`测试失败：HTTP ${res.status}`)
+        setCloudAssistMsg(`拉取失败：HTTP ${res.status}`)
         return
       }
-      setCloudModelTestMsg('测试成功：可访问 /v1/models')
-    } catch (err) {
-      const msg = String((err as any)?.message || err)
-      if (/Failed to fetch/i.test(msg)) {
-        setCloudModelTestMsg(
-          '测试失败：Failed to fetch（常见原因：地址填的是控制台网页而不是 API endpoint；或网络/DNS/证书问题；或服务不支持 OpenAI 兼容的 /v1/models）。',
-        )
-        return
+      const json = (await res.json().catch(() => null)) as any
+      const providers = Array.isArray(json?.providers) ? json.providers : []
+      const normalized = {
+        providers: providers
+          .map((p: any) => ({
+            id: String(p?.id || p?.provider || ''),
+            label: String(p?.label || p?.id || p?.provider || ''),
+            baseUrl: String(p?.baseUrl || ''),
+            models: Array.isArray(p?.models)
+              ? p.models
+                  .map((m: any) =>
+                    typeof m === 'string'
+                      ? { name: String(m), nodeKind: '' }
+                      : { name: String(m?.name || m?.model || ''), nodeKind: String(m?.nodeKind || '') },
+                  )
+                  .filter((x: any) => x && String(x.name || '').trim())
+              : [],
+          }))
+          .filter((p: any) => p.id && p.baseUrl),
       }
-      setCloudModelTestMsg(`测试失败：${msg}`)
+      setCloudAssistConfig(normalized)
+      try {
+        window.localStorage.setItem('flowid.cloud.assist.config.v1', JSON.stringify(normalized))
+      } catch {
+        // ignore
+      }
+      setCloudAssistMsg(normalized.providers.length ? `已更新：${normalized.providers.length} 个 Provider` : '已更新：但未返回 Provider 列表')
+    } catch (e) {
+      setCloudAssistMsg(`拉取失败：${String((e as any)?.message || e)}`)
     }
-  }
+  }, [])
+
+  const testAssistModelAndAdd = useCallback(
+    async (p: { id: string; baseUrl: string }, model: { name: string; nodeKind?: string }) => {
+      const token = String(effectiveCloudAssistToken(p.id) || '').trim()
+      const baseUrl = normalizeOpenAICompatibleBaseUrl(String(p.baseUrl || ''))
+      const m = String(model?.name || '').trim()
+      const nk = String(model?.nodeKind || '').trim()
+      const key = `${p.id}::${m}`
+      if (!token) {
+        setCloudAssistModelStatus((s) => ({ ...s, [key]: '请先填写 Token' }))
+        return
+      }
+      if (!baseUrl) {
+        setCloudAssistModelStatus((s) => ({ ...s, [key]: '缺少 baseUrl' }))
+        return
+      }
+      if (!m) {
+        setCloudAssistModelStatus((s) => ({ ...s, [key]: '缺少模型名' }))
+        return
+      }
+      setCloudAssistModelStatus((s) => ({ ...s, [key]: '测试中…' }))
+      try {
+        const auth = `Bearer ${token}`
+        const res = await fetch(`${baseUrl}/v1/models`, { method: 'GET', headers: { Authorization: auth } })
+        if (!res.ok) {
+          setCloudAssistModelStatus((s) => ({ ...s, [key]: `测试失败：HTTP ${res.status}` }))
+          return
+        }
+        const json = (await res.json().catch(() => ({}))) as any
+        const ids: string[] = Array.isArray(json?.data) ? json.data.map((x: any) => String(x?.id || '')).filter(Boolean) : []
+        if (ids.length && !ids.includes(m)) {
+          // 有些代理会返回完整列表；若不包含就提示但仍允许保存（可能是代理不回全量）
+          setCloudAssistModelStatus((s) => ({ ...s, [key]: '测试通过（列表未包含该模型名，仍已加入）' }))
+        } else {
+          setCloudAssistModelStatus((s) => ({ ...s, [key]: '测试通过，已加入' }))
+        }
+        // 加入自助配置列表：通用（不限定节点）
+        const safeModelId = m.replace(/[^a-zA-Z0-9._\-:/]/g, '_').slice(0, 120)
+        const id = `assist-${String(p.id || 'provider')}-${safeModelId}`
+        upsertCloudSelfPreset({
+          id,
+          nodeKind: nk,
+          providerId: asProviderId(String(p.id || 'doubao')),
+          baseUrl,
+          apiKey: token,
+          model: m,
+        })
+        setCloudSelfPresets(loadCloudSelfPresets())
+      } catch (e) {
+        setCloudAssistModelStatus((s) => ({ ...s, [key]: `测试失败：${String((e as any)?.message || e)}` }))
+      }
+    },
+    [effectiveCloudAssistToken],
+  )
 
   /**
    * 判断是否为可导入的 JSON 工作流文件。
@@ -835,11 +1120,10 @@ export function WorkflowSettingsPanel({
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [bindingCommand, onShortcutBindingChange])
 
+  // 保持：切换主 Tab 时退出内联编辑
   useEffect(() => {
-    if (nodeSubTab !== 'workflow') {
-      setEditingWorkflow(null)
-    }
-  }, [nodeSubTab, activeTab])
+    setEditingWorkflow(null)
+  }, [activeTab])
 
   useEffect(() => {
     if (executionMode !== 'official') return
@@ -1077,7 +1361,7 @@ export function WorkflowSettingsPanel({
       <div className="w-64 border-r border-white/5 flex flex-col pt-8 bg-[#080809] shrink-0 min-h-0">
         <div className="text-[13px] font-black uppercase tracking-[0.4em] text-white/50 mb-6 px-8">系统配置</div>
         <nav className="flex-1 space-y-1.5 px-3 overflow-y-auto custom-scrollbar min-h-0 pb-6">
-          {SETTINGS_SIDEBAR.map((item) => {
+          {sidebarItems.map((item) => {
             const Icon = item.icon
             const isActive = activeTab === item.id
             return (
@@ -1124,58 +1408,6 @@ export function WorkflowSettingsPanel({
           <div className="workflow-settings-panel workflow-settings-panel--flowid space-y-6">
           {activeTab === 'comfy' ? (
             <>
-              <div className="bg-[#111114] border border-white/5 rounded-2xl p-6 space-y-5">
-                <div className="text-[14px] font-black text-white/50 uppercase tracking-widest">执行模式</div>
-                <div className="flex flex-wrap gap-8">
-                  <label className="flex cursor-pointer items-center gap-3 group">
-                    <input
-                      type="radio"
-                      name="workflow-execution-mode"
-                      className="sr-only"
-                      checked={executionMode === 'custom'}
-                      onChange={() => onExecutionModeChange('custom')}
-                    />
-                    <div
-                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-all ${
-                        executionMode === 'custom'
-                          ? 'border-orange-600'
-                          : 'border-white/20 group-hover:border-white/40'
-                      }`}
-                    >
-                      {executionMode === 'custom' ? (
-                        <div className="aspect-square h-2.5 w-2.5 rounded-full bg-orange-600 shadow-[0_0_8px_rgba(234,88,12,0.6)]" />
-                      ) : null}
-                    </div>
-                    <span className="text-[14px] font-black uppercase tracking-wide text-white/70 transition-colors group-hover:text-white">
-                      自定义工作流 (现有模式)
-                    </span>
-                  </label>
-                  <label className="flex cursor-pointer items-center gap-3 group">
-                    <input
-                      type="radio"
-                      name="workflow-execution-mode"
-                      className="sr-only"
-                      checked={executionMode === 'official'}
-                      onChange={() => onExecutionModeChange('official')}
-                    />
-                    <div
-                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-all ${
-                        executionMode === 'official'
-                          ? 'border-orange-600'
-                          : 'border-white/20 group-hover:border-white/40'
-                      }`}
-                    >
-                      {executionMode === 'official' ? (
-                        <div className="aspect-square h-2.5 w-2.5 rounded-full bg-orange-600 shadow-[0_0_8px_rgba(234,88,12,0.6)]" />
-                      ) : null}
-                    </div>
-                    <span className="text-[14px] font-black uppercase tracking-wide text-white/70 transition-colors group-hover:text-white">
-                      官方模板 (后端托管)
-                    </span>
-                  </label>
-                </div>
-              </div>
-
               <div className="bg-[#111114] border border-white/5 rounded-2xl p-6 space-y-5">
                 <div className="text-[14px] font-black text-white/50 uppercase tracking-widest">执行环境</div>
                 <div className="flex flex-wrap gap-8">
@@ -1371,35 +1603,9 @@ export function WorkflowSettingsPanel({
 
           {activeKind && activeNodeConfig ? (
             <div className="space-y-5">
-              <div className="flex items-center gap-1 rounded-full border border-white/5 bg-[#111114] p-1">
-                <button
-                  type="button"
-                  onClick={() => setNodeSubTab('workflow')}
-                  className={`flex-1 rounded-full py-3 text-[13px] font-black uppercase tracking-widest transition-all ${
-                    nodeSubTab === 'workflow'
-                      ? 'border border-white/5 bg-white/5 text-white/90 shadow-xl'
-                      : 'border border-transparent text-white/20 hover:text-white/40'
-                  }`}
-                >
-                  {KIND_LABELS[activeKind]} 工作流
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNodeSubTab('cloud-model')}
-                  className={`flex-1 rounded-full py-3 text-[13px] font-black uppercase tracking-widest transition-all ${
-                    nodeSubTab === 'cloud-model'
-                      ? 'border border-white/5 bg-white/5 text-white/90 shadow-xl'
-                      : 'border border-transparent text-white/20 hover:text-white/40'
-                  }`}
-                >
-                  云端配置
-                </button>
-              </div>
-
-              {nodeSubTab === 'workflow' ? (
-                <div
-                  className={`${WF_CARD} space-y-6 ${editingWorkflow && executionMode === 'custom' ? 'overflow-hidden p-0' : 'p-8'}`}
-                >
+              <div
+                className={`${WF_CARD} space-y-6 ${editingWorkflow && executionMode === 'custom' ? 'overflow-hidden p-0' : 'p-8'}`}
+              >
                   {executionMode === 'official' ? (
                     <div className="space-y-4">
                       <div className={WF_SECTION_TITLE}>官方模板绑定</div>
@@ -1583,158 +1789,15 @@ export function WorkflowSettingsPanel({
                               </div>
                             ))}
                           </div>
+
                         </>
                       ) : null}
                     </>
                   ) : null}
                 </div>
-              ) : null}
+              
 
-              {nodeSubTab === 'cloud-model' ? (
-                <div className={`${WF_CARD} space-y-6 p-6`}>
-                  <div className="border-b border-white/5 pb-4 text-[16px] font-black uppercase tracking-widest text-white/50">
-                    云端模型配置
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={startNewCloudModel}>
-                      新增模型
-                    </button>
-                    {cloudModelTestMsg ? (
-                      <div className="text-[12px] font-mono text-white/35">{cloudModelTestMsg}</div>
-                    ) : null}
-                  </div>
-
-                  {editingCloudModelId ? (
-                    <div className="relative z-10 pointer-events-auto rounded-2xl border border-white/10 bg-black/40 p-4 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="text-[13px] font-black uppercase tracking-widest text-white/60">
-                          模型设置
-                        </div>
-                        <button
-                          type="button"
-                          className={WF_BTN_CAPSULE_MUTED}
-                          onClick={() => setEditingCloudModelId(null)}
-                        >
-                          关闭
-                        </button>
-                      </div>
-                      <input
-                        className={WF_INPUT}
-                        autoFocus
-                        value={cloudModelDraft.name}
-                        placeholder="模型名称"
-                        onChange={(e) => setCloudModelDraft((p) => ({ ...p, name: e.target.value }))}
-                      />
-                      <input
-                        className={WF_INPUT}
-                        value={cloudModelDraft.baseUrl}
-                        placeholder="模型 API 地址（OpenAI 兼容，如 https://xxx ）"
-                        onChange={(e) => setCloudModelDraft((p) => ({ ...p, baseUrl: e.target.value }))}
-                      />
-                      <input
-                        className={WF_INPUT}
-                        type="password"
-                        autoComplete="off"
-                        value={cloudModelDraft.apiKey}
-                        placeholder="API KEY（必填）"
-                        onChange={(e) => setCloudModelDraft((p) => ({ ...p, apiKey: e.target.value }))}
-                      />
-                      <div className="flex flex-wrap gap-2">
-                        <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={saveCloudModelDraft}>
-                          保存
-                        </button>
-                        <button
-                          type="button"
-                          className={WF_BTN_CAPSULE_MUTED}
-                          onClick={() =>
-                            void testCloudModelPreset({
-                              id: editingCloudModelId,
-                              name: cloudModelDraft.name,
-                              baseUrl: cloudModelDraft.baseUrl,
-                              apiKey: cloudModelDraft.apiKey,
-                            })
-                          }
-                        >
-                          测试
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className="space-y-2">
-                    {cloudModelPresets.map((m) => {
-                      const isActive = String(activeNodeConfig.cloudModelName || '').trim() === m.name.trim()
-                      return (
-                        <div
-                          key={m.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => startEditCloudModel(m)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' || e.key === ' ') startEditCloudModel(m)
-                          }}
-                          className={`cursor-pointer select-none flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
-                            isActive ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/30'
-                          }`}
-                        >
-                          <div className="min-w-0">
-                            <div className="truncate text-[13px] font-black uppercase tracking-widest text-white/70">
-                              {m.name}
-                            </div>
-                            <div className="truncate font-mono text-[11px] text-white/30">{m.baseUrl || '-'}</div>
-                          </div>
-                          <div className="flex shrink-0 flex-wrap gap-2">
-                            <button
-                              type="button"
-                              className={WF_BTN_CAPSULE_COMPACT}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                applyCloudModelToActiveKind(m)
-                              }}
-                            >
-                              使用
-                            </button>
-                            <button
-                              type="button"
-                              className={WF_BTN_CAPSULE_COMPACT}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                startEditCloudModel(m)
-                              }}
-                            >
-                              设置
-                            </button>
-                            <button
-                              type="button"
-                              className={WF_BTN_CAPSULE_DARK_COMPACT}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                void testCloudModelPreset(m)
-                              }}
-                            >
-                              测试
-                            </button>
-                            <button
-                              type="button"
-                              className={WF_BTN_CAPSULE_DARK_COMPACT}
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                if (!window.confirm(`确定删除云端模型「${m.name}」吗？`)) return
-                                  if (!activeKind) return
-                                  const next = removeCloudModelPreset(m.id, activeKind)
-                                setCloudModelPresets(next)
-                                if (editingCloudModelId === m.id) setEditingCloudModelId(null)
-                              }}
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
+              
             </div>
           ) : null}
 
@@ -1918,6 +1981,8 @@ export function WorkflowSettingsPanel({
               </div>
             </div>
           ) : null}
+
+          
 
           {activeTab === 'ai-assistant' ? (
             <div className={`${WF_CARD} space-y-8 p-8`}>
@@ -2349,6 +2414,587 @@ export function WorkflowSettingsPanel({
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
+          ) : null}
+
+          {activeTab === 'cloud-models' ? (
+            <div className="space-y-5">
+              <div className={`${WF_CARD} space-y-6 p-6`}>
+                <div className={`${WF_SECTION_TITLE} border-b border-white/5 pb-4`}>云端模型</div>
+
+                <div className="flex items-center gap-2 rounded-full border border-white/5 bg-black/30 p-1">
+                  <button
+                    type="button"
+                    className={`flex-1 rounded-full py-3 text-[13px] font-black uppercase tracking-widest transition-all ${
+                      cloudModelsSubTab === 'self'
+                        ? 'border border-white/5 bg-white/5 text-white/90 shadow-xl'
+                        : 'border border-transparent text-white/20 hover:text-white/40'
+                    }`}
+                    onClick={() => setCloudModelsSubTab('self')}
+                  >
+                    自助模式
+                  </button>
+                  <button
+                    type="button"
+                    className={`flex-1 rounded-full py-3 text-[13px] font-black uppercase tracking-widest transition-all ${
+                      cloudModelsSubTab === 'assist'
+                        ? 'border border-white/5 bg-white/5 text-white/90 shadow-xl'
+                        : 'border border-transparent text-white/20 hover:text-white/40'
+                    }`}
+                    onClick={() => setCloudModelsSubTab('assist')}
+                  >
+                    辅助模式
+                  </button>
+                  <button
+                    type="button"
+                    className={`flex-1 rounded-full py-3 text-[13px] font-black uppercase tracking-widest transition-all ${
+                      cloudModelsSubTab === 'logs'
+                        ? 'border border-white/5 bg-white/5 text-white/90 shadow-xl'
+                        : 'border border-transparent text-white/20 hover:text-white/40'
+                    }`}
+                    onClick={() => setCloudModelsSubTab('logs')}
+                  >
+                    调用记录
+                  </button>
+                </div>
+
+                {cloudModelsSubTab === 'self' ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className={WF_SECTION_TITLE}>配置列表</div>
+                      <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={startNewCloudSelf}>
+                        新增
+                      </button>
+                    </div>
+
+                    {editingCloudSelfId ? (
+                      <div className="rounded-2xl border border-white/10 bg-black/30 p-4 space-y-3">
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div className="space-y-2">
+                            <div className={WF_SECTION_TITLE}>匹配节点</div>
+                            <select
+                              className={WF_SELECT}
+                              value={cloudSelfDraft.nodeKind || ''}
+                              onChange={(e) =>
+                                setCloudSelfDraft((p) => ({ ...p, nodeKind: (e.target.value as any) || '' }))
+                              }
+                            >
+                              <option value="">通用（不限定节点）</option>
+                              {(Object.keys(KIND_LABELS) as StudioNodeKind[]).map((k) => (
+                                <option key={k} value={k}>
+                                  {KIND_LABELS[k]}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="space-y-2">
+                            <div className={WF_SECTION_TITLE}>分类</div>
+                            <select
+                              className={WF_SELECT}
+                              value={cloudSelfDraft.providerId}
+                              onChange={(e) =>
+                                setCloudSelfDraft((p) => ({
+                                  ...p,
+                                  providerId: e.target.value as CloudProviderId,
+                                  model:
+                                    CLOUD_PROVIDERS.find((x) => x.id === (e.target.value as CloudProviderId))
+                                      ?.models?.[0] || p.model,
+                                }))
+                              }
+                            >
+                              {CLOUD_PROVIDERS.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="space-y-2">
+                            <div className={WF_SECTION_TITLE}>默认模型</div>
+                            <select
+                              className={WF_SELECT}
+                              value={cloudSelfDraft.model}
+                              onChange={(e) => setCloudSelfDraft((p) => ({ ...p, model: e.target.value }))}
+                            >
+                              {(CLOUD_PROVIDERS.find((p) => p.id === cloudSelfDraft.providerId)?.models || []).map(
+                                (m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                ),
+                              )}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className={WF_SECTION_TITLE}>API 地址</div>
+                          <input
+                            className={WF_INPUT}
+                            value={cloudSelfDraft.baseUrl}
+                            placeholder="OpenAI 兼容 API 地址"
+                            onChange={(e) => setCloudSelfDraft((p) => ({ ...p, baseUrl: e.target.value }))}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <div className={WF_SECTION_TITLE}>API Key</div>
+                          <div className="relative">
+                            <input
+                              className={`${WF_INPUT} pr-12`}
+                              type={cloudKeyVisible ? 'text' : 'password'}
+                              autoComplete="off"
+                              value={cloudSelfDraft.apiKey}
+                              placeholder="输入 API Key"
+                              onChange={(e) => setCloudSelfDraft((p) => ({ ...p, apiKey: e.target.value }))}
+                            />
+                            <button
+                              type="button"
+                              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-white/5 p-2 text-white/40 hover:bg-white/10 hover:text-white/70"
+                              onClick={() => setCloudKeyVisible((v) => !v)}
+                            >
+                              {cloudKeyVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={saveCloudSelfDraft}>
+                            保存
+                          </button>
+                          <button type="button" className={WF_BTN_CAPSULE_MUTED} onClick={() => void testCloudSelfDraft()}>
+                            测试
+                          </button>
+                          <button
+                            type="button"
+                            className={WF_BTN_CAPSULE_MUTED}
+                            onClick={() => {
+                              setEditingCloudSelfId(null)
+                              setCloudSelfMsg('')
+                            }}
+                          >
+                            关闭
+                          </button>
+                          {cloudSelfMsg ? <div className="self-center text-[12px] font-mono text-white/35">{cloudSelfMsg}</div> : null}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    <div className="space-y-2">
+                      {cloudSelfPresets.length ? (
+                        cloudSelfPresets.map((p) => {
+                          const isActive = (activeCloudSelfPresetId || '') === p.id
+                          return (
+                            <div
+                              key={p.id}
+                              className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
+                                isActive ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/20'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[12px] font-black uppercase tracking-widest text-white/55">
+                                    {p.providerId}
+                                  </span>
+                                  {String((p as any)?.nodeKind || '').trim() ? (
+                                    <span className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-black uppercase tracking-widest text-white/35">
+                                      {KIND_LABELS[(String((p as any).nodeKind) as StudioNodeKind) || 'text'] ||
+                                        String((p as any).nodeKind)}
+                                    </span>
+                                  ) : null}
+                                  <span className="truncate font-mono text-[12px] text-white/35">{p.baseUrl}</span>
+                                </div>
+                                <div className="mt-1 truncate font-mono text-[12px] text-white/45">{p.model}</div>
+                              </div>
+                              <div className="flex shrink-0 flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  className={WF_BTN_CAPSULE_COMPACT}
+                                  onClick={() => {
+                                    setActiveCloudSelfPresetId(p.id)
+                                    setActiveCloudSelfPresetIdState(p.id)
+                                  }}
+                                >
+                                  使用
+                                </button>
+                                <button type="button" className={WF_BTN_CAPSULE_COMPACT} onClick={() => startEditCloudSelf(p)}>
+                                  编辑
+                                </button>
+                                <button
+                                  type="button"
+                                  className={WF_BTN_CAPSULE_DARK_COMPACT}
+                                  onClick={async () => {
+                                    setEditingCloudSelfId(p.id)
+                                    setCloudSelfDraft({
+                                      nodeKind: (String((p as any)?.nodeKind || '') as any) || '',
+                                      providerId: p.providerId as CloudProviderId,
+                                      baseUrl: p.baseUrl,
+                                      apiKey: p.apiKey,
+                                      model: p.model,
+                                    })
+                                    await testCloudSelfDraft()
+                                  }}
+                                >
+                                  测试
+                                </button>
+                                <button
+                                  type="button"
+                                  className={WF_BTN_CAPSULE_DARK_COMPACT}
+                                  onClick={() => {
+                                    if (!window.confirm('确定删除该配置？')) return
+                                    setCloudSelfPresets(removeCloudSelfPreset(p.id))
+                                  }}
+                                >
+                                  删除
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })
+                      ) : (
+                        <div className="rounded-2xl border border-white/5 bg-black/20 p-4 text-[13px] text-white/35">
+                          暂无配置。点击「新增」添加一条。
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : cloudModelsSubTab === 'assist' ? (
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <div className={WF_SECTION_TITLE}>Token</div>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-[12px] leading-relaxed text-white/35">
+                          这里的 Token 允许<strong className="text-white/60">多个共存</strong>，用于不同节点/不同 Provider
+                          的鉴权；不需要“选择当前 Token”。
+                        </div>
+                        <button
+                          type="button"
+                          className={WF_BTN_CAPSULE_MUTED}
+                          onClick={() => {
+                            setCloudAssistTokenEditingMode('new')
+                            setEditingCloudAssistTokenId('')
+                            setCloudAssistTokenProviderDraft('')
+                            setCloudAssistTokenNameDraft('')
+                            setCloudAssistTokenDraft('')
+                            setCloudAssistTokenVisible(false)
+                          }}
+                        >
+                          新增 Token
+                        </button>
+                      </div>
+
+                      <div className="space-y-2">
+                        {cloudAssistTokenPresets.length ? (
+                          cloudAssistTokenPresets.map((x) => {
+                            const active = cloudAssistTokenEditingMode === 'edit' && (editingCloudAssistToken?.id || '') === x.id
+                            return (
+                              <div
+                                key={x.id}
+                                className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 ${
+                                  active ? 'border-orange-500/30 bg-orange-500/5' : 'border-white/5 bg-black/20'
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  className="min-w-0 flex-1 text-left"
+                                  onClick={() => {
+                                    setCloudAssistTokenEditingMode('edit')
+                                    setEditingCloudAssistTokenId(x.id)
+                                  }}
+                                >
+                                  <div className="truncate text-[13px] font-black tracking-wider text-white/60">
+                                    {x.name}{' '}
+                                    {String(x.providerId || '').trim() ? (
+                                      <span className="ml-2 rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] font-black uppercase tracking-widest text-white/35">
+                                        {String(x.providerId).toUpperCase()}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <div className="mt-1 font-mono text-[11px] text-white/30">
+                                    {x.updatedAtMs ? new Date(x.updatedAtMs).toLocaleString('zh-CN') : ''}
+                                  </div>
+                                </button>
+                                <div className="flex shrink-0 flex-wrap gap-2">
+                                  <button
+                                    type="button"
+                                    className={WF_BTN_CAPSULE_DARK_COMPACT}
+                                    onClick={() => {
+                                      if (!window.confirm(`确定删除令牌「${x.name}」？`)) return
+                                      const next = cloudAssistTokenPresets.filter((t) => t.id !== x.id)
+                                      setCloudAssistTokenPresets(next)
+                                      persistCloudAssistTokenPresets(next)
+                                      if ((editingCloudAssistToken?.id || '') === x.id) {
+                                        setCloudAssistTokenEditingMode('none')
+                                        setEditingCloudAssistTokenId('')
+                                        setCloudAssistTokenProviderDraft('')
+                                        setCloudAssistTokenNameDraft('')
+                                        setCloudAssistTokenDraft('')
+                                      }
+                                    }}
+                                  >
+                                    删除
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })
+                        ) : (
+                          <div className="rounded-2xl border border-white/5 bg-black/20 p-4 text-[13px] text-white/35">
+                            暂无 Token。点击右上角「新增 Token」添加一条。
+                          </div>
+                        )}
+                      </div>
+
+                      {cloudAssistTokenEditingMode === 'none' ? null : (
+                        <div className="rounded-2xl border border-white/10 bg-black/30 p-4 space-y-3">
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div className="space-y-2">
+                              <div className={WF_SECTION_TITLE}>分类</div>
+                              <select
+                                className={WF_SELECT}
+                                value={cloudAssistTokenProviderDraft}
+                                onChange={(e) => setCloudAssistTokenProviderDraft(String(e.target.value || ''))}
+                              >
+                                <option value="">通用（不限定 Provider）</option>
+                                {CLOUD_PROVIDERS.map((p) => (
+                                  <option key={p.id} value={p.id}>
+                                    {p.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="space-y-2">
+                              <div className={WF_SECTION_TITLE}>名称</div>
+                              <input
+                                className={WF_INPUT}
+                                autoComplete="off"
+                                value={cloudAssistTokenNameDraft}
+                                placeholder="例如：默认 / 备用 / 团队"
+                                onChange={(e) => setCloudAssistTokenNameDraft(e.target.value)}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <div className={WF_SECTION_TITLE}>Token</div>
+                            <div className="relative">
+                              <input
+                                className={`${WF_INPUT} pr-12`}
+                                type={cloudAssistTokenVisible ? 'text' : 'password'}
+                                autoComplete="off"
+                                value={cloudAssistTokenDraft}
+                                placeholder="填写 Token"
+                                onChange={(e) => setCloudAssistTokenDraft(e.target.value)}
+                              />
+                              <button
+                                type="button"
+                                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-white/5 p-2 text-white/40 hover:bg-white/10 hover:text-white/70"
+                                onClick={() => setCloudAssistTokenVisible((v) => !v)}
+                              >
+                                {cloudAssistTokenVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              className={WF_BTN_CAPSULE_DARK}
+                              onClick={() => {
+                                const providerId = String(cloudAssistTokenProviderDraft || '').trim()
+                                const name = String(cloudAssistTokenNameDraft || '').trim()
+                                const token = String(cloudAssistTokenDraft || '')
+                                if (!name) return
+                                if (cloudAssistTokenEditingMode === 'new') {
+                                  const id = crypto.randomUUID()
+                                  const next = [
+                                    { id, providerId, name, token, updatedAtMs: Date.now() },
+                                    ...cloudAssistTokenPresets,
+                                  ]
+                                  setCloudAssistTokenPresets(next)
+                                  persistCloudAssistTokenPresets(next)
+                                  setCloudAssistTokenEditingMode('none')
+                                  setEditingCloudAssistTokenId('')
+                                  setCloudAssistTokenProviderDraft('')
+                                  setCloudAssistTokenNameDraft('')
+                                  setCloudAssistTokenDraft('')
+                                  setCloudAssistTokenVisible(false)
+                                  return
+                                }
+                                const cur = editingCloudAssistToken
+                                if (!cur) return
+                                const next = cloudAssistTokenPresets.map((t) =>
+                                  t.id === cur.id ? { ...t, providerId, name, token, updatedAtMs: Date.now() } : t,
+                                )
+                                setCloudAssistTokenPresets(next)
+                                persistCloudAssistTokenPresets(next)
+                                setCloudAssistTokenEditingMode('none')
+                                setEditingCloudAssistTokenId('')
+                                setCloudAssistTokenProviderDraft('')
+                                setCloudAssistTokenNameDraft('')
+                                setCloudAssistTokenDraft('')
+                                setCloudAssistTokenVisible(false)
+                              }}
+                            >
+                              保存
+                            </button>
+                            <button
+                              type="button"
+                              className={WF_BTN_CAPSULE_MUTED}
+                              onClick={() => {
+                                setCloudAssistTokenEditingMode('none')
+                                setEditingCloudAssistTokenId('')
+                                setCloudAssistTokenProviderDraft('')
+                                setCloudAssistTokenNameDraft('')
+                                setCloudAssistTokenDraft('')
+                                setCloudAssistTokenVisible(false)
+                              }}
+                            >
+                              取消
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <button type="button" className={WF_SYNC_BTN} onClick={() => void pullCloudAssistConfig()}>
+                      确认
+                    </button>
+
+                    {cloudAssistMsg ? (
+                      <div className="rounded-2xl border border-white/5 bg-black/20 p-4 text-[13px] leading-relaxed text-white/40">
+                        {cloudAssistMsg}
+                      </div>
+                    ) : null}
+
+                    {cloudAssistConfig?.providers?.length ? (
+                      <div className="space-y-3">
+                        <div className={WF_SECTION_TITLE}>可用模型（点测试后加入节点下拉）</div>
+                        <div className="overflow-hidden rounded-2xl border border-white/5 bg-black/20">
+                          <div className="grid grid-cols-[120px_1fr_140px] gap-2 border-b border-white/5 bg-black/40 px-4 py-3 text-[12px] font-black uppercase tracking-[0.2em] text-white/20">
+                            <span>Provider</span>
+                            <span>模型</span>
+                            <span className="text-right">操作</span>
+                          </div>
+                          <div className="max-h-[420px] overflow-auto custom-scrollbar">
+                            {cloudAssistConfig.providers.flatMap((p) =>
+                              (p.models || []).map((m) => {
+                                const k = `${p.id}::${m.name}`
+                                return (
+                                  <div
+                                    key={k}
+                                    className="grid grid-cols-[120px_1fr_140px] items-center gap-2 border-t border-white/5 px-4 py-3"
+                                  >
+                                    <span className="truncate text-[12px] font-black uppercase tracking-widest text-white/45">
+                                      {p.id}
+                                    </span>
+                                    <div className="min-w-0">
+                                      <div className="truncate font-mono text-[12px] text-white/55">{m.name}</div>
+                                      {cloudAssistModelStatus[k] ? (
+                                        <div className="mt-1 font-mono text-[11px] text-white/30">
+                                          {cloudAssistModelStatus[k]}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                    <div className="text-right">
+                                      <button
+                                        type="button"
+                                        className={WF_BTN_CAPSULE_DARK_COMPACT}
+                                        onClick={() => void testAssistModelAndAdd(p, m)}
+                                      >
+                                        测试
+                                      </button>
+                                    </div>
+                                  </div>
+                                )
+                              }),
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-2">
+                      <div className={WF_SECTION_TITLE}>调用记录</div>
+                      <div className="text-[12px] text-white/30">只保留近 3 天，超过自动删除</div>
+                    </div>
+
+                    <div className="overflow-hidden rounded-2xl border border-white/5 bg-black/20">
+                      <div className="grid grid-cols-[160px_120px_1fr_80px] gap-2 border-b border-white/5 bg-black/40 px-4 py-3 text-[12px] font-black uppercase tracking-[0.2em] text-white/20">
+                        <span>时间</span>
+                        <span>节点</span>
+                        <span>模型</span>
+                        <span className="text-right">次数</span>
+                      </div>
+                      <div className="max-h-[360px] overflow-auto custom-scrollbar">
+                        {pagedCloudLogs.items.length ? (
+                          pagedCloudLogs.items.map((r) => (
+                            <div
+                              key={`${r.ts}-${r.nodeKind}-${r.model}`}
+                              className="grid grid-cols-[160px_120px_1fr_80px] items-center gap-2 border-t border-white/5 px-4 py-3 text-[13px] text-white/55"
+                            >
+                              <span className="font-mono text-[12px] text-white/35">
+                                {new Date(r.ts).toLocaleString('zh-CN')}
+                              </span>
+                              <span className="text-white/55">
+                                {KIND_LABELS[(r.nodeKind as StudioNodeKind) || 'text'] ||
+                                  String(r.nodeKind || '-')}
+                              </span>
+                              <span className="min-w-0 truncate font-mono text-[12px] text-white/45">{r.model}</span>
+                              <span className="text-right font-mono text-[12px] text-white/45">{r.count}</span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="px-4 py-6 text-[13px] leading-relaxed text-white/35">
+                            暂无记录。
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {pagedCloudLogs.totalPages > 1 ? (
+                      <div className="flex items-center justify-center gap-2 pt-2">
+                        <button
+                          type="button"
+                          className={WF_BTN_CAPSULE_DARK}
+                          disabled={pagedCloudLogs.page <= 1}
+                          onClick={() => setCloudLogsPage((p) => Math.max(1, p - 1))}
+                        >
+                          ←
+                        </button>
+                        <div className="font-mono text-[12px] text-white/35">
+                          {String(pagedCloudLogs.page).padStart(2, '0')} /{' '}
+                          {String(pagedCloudLogs.totalPages).padStart(2, '0')}
+                        </div>
+                        <button
+                          type="button"
+                          className={WF_BTN_CAPSULE_DARK}
+                          disabled={pagedCloudLogs.page >= pagedCloudLogs.totalPages}
+                          onClick={() => setCloudLogsPage((p) => Math.min(pagedCloudLogs.totalPages, p + 1))}
+                        >
+                          →
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {activeTab === 'user-agreement' ? (
+            <div className={`${WF_CARD} p-6`}>
+              <div className="space-y-4">
+                <div className={WF_SECTION_TITLE}>只读协议文本（可滚动）</div>
+                <textarea
+                  readOnly
+                  value={USER_AGREEMENT_TEXT}
+                  className={`${WF_INPUT} min-h-[520px] max-h-[60vh] resize-y whitespace-pre-wrap leading-relaxed`}
+                  aria-label="用户协议（只读）"
+                />
               </div>
             </div>
           ) : null}

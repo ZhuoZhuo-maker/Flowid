@@ -20,6 +20,8 @@ declare global {
         | { ok: false; error: string }
       >
       getAppVersion: () => Promise<string>
+      /** 获取稳定机器码（用于授权绑定） */
+      getMachineId?: () => Promise<string>
       checkForUpdates: () => Promise<{ ok: boolean; hasUpdate?: boolean; reason?: string }>
       /** 读取本地 UTF-8 文件（桌面端） */
       readUtf8File?: (filePath: string) => Promise<{ ok: boolean; text?: string; error?: string }>

@@ -139,9 +139,7 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
             </p>
             {!clientStatus.ok ? (
               <p className="mt-3 mb-0 max-w-[220px] text-[11px] leading-relaxed tracking-wide text-white/35">
-                {clientStatus.reason === 'missing_token'
-                  ? `未登录或未配置认证服务。请先在右上角「注册 / 登录」里填写认证服务地址（例如 ${clientStatus.baseUrl || 'http://127.0.0.1:3721'}），并完成登录。`
-                  : `未配置认证服务地址。请在「注册 / 登录」里填写认证服务地址（例如 ${clientStatus.baseUrl || 'http://127.0.0.1:3721'}）。`}
+                {`未配置授权服务地址。请在右上角「授权」里填写授权服务地址（例如 ${clientStatus.baseUrl || 'http://127.0.0.1:3721'}）。`}
               </p>
             ) : null}
           </div>

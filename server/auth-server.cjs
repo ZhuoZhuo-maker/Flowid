@@ -3,11 +3,8 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const express = require('express')
 const cors = require('cors')
-const jwt = require('jsonwebtoken')
 
 const PORT = Number(process.env.AUTH_SERVER_PORT || 3721)
-const JWT_SECRET = process.env.AUTH_JWT_SECRET || 'flowid-dev-secret-change-me'
-const TOKEN_EXPIRES_IN = process.env.AUTH_TOKEN_EXPIRES_IN || '7d'
 const LICENSE_DAYS = Number(process.env.AUTH_LICENSE_DAYS || 30)
 const ADMIN_SECRET = process.env.AUTH_ADMIN_SECRET || 'flowid-admin-dev'
 const SYSTEM_PROMPT_HMAC_SECRET =
@@ -17,6 +14,7 @@ const TEMPLATES_DIR = path.resolve(__dirname, 'templates')
 const TEMPLATE_INDEX_PATH = path.join(TEMPLATES_DIR, 'index.json')
 const SYSTEM_PROMPTS_DIR = path.resolve(__dirname, 'system-prompts')
 const SYSTEM_PROMPTS_INDEX_PATH = path.join(SYSTEM_PROMPTS_DIR, 'index.json')
+const CLOUD_MODELS_PATH = path.resolve(__dirname, 'cloud-models.json')
 const DAY_MS = 24 * 60 * 60 * 1000
 const TASK_TIMEOUT_MS = 30 * 60 * 1000
 const tasks = new Map()
@@ -39,12 +37,22 @@ const tasks = new Map()
  */
 
 /**
- * @typedef {{ users: UserRecord[] }} AuthDb
+ * @typedef {{
+ *  users?: UserRecord[]
+ *  licenses?: Array<{
+ *    codeHash: string
+ *    expiresAtMs: number
+ *    entitlements?: Record<string, any>
+ *    frozen?: boolean
+ *    boundMachineId?: string
+ *    createdAtMs: number
+ *  }>
+ * }} AuthDb
  */
 
 function ensureDb() {
   if (!fs.existsSync(DB_PATH)) {
-    const initial = { users: [] }
+    const initial = { users: [], licenses: [] }
     fs.writeFileSync(DB_PATH, JSON.stringify(initial, null, 2), 'utf8')
   }
 }
@@ -55,7 +63,11 @@ function ensureDb() {
 function readDb() {
   ensureDb()
   const raw = fs.readFileSync(DB_PATH, 'utf8')
-  return JSON.parse(raw)
+  const parsed = JSON.parse(raw)
+  if (!parsed || typeof parsed !== 'object') return { users: [], licenses: [] }
+  if (!Array.isArray(parsed.users)) parsed.users = []
+  if (!Array.isArray(parsed.licenses)) parsed.licenses = []
+  return parsed
 }
 
 /**
@@ -63,6 +75,55 @@ function readDb() {
  */
 function writeDb(db) {
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf8')
+}
+
+function ensureCloudModels() {
+  if (!fs.existsSync(CLOUD_MODELS_PATH)) {
+    const initial = { token: '', providers: [] }
+    fs.writeFileSync(CLOUD_MODELS_PATH, JSON.stringify(initial, null, 2), 'utf8')
+  }
+}
+
+function readCloudModels() {
+  ensureCloudModels()
+  try {
+    const raw = fs.readFileSync(CLOUD_MODELS_PATH, 'utf8')
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return { token: '', providers: [] }
+    if (!Array.isArray(parsed.providers)) parsed.providers = []
+    parsed.token = String(parsed.token || '')
+    // 兼容旧数据：曾有版本把对象模型 String() 成 "[object Object]"，这里丢弃这些脏值
+    parsed.providers = parsed.providers
+      .map((p) => {
+        const modelsRaw = Array.isArray(p?.models) ? p.models : []
+        const models = modelsRaw
+          .map((m) => {
+            if (typeof m === 'string') {
+              const s = String(m).trim()
+              if (!s || s === '[object Object]') return null
+              return s
+            }
+            if (m && typeof m === 'object') {
+              const name = String(m?.name || m?.model || '').trim()
+              if (!name || name === '[object Object]') return null
+              return { name, nodeKind: String(m?.nodeKind || '').trim() }
+            }
+            return null
+          })
+          .filter(Boolean)
+        return { ...p, models }
+      })
+      .filter((p) => p && (p.id || p.provider))
+    return parsed
+  } catch {
+    return { token: '', providers: [] }
+  }
+}
+
+function writeCloudModels(next) {
+  const token = String(next?.token || '')
+  const providers = Array.isArray(next?.providers) ? next.providers : []
+  fs.writeFileSync(CLOUD_MODELS_PATH, JSON.stringify({ token, providers }, null, 2), 'utf8')
 }
 
 function ensureTemplatesIndex() {
@@ -317,6 +378,55 @@ function sha256(raw) {
   return crypto.createHash('sha256').update(raw).digest('hex')
 }
 
+function normalizeTier(v) {
+  const t = String(v || '').trim().toLowerCase()
+  return t === 'pro' ? 'pro' : 'free'
+}
+
+function isLicenseActive(license) {
+  if (!license) return false
+  if (license.frozen) return false
+  return Number(license.expiresAtMs || 0) > Date.now()
+}
+
+function pickEntitlements(license) {
+  const ent = license && typeof license.entitlements === 'object' ? license.entitlements : null
+  return ent && !Array.isArray(ent) ? ent : undefined
+}
+
+function resolveLicenseFromHeaders(req) {
+  const licenseCode = String(req.headers['x-license-code'] || '').trim()
+  const machineId = String(req.headers['x-machine-id'] || '').trim()
+  if (!licenseCode || !machineId) return { ok: false, message: '缺少授权信息（x-license-code / x-machine-id）' }
+  const db = readDb()
+  const codeHash = sha256(licenseCode)
+  const license = (db.licenses || []).find((l) => l.codeHash === codeHash)
+  if (!license) return { ok: false, message: '授权码无效' }
+  if (license.boundMachineId && license.boundMachineId !== machineId) {
+    return { ok: false, message: '授权码已绑定其他设备' }
+  }
+  if (license.frozen) return { ok: false, message: '授权已冻结' }
+  if (!Number(license.expiresAtMs || 0) || Number(license.expiresAtMs || 0) <= Date.now()) {
+    return { ok: false, message: '授权已到期' }
+  }
+  return { ok: true, license, licenseCode, machineId, db }
+}
+
+function resolveLicenseFromHeadersOptional(req) {
+  const licenseCode = String(req.headers['x-license-code'] || '').trim()
+  const machineId = String(req.headers['x-machine-id'] || '').trim()
+  if (!licenseCode || !machineId) return { ok: true, license: null, entitlements: {}, reason: 'missing_headers' }
+  const db = readDb()
+  const codeHash = sha256(licenseCode)
+  const license = (db.licenses || []).find((l) => l.codeHash === codeHash)
+  if (!license) return { ok: true, license: null, entitlements: {}, reason: 'invalid_code' }
+  if (license.boundMachineId && license.boundMachineId !== machineId) {
+    return { ok: true, license: null, entitlements: {}, reason: 'machine_mismatch' }
+  }
+  if (license.frozen) return { ok: true, license: null, entitlements: {}, reason: 'frozen' }
+  return { ok: true, license, entitlements: pickEntitlements(license) || {}, reason: 'ok' }
+}
+
 /**
  * @param {UserRecord} user
  * @returns {LicenseStatus}
@@ -332,22 +442,6 @@ function resolveLicenseStatus(user) {
 /**
  * @param {UserRecord} user
  */
-function issueToken(user) {
-  return jwt.sign(
-    {
-      sub: user.id,
-      account: user.account,
-    },
-    JWT_SECRET,
-    {
-      expiresIn: TOKEN_EXPIRES_IN,
-    },
-  )
-}
-
-/**
- * @param {UserRecord} user
- */
 function toAuthPayload(user) {
   return {
     userId: user.id,
@@ -356,7 +450,7 @@ function toAuthPayload(user) {
     machineCode: user.machineCode || '',
     licenseStatus: resolveLicenseStatus(user),
     expiresAtMs: user.expiresAtMs,
-    token: issueToken(user),
+    token: '',
   }
 }
 
@@ -365,6 +459,11 @@ app.use(cors())
 // Proxy requests (OpenAI compat) may include larger JSON payloads.
 app.use(express.json({ limit: '25mb' }))
 app.use(express.static(path.join(__dirname, 'public')))
+
+// 后端管理页入口（静态页面；接口仍由 /admin/* 提供）
+app.get('/admin', (_req, res) => {
+  res.redirect('/admin.html')
+})
 
 function isAllowedProxyTarget(rawUrl) {
   try {
@@ -415,23 +514,76 @@ app.get('/healthz', (_req, res) => {
   res.json({ ok: true, service: 'flowid-auth-server' })
 })
 
-app.get('/templates', authMiddleware, (_req, res) => {
-  const templates = readTemplatesIndex().map((item) => ({
+/**
+ * 辅助模式（配置下发）：拉取后台预设的「模型 + 接口地址」配置。
+ * - 不做鉴权：用户请求与结果都直连第三方；此处仅下发可用的 baseUrl/model 清单。
+ * - Response: { providers: [{ id, label, baseUrl, models[] }], serverTimeMs }
+ */
+app.get('/cloud-models', (_req, res) => {
+  const cfg = readCloudModels()
+  const providers = (cfg.providers || [])
+    .map((p) => ({
+      id: String(p?.id || p?.provider || ''),
+      label: String(p?.label || p?.id || p?.provider || ''),
+      baseUrl: String(p?.baseUrl || ''),
+      models: Array.isArray(p?.models)
+        ? p.models
+            .map((m) => {
+              if (typeof m === 'string') return { name: String(m), nodeKind: '' }
+              if (m && typeof m === 'object')
+                return {
+                  name: String(m?.name || m?.model || ''),
+                  nodeKind: String(m?.nodeKind || ''),
+                }
+              return null
+            })
+            .filter(Boolean)
+        : [],
+    }))
+    .filter((p) => p.id && p.baseUrl)
+  res.json({ providers, serverTimeMs: Date.now() })
+})
+
+app.get('/templates', licenseMiddleware, (req, res) => {
+  // legacy: kept for compatibility, but we now allow public free listing via optional license.
+  res.redirect('/templates/groups')
+})
+
+app.get('/templates/groups', (req, res) => {
+  const resolved = resolveLicenseFromHeadersOptional(req)
+  const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
+  const all = readTemplatesIndex().map((item) => ({
     id: item.id,
     name: item.name,
     version: item.version,
     category: item.category || 'image',
     description: item.description || '',
     paramsSchema: item.paramsSchema || {},
+    tier: normalizeTier(item.tier),
   }))
-  res.json({ templates })
+  const free = all.filter((t) => t.tier === 'free')
+  const pro = canSeePro ? all.filter((t) => t.tier === 'pro') : []
+  res.json({
+    groups: [
+      { id: 'free', label: '免费预设模板', tier: 'free', items: free },
+      { id: 'member', label: '会员预设模板', tier: 'pro', items: pro },
+    ],
+    serverTimeMs: Date.now(),
+  })
 })
 
-app.get('/templates/:id', authMiddleware, (req, res) => {
+app.get('/templates/:id', (req, res) => {
   const id = String(req.params.id || '').trim()
   const template = readTemplatesIndex().find((item) => item.id === id)
   if (!template) {
     res.status(404).json({ message: '模板不存在' })
+    return
+  }
+  const tier = normalizeTier(template.tier)
+  const resolved = resolveLicenseFromHeadersOptional(req)
+  const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
+  if (tier === 'pro' && !canSeePro) {
+    res.status(403).json({ message: '该模板为会员内容，请先激活授权' })
     return
   }
   res.json({
@@ -442,25 +594,49 @@ app.get('/templates/:id', authMiddleware, (req, res) => {
     description: template.description || '',
     paramsSchema: template.paramsSchema || {},
     workflowFile: template.workflowFile,
+    tier,
   })
 })
 
-app.get('/system-prompts', authMiddleware, (_req, res) => {
-  const prompts = readSystemPromptsIndex().map((item) => ({
+app.get('/system-prompts', (req, res) => {
+  // legacy endpoint: return groups as well (keeps old clients working)
+  res.redirect('/system-prompts/groups')
+})
+
+app.get('/system-prompts/groups', (req, res) => {
+  const resolved = resolveLicenseFromHeadersOptional(req)
+  const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
+  const all = readSystemPromptsIndex().map((item) => ({
     id: item.id,
     name: item.name,
     version: item.version,
     category: item.category || 'general',
     description: item.description || '',
+    tier: normalizeTier(item.tier),
   }))
-  res.json({ prompts })
+  const free = all.filter((p) => p.tier === 'free')
+  const pro = canSeePro ? all.filter((p) => p.tier === 'pro') : []
+  res.json({
+    groups: [
+      { id: 'free', label: '免费提示词模板', tier: 'free', items: free },
+      { id: 'member', label: '会员提示词模板', tier: 'pro', items: pro },
+    ],
+    serverTimeMs: Date.now(),
+  })
 })
 
-app.get('/system-prompts/:id', authMiddleware, (req, res) => {
+app.get('/system-prompts/:id', (req, res) => {
   const id = String(req.params.id || '').trim()
   const prompt = readSystemPromptsIndex().find((item) => item.id === id)
   if (!prompt) {
     res.status(404).json({ message: '系统提示词不存在' })
+    return
+  }
+  const tier = normalizeTier(prompt.tier)
+  const resolved = resolveLicenseFromHeadersOptional(req)
+  const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
+  if (tier === 'pro' && !canSeePro) {
+    res.status(403).json({ message: '该系统提示词为会员内容，请先激活授权' })
     return
   }
   const promptPath = path.join(SYSTEM_PROMPTS_DIR, prompt.promptFile)
@@ -482,10 +658,11 @@ app.get('/system-prompts/:id', authMiddleware, (req, res) => {
     category: prompt.category || 'general',
     description: prompt.description || '',
     systemPromptText: text,
+    tier,
   })
 })
 
-app.post('/tasks/submit', authMiddleware, (req, res) => {
+app.post('/tasks/submit', licenseMiddleware, (req, res) => {
   const templateId = String(req.body?.templateId || '').trim()
   const params = req.body?.params && typeof req.body.params === 'object' ? req.body.params : {}
   const provider = req.body?.provider && typeof req.body.provider === 'object' ? req.body.provider : {}
@@ -516,7 +693,7 @@ app.post('/tasks/submit', authMiddleware, (req, res) => {
   res.json({ taskId, status: 'queued' })
 })
 
-app.get('/tasks/:taskId/status', authMiddleware, (req, res) => {
+app.get('/tasks/:taskId/status', licenseMiddleware, (req, res) => {
   const taskId = String(req.params.taskId || '').trim()
   const task = tasks.get(taskId)
   if (!task) {
@@ -535,84 +712,86 @@ app.get('/tasks/:taskId/status', authMiddleware, (req, res) => {
   })
 })
 
-app.post('/auth/register', (req, res) => {
-  const account = String(req.body?.account || '').trim()
-  const password = String(req.body?.password || '').trim()
-  const machineCode = String(req.body?.machineCode || '').trim()
-
-  if (!account || !password) {
-    res.status(400).json({ message: '账号或密码不能为空' })
+app.post('/license/activate', (req, res) => {
+  const licenseCode = String(req.body?.licenseCode || '').trim()
+  const machineId = String(req.body?.machineId || '').trim()
+  if (!licenseCode || !machineId) {
+    res.status(400).json({ message: 'licenseCode / machineId 不能为空' })
     return
   }
-
   const db = readDb()
-  const exists = db.users.find((u) => u.account.toLowerCase() === account.toLowerCase())
-  if (exists) {
-    res.status(409).json({ message: '账号已存在，请直接登录' })
+  const codeHash = sha256(licenseCode)
+  const lic = (db.licenses || []).find((l) => l.codeHash === codeHash)
+  if (!lic) {
+    res.status(404).json({ message: '授权码无效' })
     return
   }
-
-  const now = Date.now()
-  /** @type {UserRecord} */
-  const user = {
-    id: crypto.randomUUID(),
-    account,
-    nickname: account,
-    passwordHash: sha256(password),
-    machineCode: machineCode || undefined,
-    expiresAtMs: now + LICENSE_DAYS * DAY_MS,
-    frozen: false,
-    createdAtMs: now,
-  }
-  db.users.push(user)
-  writeDb(db)
-  res.json(toAuthPayload(user))
-})
-
-app.post('/auth/login', (req, res) => {
-  const account = String(req.body?.account || '').trim()
-  const password = String(req.body?.password || '').trim()
-  const machineCode = String(req.body?.machineCode || '').trim()
-  if (!account || !password) {
-    res.status(400).json({ message: '账号或密码不能为空' })
+  if (lic.frozen) {
+    res.status(403).json({ message: '授权已冻结' })
     return
   }
-
-  const db = readDb()
-  const user = db.users.find((u) => u.account.toLowerCase() === account.toLowerCase())
-  if (!user) {
-    res.status(404).json({ message: '账号不存在' })
+  if (lic.boundMachineId && lic.boundMachineId !== machineId) {
+    res.status(403).json({ message: '授权码已绑定其他设备' })
     return
   }
-  if (user.passwordHash !== sha256(password)) {
-    res.status(401).json({ message: '密码错误' })
-    return
-  }
-  if (user.machineCode && machineCode && user.machineCode !== machineCode) {
-    res.status(403).json({ message: '该账号已绑定其他设备（仅允许1台）' })
-    return
-  }
-  if (!user.machineCode && machineCode) {
-    user.machineCode = machineCode
+  if (!lic.boundMachineId) {
+    lic.boundMachineId = machineId
     writeDb(db)
   }
-  res.json(toAuthPayload(user))
+  res.json({
+    licenseCode,
+    machineId,
+    expiresAtMs: lic.expiresAtMs,
+    entitlements: pickEntitlements(lic),
+    serverTimeMs: Date.now(),
+  })
 })
 
-function authMiddleware(req, res, next) {
-  const auth = String(req.headers.authorization || '')
-  if (!auth.startsWith('Bearer ')) {
-    res.status(401).json({ message: '缺少授权令牌' })
+app.post('/license/verify', (req, res) => {
+  const licenseCode = String(req.body?.licenseCode || '').trim()
+  const machineId = String(req.body?.machineId || '').trim()
+  if (!licenseCode || !machineId) {
+    res.status(400).json({ message: 'licenseCode / machineId 不能为空' })
     return
   }
-  const token = auth.slice('Bearer '.length)
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    req.auth = decoded
-    next()
-  } catch {
-    res.status(401).json({ message: '令牌无效或已过期' })
+  const db = readDb()
+  const codeHash = sha256(licenseCode)
+  const lic = (db.licenses || []).find((l) => l.codeHash === codeHash)
+  if (!lic) {
+    res.status(404).json({ message: '授权码无效' })
+    return
   }
+  if (lic.frozen) {
+    res.status(403).json({ message: '授权已冻结' })
+    return
+  }
+  if (lic.boundMachineId && lic.boundMachineId !== machineId) {
+    res.status(403).json({ message: '授权码已绑定其他设备' })
+    return
+  }
+  if (!lic.boundMachineId) {
+    // 允许 verify 也完成首次绑定（对“先输入码再点刷新”的用户更友好）
+    lic.boundMachineId = machineId
+    writeDb(db)
+  }
+  res.json({
+    licenseCode,
+    machineId,
+    expiresAtMs: lic.expiresAtMs,
+    entitlements: pickEntitlements(lic),
+    serverTimeMs: Date.now(),
+  })
+})
+
+function licenseMiddleware(req, res, next) {
+  const resolved = resolveLicenseFromHeaders(req)
+  if (!resolved.ok) {
+    res.status(401).json({ message: resolved.message })
+    return
+  }
+  req.license = resolved.license
+  req.licenseEntitlements = pickEntitlements(resolved.license) || {}
+  next()
 }
 
 function adminMiddleware(req, res, next) {
@@ -632,22 +811,177 @@ function adminMiddleware(req, res, next) {
   next()
 }
 
-app.get('/auth/license/status', authMiddleware, (req, res) => {
-  const userId = String(req.auth?.sub || '')
-  const db = readDb()
-  const user = db.users.find((u) => u.id === userId)
-  if (!user) {
-    res.status(404).json({ message: '用户不存在' })
-    return
-  }
+app.get('/admin/cloud-models', adminMiddleware, (_req, res) => {
+  const cfg = readCloudModels()
   res.json({
-    userId: user.id,
-    account: user.account,
-    nickname: user.nickname,
-    machineCode: user.machineCode || '',
-    licenseStatus: resolveLicenseStatus(user),
-    expiresAtMs: user.expiresAtMs,
+    providers: Array.isArray(cfg.providers) ? cfg.providers : [],
+    serverTimeMs: Date.now(),
   })
+})
+
+app.post('/admin/cloud-models/save', adminMiddleware, (req, res) => {
+  const providersRaw = Array.isArray(req.body?.providers) ? req.body.providers : []
+  const providers = providersRaw
+    .map((p) => ({
+      id: String(p?.id || p?.provider || '').trim(),
+      label: String(p?.label || p?.id || p?.provider || '').trim(),
+      baseUrl: String(p?.baseUrl || '').trim(),
+      models: Array.isArray(p?.models)
+        ? p.models
+            .map((m) => {
+              if (typeof m === 'string') return { name: String(m), nodeKind: '' }
+              if (m && typeof m === 'object')
+                return {
+                  name: String(m?.name || m?.model || '').trim(),
+                  nodeKind: String(m?.nodeKind || '').trim(),
+                }
+              return null
+            })
+            .filter((x) => x && x.name)
+        : [],
+    }))
+    .filter((p) => p.id && p.baseUrl)
+  writeCloudModels({ token: String(readCloudModels()?.token || ''), providers })
+  res.json({ ok: true, providers: providers.length, serverTimeMs: Date.now() })
+})
+
+app.post('/admin/licenses/issue', adminMiddleware, (req, res) => {
+  const daysRaw = Number(req.body?.days)
+  const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(3650, Math.floor(daysRaw))) : LICENSE_DAYS
+  const entitlements =
+    req.body?.entitlements && typeof req.body.entitlements === 'object' && !Array.isArray(req.body.entitlements)
+      ? req.body.entitlements
+      : { proTemplates: true, cloudModels: true }
+  const now = Date.now()
+  const licenseCode = `LIC-${crypto.randomUUID().replaceAll('-', '')}`
+  const codeHash = sha256(licenseCode)
+  const db = readDb()
+  db.licenses = Array.isArray(db.licenses) ? db.licenses : []
+  db.licenses.unshift({
+    codeHash,
+    expiresAtMs: now + days * DAY_MS,
+    entitlements,
+    frozen: false,
+    boundMachineId: '',
+    createdAtMs: now,
+  })
+  writeDb(db)
+  res.json({
+    ok: true,
+    licenseCode,
+    expiresAtMs: now + days * DAY_MS,
+    entitlements,
+  })
+})
+
+app.get('/admin/licenses', adminMiddleware, (_req, res) => {
+  const db = readDb()
+  const list = (db.licenses || []).map((l) => ({
+    codeHash: String(l.codeHash || ''),
+    id: String(l.codeHash || '').slice(0, 12),
+    expiresAtMs: Number(l.expiresAtMs || 0),
+    frozen: Boolean(l.frozen),
+    boundMachineId: String(l.boundMachineId || ''),
+    entitlements: pickEntitlements(l) || {},
+    createdAtMs: Number(l.createdAtMs || 0),
+  }))
+  list.sort((a, b) => Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0))
+  res.json({ total: list.length, licenses: list, serverTimeMs: Date.now() })
+})
+
+app.post('/admin/licenses/freeze', adminMiddleware, (req, res) => {
+  const codeHash = String(req.body?.codeHash || '').trim()
+  const frozen = Boolean(req.body?.frozen)
+  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
+  const db = readDb()
+  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
+  if (!lic) return res.status(404).json({ message: '授权不存在' })
+  lic.frozen = frozen
+  writeDb(db)
+  res.json({ ok: true, codeHash, frozen: Boolean(lic.frozen), expiresAtMs: lic.expiresAtMs, serverTimeMs: Date.now() })
+})
+
+app.post('/admin/licenses/renew', adminMiddleware, (req, res) => {
+  const codeHash = String(req.body?.codeHash || '').trim()
+  const daysRaw = Number(req.body?.days)
+  const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(3650, Math.floor(daysRaw))) : 30
+  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
+  const db = readDb()
+  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
+  if (!lic) return res.status(404).json({ message: '授权不存在' })
+  const base = Math.max(Date.now(), Number(lic.expiresAtMs || 0))
+  lic.expiresAtMs = base + days * DAY_MS
+  writeDb(db)
+  res.json({ ok: true, codeHash, addedDays: days, expiresAtMs: lic.expiresAtMs, serverTimeMs: Date.now() })
+})
+
+app.post('/admin/licenses/unbind', adminMiddleware, (req, res) => {
+  const codeHash = String(req.body?.codeHash || '').trim()
+  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
+  const db = readDb()
+  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
+  if (!lic) return res.status(404).json({ message: '授权不存在' })
+  lic.boundMachineId = ''
+  writeDb(db)
+  res.json({ ok: true, codeHash, boundMachineId: '', serverTimeMs: Date.now() })
+})
+
+/**
+ * 重新签发授权码（用于无法找回原始授权码时重新发放给用户）
+ * - 会生成新的 licenseCode，并更新 codeHash
+ * - 默认清空机器绑定并解除冻结（以便新码可激活）
+ * - 保留原 expiresAtMs / entitlements
+ */
+app.post('/admin/licenses/reissue', adminMiddleware, (req, res) => {
+  const codeHash = String(req.body?.codeHash || '').trim()
+  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
+  const db = readDb()
+  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
+  if (!lic) return res.status(404).json({ message: '授权不存在' })
+  const now = Date.now()
+  const licenseCode = `LIC-${crypto.randomUUID().replaceAll('-', '')}`
+  const nextHash = sha256(licenseCode)
+  lic.codeHash = nextHash
+  lic.boundMachineId = ''
+  lic.frozen = false
+  lic.createdAtMs = now
+  writeDb(db)
+  res.json({
+    ok: true,
+    licenseCode,
+    codeHash: nextHash,
+    expiresAtMs: Number(lic.expiresAtMs || 0),
+    entitlements: pickEntitlements(lic) || {},
+    serverTimeMs: now,
+  })
+})
+
+app.post('/admin/licenses/entitlements', adminMiddleware, (req, res) => {
+  const codeHash = String(req.body?.codeHash || '').trim()
+  const entitlements =
+    req.body?.entitlements && typeof req.body.entitlements === 'object' && !Array.isArray(req.body.entitlements)
+      ? req.body.entitlements
+      : null
+  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
+  if (!entitlements) return res.status(400).json({ message: 'entitlements 不能为空' })
+  const db = readDb()
+  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
+  if (!lic) return res.status(404).json({ message: '授权不存在' })
+  lic.entitlements = entitlements
+  writeDb(db)
+  res.json({ ok: true, codeHash, entitlements: pickEntitlements(lic) || {}, serverTimeMs: Date.now() })
+})
+
+app.post('/admin/licenses/delete', adminMiddleware, (req, res) => {
+  const codeHash = String(req.body?.codeHash || '').trim()
+  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
+  const db = readDb()
+  const before = Array.isArray(db.licenses) ? db.licenses.length : 0
+  db.licenses = (db.licenses || []).filter((l) => String(l.codeHash || '') !== codeHash)
+  const after = db.licenses.length
+  if (after === before) return res.status(404).json({ message: '授权不存在' })
+  writeDb(db)
+  res.json({ ok: true, deleted: codeHash, total: after, serverTimeMs: Date.now() })
 })
 
 app.post('/admin/user/freeze', adminMiddleware, (req, res) => {
@@ -672,6 +1006,18 @@ app.post('/admin/user/freeze', adminMiddleware, (req, res) => {
     licenseStatus: resolveLicenseStatus(user),
     expiresAtMs: user.expiresAtMs,
   })
+})
+
+app.post('/admin/users/delete', adminMiddleware, (req, res) => {
+  const account = String(req.body?.account || '').trim()
+  if (!account) return res.status(400).json({ message: '账号不能为空' })
+  const db = readDb()
+  const before = Array.isArray(db.users) ? db.users.length : 0
+  db.users = (db.users || []).filter((u) => String(u.account || '').toLowerCase() !== account.toLowerCase())
+  const after = db.users.length
+  if (after === before) return res.status(404).json({ message: '账号不存在' })
+  writeDb(db)
+  res.json({ ok: true, deleted: account, total: after, serverTimeMs: Date.now() })
 })
 
 app.post('/admin/user/renew', adminMiddleware, (req, res) => {
@@ -727,6 +1073,7 @@ app.get('/admin/templates', adminMiddleware, (_req, res) => {
     version: item.version,
     category: item.category || 'image',
     description: item.description || '',
+    tier: normalizeTier(item.tier),
     workflowFile: item.workflowFile,
     paramsSchema: item.paramsSchema || {},
   }))
@@ -755,6 +1102,7 @@ app.get('/admin/templates/:id', adminMiddleware, (req, res) => {
     version: template.version,
     category: template.category || 'image',
     description: template.description || '',
+    tier: normalizeTier(template.tier),
     workflowFile: template.workflowFile,
     paramsSchema: template.paramsSchema || {},
     workflowJsonText,
@@ -768,6 +1116,7 @@ app.get('/admin/system-prompts', adminMiddleware, (_req, res) => {
     version: item.version,
     category: item.category || 'general',
     description: item.description || '',
+    tier: normalizeTier(item.tier),
     sha256: item.sha256,
     promptFile: item.promptFile,
   }))
@@ -799,6 +1148,7 @@ app.get('/admin/system-prompts/:id', adminMiddleware, (req, res) => {
     version: prompt.version,
     category: prompt.category || 'general',
     description: prompt.description || '',
+    tier: normalizeTier(prompt.tier),
     sha256: hash,
     promptFile: prompt.promptFile,
     systemPromptText: text,
@@ -811,6 +1161,7 @@ app.post('/admin/system-prompts/upload', adminMiddleware, (req, res) => {
     const name = String(req.body?.name || '').trim()
     const version = String(req.body?.version || '').trim() || '1.0.0'
     const category = String(req.body?.category || 'general').trim() || 'general'
+    const tier = normalizeTier(req.body?.tier)
     const description = String(req.body?.description || '').trim()
     const systemPromptText = String(req.body?.systemPromptText || '').trim()
     const id = idRaw || crypto.randomUUID()
@@ -839,6 +1190,7 @@ app.post('/admin/system-prompts/upload', adminMiddleware, (req, res) => {
       name,
       version,
       category,
+      tier,
       description,
       promptFile,
       sha256,
@@ -868,6 +1220,7 @@ app.put('/admin/system-prompts/:id', adminMiddleware, (req, res) => {
     const name = String(req.body?.name || current.name || '').trim()
     const version = String(req.body?.version || current.version || '').trim() || '1.0.0'
     const category = String(req.body?.category || current.category || 'general').trim() || 'general'
+    const tier = normalizeTier(req.body?.tier ?? current.tier)
     const description = String(req.body?.description || current.description || '').trim()
     const systemPromptTextRaw = req.body?.systemPromptText
     const systemPromptText =
@@ -899,6 +1252,7 @@ app.put('/admin/system-prompts/:id', adminMiddleware, (req, res) => {
       name,
       version,
       category,
+      tier,
       description,
       sha256,
       sig,
@@ -946,6 +1300,7 @@ app.post('/admin/templates/upload', adminMiddleware, (req, res) => {
     const name = String(req.body?.name || '').trim()
     const version = String(req.body?.version || '').trim() || '1.0.0'
     const category = String(req.body?.category || 'image').trim() || 'image'
+    const tier = normalizeTier(req.body?.tier)
     const description = String(req.body?.description || '').trim()
     const paramsSchema =
       req.body?.paramsSchema && typeof req.body.paramsSchema === 'object'
@@ -971,6 +1326,7 @@ app.post('/admin/templates/upload', adminMiddleware, (req, res) => {
       name,
       version,
       category,
+      tier,
       description,
       workflowFile,
       paramsSchema,
@@ -998,6 +1354,7 @@ app.put('/admin/templates/:id', adminMiddleware, (req, res) => {
   const name = String(req.body?.name || current.name || '').trim()
   const version = String(req.body?.version || current.version || '').trim() || '1.0.0'
   const category = String(req.body?.category || current.category || 'image').trim() || 'image'
+  const tier = normalizeTier(req.body?.tier ?? current.tier)
   const description =
     req.body?.description == null ? String(current.description || '') : String(req.body.description)
   const paramsSchema =
@@ -1013,6 +1370,7 @@ app.put('/admin/templates/:id', adminMiddleware, (req, res) => {
     name,
     version,
     category,
+    tier,
     description,
     paramsSchema,
   }

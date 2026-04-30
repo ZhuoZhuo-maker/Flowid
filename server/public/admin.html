@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Flowid 后端管理</title>
+    <link rel="stylesheet" href="/admin/css/admin.css" />
+  </head>
+  <body class="admin-app">
+    <aside class="admin-sidebar">
+      <div class="admin-brand">
+        <h1>Flowid</h1>
+        <strong>Admin <em>Console</em></strong>
+      </div>
+      <nav class="admin-nav" id="admin-nav-root" aria-label="主导航"></nav>
+      <div class="admin-sidebar-footer">
+        <label>
+          <span>管理员口令（x-admin-token）</span>
+          <input id="admin-token-input" type="password" autocomplete="off" placeholder="开发默认见服务端日志" />
+        </label>
+        <div class="row">
+          <button type="button" class="btn btn-primary" id="admin-token-save">保存口令</button>
+        </div>
+        <p class="mono admin-footnote" style="margin:10px 0 0;font-size:11px;">
+          非 production 环境下后端可放行空口令；生产环境必须在请求头携带正确 token。
+        </p>
+      </div>
+    </aside>
+    <div class="admin-main">
+      <header class="admin-main-header">
+        <div>
+          <h2 id="admin-main-title">服务总览</h2>
+          <p class="sub" id="admin-main-sub">健康检查、端口、环境变量说明、代理状态</p>
+        </div>
+      </header>
+      <div class="admin-main-body">
+        <div id="admin-panel-mount"></div>
+      </div>
+    </div>
+
+    <div id="admin-global-loading"><div class="box">加载中…</div></div>
+    <div id="admin-toast-host" aria-live="polite"></div>
+
+    <script src="/admin/js/state.js"></script>
+    <script src="/admin/js/module-util.js"></script>
+    <script src="/admin/js/api.js"></script>
+    <script src="/admin/js/module-overview.js"></script>
+    <script src="/admin/js/module-licenses.js"></script>
+    <script src="/admin/js/module-cloud-models.js"></script>
+    <script src="/admin/js/module-templates-free.js"></script>
+    <script src="/admin/js/module-templates-pro.js"></script>
+    <script src="/admin/js/module-prompts-free.js"></script>
+    <script src="/admin/js/module-prompts-pro.js"></script>
+    <script src="/admin/js/app.js"></script>
+  </body>
+</html>

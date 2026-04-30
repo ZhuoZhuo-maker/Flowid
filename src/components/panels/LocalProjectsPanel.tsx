@@ -1,77 +1,124 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ProjectSnapshot } from '../../types'
-import {
-  DEFAULT_WORKSPACE_LIBRARY_ID,
-  deleteLibraryProject,
-  listLibraryProjects,
-  readLibraryProject,
-  writeLibraryProject,
-  createNewLibraryProjectId,
-} from '../../lib/localProjectLibrary'
 import { parseProjectFile } from '../../lib/persistence'
+import { loadLocalDiskPathsSettings, saveLocalDiskPathsSettings } from '../../lib/localDiskPathsSettings'
 
 export type LocalProjectsPanelProps = {
   /** 关闭左侧面板 */
   onClose: () => void
-  /** 从库中打开：传入完整快照与库 id */
-  onOpenSnapshot: (snapshot: ProjectSnapshot, libraryId: string) => void
-  /** 从 JSON 文件打开（无库 id） */
+  /** 从 JSON 文件打开 */
   onOpenImported: (snapshot: ProjectSnapshot) => void
-  /** 将当前画布登记到本地库并绑定 libraryId */
-  onRegisterCurrentToLibrary: (libraryId: string, snapshot: ProjectSnapshot) => void
-  /** 当前工程快照（用于登记） */
-  getCurrentSnapshot: () => ProjectSnapshot
-  /** 当前标签名称 */
-  currentProjectName: string
 }
 
 /**
- * 本地项目库：列出、打开、删除已保存工程；支持导入 JSON。
+ * 本地项目（工程目录）：选择工程目录并从磁盘导入工程 JSON。
  */
 export function LocalProjectsPanel({
   onClose,
-  onOpenSnapshot,
   onOpenImported,
-  onRegisterCurrentToLibrary,
-  getCurrentSnapshot,
-  currentProjectName,
 }: LocalProjectsPanelProps) {
-  const [rows, setRows] = useState(() => listLibraryProjects())
   const fileRef = useRef<HTMLInputElement | null>(null)
-  const refresh = useCallback(() => {
-    setRows(listLibraryProjects())
-  }, [])
+  const [dir, setDir] = useState(() => String(loadLocalDiskPathsSettings().flowidProjectJsonPath || '').trim())
+  const [loading, setLoading] = useState(false)
+  const [err, setErr] = useState('')
+  const [files, setFiles] = useState<Array<{ path: string; name: string; mtimeMs: number }>>([])
 
-  const handleDelete = (id: string, name: string) => {
-    if (id === DEFAULT_WORKSPACE_LIBRARY_ID) {
-      window.alert('「主工作台」为当前浏览器默认工程，不能删除；可在画布中清空节点后保存覆盖。')
+  const desktop = (typeof window !== 'undefined' ? (window as any).flowidDesktop : null) as
+    | {
+        pickDirectory?: (opts?: { defaultPath?: string }) => Promise<{ ok: boolean; canceled?: boolean; path?: string; error?: string }>
+        readDirectory?: (path: string, opts?: { recursive?: boolean; maxFiles?: number; maxDepth?: number }) => Promise<{ ok: boolean; files?: any[]; error?: string }>
+        readFileText?: (path: string) => Promise<{ ok: boolean; text?: string; error?: string }>
+      }
+    | null
+
+  const refresh = useCallback(async () => {
+    const target = String(dir || '').trim()
+    if (!target) {
+      setFiles([])
       return
     }
-    if (!window.confirm(`确定删除本地项目「${name}」？`)) return
-    deleteLibraryProject(id)
-    refresh()
-  }
-
-  const handleOpen = (id: string) => {
-    const snap = readLibraryProject(id)
-    if (!snap) {
-      window.alert('读取失败或文件已损坏')
-      refresh()
+    if (!desktop?.readDirectory) {
+      setErr('当前桌面端能力异常：无法读取工程目录。')
+      setFiles([])
       return
     }
-    onOpenSnapshot(snap, id)
-    onClose()
-  }
+    setLoading(true)
+    setErr('')
+    try {
+      const res = await desktop.readDirectory(target, { recursive: true, maxFiles: 2000, maxDepth: 4 })
+      if (!res?.ok || !Array.isArray(res.files)) {
+        setFiles([])
+        setErr(res?.error || '读取目录失败')
+        return
+      }
+      const mapped = res.files
+        .filter((f) => String(f?.name || '').toLowerCase().endsWith('.json'))
+        .filter((f) => !/^flowid\\.current\\.json$/i.test(String(f?.name || '').trim()))
+        .map((f) => ({ path: String(f.path || ''), name: String(f.name || ''), mtimeMs: Number(f.mtimeMs || 0) }))
+        .filter((f) => f.path && f.name)
+        .sort((a, b) => b.mtimeMs - a.mtimeMs)
+        .slice(0, 80)
+      setFiles(mapped)
+    } catch (e) {
+      setErr(String((e as any)?.message || e || '读取目录失败'))
+      setFiles([])
+    } finally {
+      setLoading(false)
+    }
+  }, [dir, desktop])
 
-  const handleRegister = () => {
-    const snap = getCurrentSnapshot()
-    const id = createNewLibraryProjectId()
-    const named: ProjectSnapshot = { ...snap, name: currentProjectName || snap.name || '未命名项目' }
-    writeLibraryProject(named, id)
-    onRegisterCurrentToLibrary(id, named)
-    refresh()
-    window.alert('已将当前工程登记到本地项目库，之后 Ctrl+S 会同步更新该条目。')
-  }
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  const pickDir = useCallback(async () => {
+    if (!desktop?.pickDirectory) {
+      window.alert('当前桌面端能力异常：无法选择工程目录。')
+      return
+    }
+    const res = await desktop.pickDirectory({ defaultPath: dir || undefined })
+    if (!res.ok) {
+      window.alert(res.error || '选择失败')
+      return
+    }
+    if (res.canceled || !res.path) return
+    const next = String(res.path || '').trim()
+    setDir(next)
+    saveLocalDiskPathsSettings({ flowidProjectJsonPath: next })
+  }, [desktop, dir])
+
+  const importFromPath = useCallback(
+    async (filePath: string) => {
+      const p = String(filePath || '').trim()
+      if (!p) return
+      if (!desktop?.readFileText) {
+        window.alert('当前桌面端能力异常：无法读取文件内容。')
+        return
+      }
+      setLoading(true)
+      setErr('')
+      try {
+        const res = await desktop.readFileText(p)
+        if (!res?.ok || !res.text) {
+          window.alert(res?.error || '读取文件失败')
+          return
+        }
+        const snap = parseProjectFile(String(res.text || ''))
+        onOpenImported(snap)
+        onClose()
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : '导入失败')
+      } finally {
+        setLoading(false)
+      }
+    },
+    [desktop, onClose, onOpenImported],
+  )
+
+  const hint = useMemo(() => {
+    if (!dir) return '未选择工程目录。请先选择包含 Flowid 工程 JSON 的文件夹。'
+    return `工程目录：${dir}`
+  }, [dir])
 
   return (
     <div className="local-projects-panel">
@@ -82,13 +129,11 @@ export function LocalProjectsPanel({
         </button>
       </div>
       <p className="local-projects-panel__hint">
-        列表与浏览器当前工程同步；主工作台会随编辑自动更新。<kbd>Ctrl</kbd>+<kbd>S</kbd> 会写入默认存档并更新已关联的库条目。
-        <br />
-        注意：浏览器把 <code>localhost</code> 与 <code>127.0.0.1</code> 视为不同来源，本地存档与工作流（localStorage）互不共享。开发服务已默认绑定 <code>127.0.0.1</code>；若仍用 <code>localhost</code> 打开，页面会自动跳到 <code>127.0.0.1</code> 以免读错数据。
+        {hint}
       </p>
       <div className="local-projects-panel__actions">
-        <button type="button" className="btn btn--chip btn--chip-primary" onClick={handleRegister}>
-          将当前工程登记到库
+        <button type="button" className="btn btn--chip btn--chip-primary" onClick={() => void pickDir()}>
+          选择工程目录…
         </button>
         <button
           type="button"
@@ -121,28 +166,21 @@ export function LocalProjectsPanel({
         />
       </div>
       <ul className="local-projects-panel__list" aria-label="已保存项目">
-        {rows.length === 0 ? (
-          <li className="local-projects-panel__empty">暂无条目，可先「登记到库」或导入 JSON。</li>
+        {loading ? (
+          <li className="local-projects-panel__empty">读取中…</li>
+        ) : err ? (
+          <li className="local-projects-panel__empty">{err}</li>
+        ) : files.length === 0 ? (
+          <li className="local-projects-panel__empty">目录下暂无工程 JSON（或尚未选择工程目录）。</li>
         ) : (
-          rows.map((row) => (
-            <li key={row.id} className="local-projects-panel__row">
-              <button type="button" className="local-projects-panel__open" onClick={() => handleOpen(row.id)}>
-                <span className="local-projects-panel__name">
-                  {row.name}
-                  {row.id === DEFAULT_WORKSPACE_LIBRARY_ID ? (
-                    <span className="local-projects-panel__badge">主工作台</span>
-                  ) : null}
-                </span>
-                <span className="local-projects-panel__date">
-                  {new Date(row.updatedAt).toLocaleString()}
-                </span>
+          files.map((f) => (
+            <li key={f.path} className="local-projects-panel__row">
+              <button type="button" className="local-projects-panel__open" onClick={() => void importFromPath(f.path)}>
+                <span className="local-projects-panel__name">{f.name.replace(/\\.[^.]+$/, '') || f.name}</span>
+                <span className="local-projects-panel__date">{new Date(f.mtimeMs || 0).toLocaleString()}</span>
               </button>
-              <button
-                type="button"
-                className="local-projects-panel__delete"
-                onClick={() => handleDelete(row.id, row.name)}
-              >
-                删除
+              <button type="button" className="local-projects-panel__delete" onClick={() => void importFromPath(f.path)}>
+                导入
               </button>
             </li>
           ))

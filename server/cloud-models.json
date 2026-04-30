@@ -1,0 +1,16 @@
+{
+  "token": "",
+  "providers": [
+    {
+      "id": "openai",
+      "label": "openai",
+      "baseUrl": "https://nowcoding.ai",
+      "models": [
+        {
+          "name": "gpt-image-2",
+          "nodeKind": "image"
+        }
+      ]
+    }
+  ]
+}

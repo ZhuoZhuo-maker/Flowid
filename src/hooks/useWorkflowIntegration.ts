@@ -21,17 +21,13 @@ import {
   parseMentionRefs,
   resolveMentionRefToNode,
 } from '../lib/nodeMentions'
-import { fetchLicenseStatusRemote, loadAuthSession, saveAuthSession } from '../lib/auth'
-import { loadAuthApiConfig } from '../lib/auth'
-import {
-  getLicenseSubmitBlockMessage,
-  loadLocalLicenseSnapshot,
-  saveLocalLicenseSnapshot,
-} from '../lib/license'
+import { computeAccessState, loadLicenseServerConfig, loadLicenseSnapshotV2, saveLicenseSnapshotV2 } from '../lib/licenseAccess'
+import { verifyLicenseRemote } from '../lib/licenseClient'
 import { matchStudioNodeWorkflow } from '../lib/matchStudioNodeWorkflow'
 import { persistWorkflowJsonToDisk } from '../lib/localAssetDiskMirror'
 import { normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
 import { fetchOpenAICompat } from '../lib/openaiProxy'
+import { appendCloudCallLog } from '../lib/cloudCallLogs'
 import { readLocalImageAssetBlob } from '../lib/localImageAssetStore'
 import {
   buildComfyPromptDigest,
@@ -77,6 +73,12 @@ type OfficialTemplateMeta = {
   version: string
   description?: string
   paramsSchema?: Record<string, unknown>
+}
+
+function buildLicenseHeaders(): Record<string, string> | null {
+  const snap = loadLicenseSnapshotV2()
+  if (!snap?.licenseCode || !snap?.machineId) return null
+  return { 'x-license-code': snap.licenseCode, 'x-machine-id': snap.machineId }
 }
 
 /**
@@ -2054,16 +2056,15 @@ export function useWorkflowIntegration() {
   )
 
   const refreshOfficialTemplates = useCallback(async () => {
-    const api = loadAuthApiConfig()
-    const session = loadAuthSession()
-    const base = String(api.baseUrl || '').trim().replace(/\/+$/, '')
-    if (!base || !session?.token) {
+    const base = String(loadLicenseServerConfig().baseUrl || '').trim().replace(/\/+$/, '')
+    const headers = buildLicenseHeaders()
+    if (!base || !headers) {
       setOfficialTemplates([])
       return []
     }
     const response = await fetch(`${base}/templates`, {
       headers: {
-        Authorization: `Bearer ${session.token}`,
+        ...headers,
       },
     })
     const json = (await response.json().catch(() => ({}))) as {
@@ -2081,35 +2082,30 @@ export function useWorkflowIntegration() {
 
   const runNodeWorkflow = useCallback(
     async (node: Node<StudioNodeData>, options?: RunNodeWorkflowOptions) => {
-      const authSession = loadAuthSession()
-      if (authSession) {
-        try {
-          const remoteStatus = await fetchLicenseStatusRemote()
-          if (remoteStatus) {
-            saveLocalLicenseSnapshot({
-              status: remoteStatus.licenseStatus,
-              expiresAtMs: remoteStatus.expiresAtMs,
-              lastNoticeAtMs: undefined,
+      // 轻量：执行前尝试刷新授权（失败不阻断）
+      try {
+        const snap = loadLicenseSnapshotV2()
+        if (snap) {
+          const res = await verifyLicenseRemote(snap)
+          if (res.ok) {
+            const now = Date.now()
+            saveLicenseSnapshotV2({
+              ...snap,
+              licenseCode: res.licenseCode,
+              machineId: res.machineId,
+              expiresAtMs: res.expiresAtMs,
+              entitlements: res.entitlements,
+              lastVerifiedAtMs: now,
+              serverAnchor: { serverTimeMs: res.serverTimeMs, localTimeMs: now, updatedAtMs: now },
             })
-            saveAuthSession({
-              ...authSession,
-              account: remoteStatus.account,
-              nickname: remoteStatus.nickname,
-              machineCode: remoteStatus.machineCode || authSession.machineCode,
-              licenseStatus: remoteStatus.licenseStatus,
-              expiresAtMs: remoteStatus.expiresAtMs,
-            })
-          }
-        } catch (error) {
-          if (import.meta.env.DEV) {
-            console.warn('[Flowid Auth] 拉取授权状态失败，回退本地快照', error)
           }
         }
+      } catch {
+        // ignore
       }
-      const licenseSnapshot = loadLocalLicenseSnapshot()
-      const licenseBlockMessage = getLicenseSubmitBlockMessage(licenseSnapshot)
-      if (licenseBlockMessage) {
-        throw new Error(licenseBlockMessage)
+      const access = computeAccessState(loadLicenseSnapshotV2())
+      if (access === 'expired') {
+        throw new Error('您的授权已到期：会员模板/云端能力不可用。请续费后在「授权」里点击刷新。')
       }
       if (node.data.kind === 'group') {
         throw new Error('分组节点不可执行')
@@ -2135,16 +2131,48 @@ export function useWorkflowIntegration() {
         // 对“只用模型、不懂 ComfyUI”的用户：当节点配置了云端模型且本地/云端执行未启用时，默认走模型。
         ((!snapshot.local.enabled && !snapshot.cloud.enabled && hasCloudModelConfigured) ? 'model' : 'workflow')
       if (executionTarget === 'model') {
-        const model = String((node.data as any)?.cloudModelName || nodeConfig.cloudModelName || '').trim()
-        const baseUrl = normalizeOpenAICompatibleBaseUrl(
-          String((node.data as any)?.cloudModelUrl || nodeConfig.cloudModelUrl || ''),
-        )
-        const apiKey = String((node.data as any)?.cloudApiKey || nodeConfig.cloudApiKey || '').trim()
+        const nodeModel = String((node.data as any)?.cloudModelName || nodeConfig.cloudModelName || '').trim()
+        const nodeBaseUrlRaw = String((node.data as any)?.cloudModelUrl || nodeConfig.cloudModelUrl || '')
+        const nodeApiKey = String((node.data as any)?.cloudApiKey || nodeConfig.cloudApiKey || '').trim()
+
+        // 全局自助模式默认（设置面板保存）：配置列表 + 当前“使用”的那一条
+        const loadActiveSelfPreset = (): { model: string; baseUrl: string; apiKey: string } => {
+          try {
+            const listRaw = window.localStorage.getItem('flowid.cloud.self.presets.v1')
+            const activeId = String(window.localStorage.getItem('flowid.cloud.self.activePresetId.v1') || '').trim()
+            const list = listRaw ? (JSON.parse(listRaw) as any[]) : []
+            const normalized = Array.isArray(list) ? list : []
+            const byNodeKind = normalized.filter((x) => {
+              const nk = String(x?.nodeKind || '').trim()
+              return !nk || nk === nodeKind
+            })
+            const hit =
+              (activeId ? byNodeKind.find((x) => String(x?.id || '') === activeId) : null) ||
+              byNodeKind[0] ||
+              (activeId ? normalized.find((x) => String(x?.id || '') === activeId) : null) ||
+              normalized[0] ||
+              null
+            const d = hit || {}
+            return {
+              model: String(d?.model || '').trim(),
+              baseUrl: String(d?.baseUrl || '').trim(),
+              apiKey: String(d?.apiKey || '').trim(),
+            }
+          } catch {
+            return { model: '', baseUrl: '', apiKey: '' }
+          }
+        }
+
+        const self = loadActiveSelfPreset()
+        const model = nodeModel || self.model
+        const baseUrl = normalizeOpenAICompatibleBaseUrl(nodeBaseUrlRaw || self.baseUrl || '')
+        const apiKey = nodeApiKey || self.apiKey
+
         if (!baseUrl || !model) {
-          throw new Error('当前节点未配置云端模型（模型名/地址），无法仅使用模型执行')
+          throw new Error('未配置云端模型（模型名/地址）。请先在「设置 - 云端模型」里填写 API 地址并选择默认模型。')
         }
         if (!apiKey) {
-          throw new Error('当前节点未填写 API Key，无法仅使用模型执行')
+          throw new Error('未填写 API Key。请先在「设置 - 云端模型」里填写 API Key。')
         }
         const inputText =
           nodeKind === 'text' || nodeKind === 'script'
@@ -2157,6 +2185,14 @@ export function useWorkflowIntegration() {
         if (!inputText) {
           throw new Error('输入内容为空，无法调用模型。请先在节点提示框填写内容再执行。')
         }
+
+        // 记录一次“云端模型提交”（不包含轮询/重试）
+        try {
+          appendCloudCallLog({ nodeKind, model, count: 1 })
+        } catch {
+          // ignore
+        }
+
         const shouldRetryRateLimit = (status: number, payload: any): boolean => {
           if (status === 429) return true
           const msg = String(payload?.error?.message || payload?.message || '').toLowerCase()
@@ -2712,11 +2748,10 @@ export function useWorkflowIntegration() {
         if (!templateId) {
           throw new Error('当前节点未选择官方模板，请到设置中为该节点类型选择模板')
         }
-        const api = loadAuthApiConfig()
-        const session = loadAuthSession()
-        const authBaseUrl = String(api.baseUrl || '').trim().replace(/\/+$/, '')
-        if (!authBaseUrl || !session?.token) {
-          throw new Error('未配置认证服务地址或尚未登录，无法提交官方模板任务')
+        const authBaseUrl = String(loadLicenseServerConfig().baseUrl || '').trim().replace(/\/+$/, '')
+        const licenseHeaders = buildLicenseHeaders()
+        if (!authBaseUrl || !licenseHeaders) {
+          throw new Error('未配置授权服务地址或尚未激活授权，无法提交官方模板任务')
         }
         const nodeInputs = extractNodeInputs(node, options?.allNodes)
         const rawRefImages = String(nodeInputs.refImages ?? '')
@@ -2729,7 +2764,7 @@ export function useWorkflowIntegration() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${session.token}`,
+            ...licenseHeaders,
           },
           body: JSON.stringify({
             templateId,
@@ -2763,7 +2798,7 @@ export function useWorkflowIntegration() {
             `${authBaseUrl}/tasks/${encodeURIComponent(taskId)}/status`,
             {
               headers: {
-                Authorization: `Bearer ${session.token}`,
+                ...licenseHeaders,
               },
             },
           )

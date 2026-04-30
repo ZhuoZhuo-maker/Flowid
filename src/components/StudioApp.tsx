@@ -26,7 +26,6 @@ import { AnimatePresence, motion } from 'motion/react'
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -47,7 +46,7 @@ import type {
   TextNodeData,
   VideoNodeData,
 } from '../types'
-import { loadCloudModelPresets } from '../lib/cloudModelPresets'
+import { loadCloudSelfPresets } from '../lib/cloudSelfPresets'
 import { CanvasProvider } from '../context/CanvasContext'
 import { AudioNode } from './nodes/AudioNode'
 import { GhostNode } from './nodes/GhostNode'
@@ -59,21 +58,24 @@ import { TextNode } from './nodes/TextNode'
 import { VideoNode } from './nodes/VideoNode'
 import { AddNodePanel } from './panels/AddNodePanel'
 import { DownloadPanel } from './panels/DownloadPanel'
-import { LocalProjectsPanel } from './panels/LocalProjectsPanel'
 import { RightPanel, type RightPanelTab } from './panels/RightPanel'
 import { AiAssistantPanel, type AiAssistantMessage } from './panels/AiAssistantPanel'
 import { WorkflowSettingsPanel } from './panels/WorkflowSettingsPanel'
-import { AuthModal } from './panels/AuthModal'
 import { useAssetsHistory } from '../hooks/useAssetsHistory'
 import { useWorkflowRunner } from '../hooks/useWorkflowRunner'
 import { useWorkflowIntegration } from '../hooks/useWorkflowIntegration'
-import { loadAuthApiConfig, loadAuthSession, saveAuthSession, type AuthSession } from '../lib/auth'
 import {
-  getLicenseSubmitBlockMessage,
-  isLicenseReadOnly,
-  loadLocalLicenseSnapshot,
-  saveLocalLicenseSnapshot,
-} from '../lib/license'
+  computeAccessState,
+  loadLicenseServerConfig,
+  loadLicenseSnapshotV2,
+  saveLicenseSnapshotV2,
+  touchLicenseLocalTime,
+} from '../lib/licenseAccess'
+import { verifyLicenseRemote } from '../lib/licenseClient'
+import {
+  loadLocalDiskPathsSettings,
+  saveLocalDiskPathsSettings,
+} from '../lib/localDiskPathsSettings'
 import type {
   AddNodeMenuItem,
   AssetItem,
@@ -137,7 +139,6 @@ import {
   ICON_NODE_TEXT,
   ICON_NODE_VIDEO,
   ICON_TOP_HOME,
-  ICON_TOP_STAR,
 } from '../assets/studioIcons'
 
 const nodeTypes = {
@@ -1265,9 +1266,6 @@ function findGroupIdContainingMember(
   return group?.id ?? null
 }
 
-/** 「本地项目」弹层与顶栏触发按钮下边界的间距（像素）。 */
-const LOCAL_PROJECTS_POPOVER_GAP_PX = 20
-
 type PromptPanelDropdownOption = { value: string; label: string; disabled?: boolean }
 
 function PromptPanelDropdown({
@@ -1630,40 +1628,47 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const avatarDockActionRef = useRef<AvatarDockPointerAction | null>(null)
   /** 本地模型在工作流执行期间的挂起命令队列。 */
   const aiDeferredQueueRef = useRef<string[]>([])
-  /** 顶栏「本地项目」按钮：用于将弹层定位到按钮正下方 */
-  const localProjectsTopBtnRef = useRef<HTMLButtonElement | null>(null)
-  /**
-   * 「本地项目」弹层在视口中的 `position:fixed` 坐标（`right` 与按钮右缘对齐）。
-   * 垂直方向：按钮 `bottom + 20px`。
-   */
-  const [localProjectsPopoverLayout, setLocalProjectsPopoverLayout] = useState<{
-    top: number
-    right: number
-  } | null>(null)
-  const updateLocalProjectsPopoverLayout = useCallback(() => {
-    const el = localProjectsTopBtnRef.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    setLocalProjectsPopoverLayout({
-      top: rect.bottom + LOCAL_PROJECTS_POPOVER_GAP_PX,
-      right: document.documentElement.clientWidth - rect.right,
-    })
-  }, [])
+  const openLocalProjectFromFilePicker = useCallback(async () => {
+    const desk = (window as any).flowidDesktop as
+      | {
+          pickJsonFile?: (opts?: { defaultPath?: string }) => Promise<{
+            ok: boolean
+            canceled?: boolean
+            path?: string
+            error?: string
+          }>
+          readUtf8File?: (filePath: string) => Promise<{ ok: boolean; text?: string; error?: string }>
+        }
+      | undefined
 
-  useLayoutEffect(() => {
-    if (leftPanel !== 'local-projects') {
-      setLocalProjectsPopoverLayout(null)
+    if (!desk?.pickJsonFile || !desk?.readUtf8File) {
+      window.alert('当前桌面端能力异常：无法选择或导入工程 JSON。请重启桌面端后再试。')
       return
     }
-    updateLocalProjectsPopoverLayout()
-    const onWin = () => updateLocalProjectsPopoverLayout()
-    window.addEventListener('resize', onWin)
-    window.addEventListener('scroll', onWin, true)
-    return () => {
-      window.removeEventListener('resize', onWin)
-      window.removeEventListener('scroll', onWin, true)
+
+    const prev = String(loadLocalDiskPathsSettings().flowidProjectJsonPath || '').trim()
+    const pickedFile = await desk.pickJsonFile({ defaultPath: prev || undefined })
+    if (!pickedFile.ok) {
+      window.alert(pickedFile.error || '选择工程 JSON 失败')
+      return
     }
-  }, [leftPanel, updateLocalProjectsPopoverLayout])
+    if (pickedFile.canceled || !pickedFile.path) return
+    const fp = String(pickedFile.path || '').trim()
+    if (!fp) return
+
+    const inferredDir = fp.replace(/[\\/][^\\/]+$/, '')
+    if (inferredDir && inferredDir !== prev) {
+      saveLocalDiskPathsSettings({ flowidProjectJsonPath: inferredDir })
+    }
+
+    const read = await desk.readUtf8File(fp)
+    if (!read.ok || !read.text) {
+      window.alert(read.error || '读取工程 JSON 失败')
+      return
+    }
+    const snap = parseProjectFile(String(read.text || ''))
+    openImportedProjectInNewTab(snap)
+  }, [openImportedProjectInNewTab])
 
   /** 启动时把当前已载入工程写入本地项目库，保证「本地项目」列表里能读到（与 flowid.project.v1 同步）。 */
   useEffect(() => {
@@ -1742,9 +1747,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     clearPendingConnectPreview()
   }, [clearPendingConnectPreview])
 
-  const [authModalOpen, setAuthModalOpen] = useState(false)
-  const [authSession, setAuthSession] = useState<AuthSession | null>(() => loadAuthSession())
-  const [licenseSnapshotState, setLicenseSnapshotState] = useState(() => loadLocalLicenseSnapshot())
   const [hoveredAssetId, setHoveredAssetId] = useState<string | null>(null)
   const {
     executionMode,
@@ -1773,7 +1775,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     updateShortcutBinding,
     connectionTestMessage,
     officialTemplates,
-    updateExecutionMode,
     refreshOfficialTemplates,
     testProviderConnection,
     runNodeWorkflow,
@@ -2076,8 +2077,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   const promptPanelModelOptions = useMemo(() => {
     if (!promptPanel) return [] as PromptPanelDropdownOption[]
-    const presets = loadCloudModelPresets(promptPanel.kind)
-    const base = presets.map((item) => ({ value: item.id, label: item.name }))
+    const presets = loadCloudSelfPresets().filter((p) => {
+      const nk = String((p as any)?.nodeKind || '').trim()
+      return !nk || nk === promptPanel.kind
+    })
+    const base = presets.map((item) => ({
+      value: item.id,
+      label: `${item.model}`,
+    }))
     const current = String((promptPanel.node.data as any)?.cloudModelName || '').trim()
     if (current && !base.some((i) => i.label === current)) {
       base.unshift({ value: 'custom-current', label: current })
@@ -2088,9 +2095,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   const promptPanelModelSelectValue = useMemo(() => {
     if (!promptPanel) return ''
+    const savedId = String((promptPanel.node.data as any)?.cloudSelfPresetId || '').trim()
+    if (savedId) return savedId
     const current = String((promptPanel.node.data as any)?.cloudModelName || '').trim()
-    const presets = loadCloudModelPresets(promptPanel.kind)
-    const found = presets.find((i) => i.name === current)
+    const presets = loadCloudSelfPresets().filter((p) => {
+      const nk = String((p as any)?.nodeKind || '').trim()
+      return !nk || nk === promptPanel.kind
+    })
+    const found = presets.find((i) => i.model === current)
     if (found) return found.id
     if (current) return 'custom-current'
     return presets[0]?.id || ''
@@ -3708,58 +3720,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const activeProjectName = useMemo(() => {
     return projectTabs.find((tab) => tab.id === activeProjectId)?.name || '未命名项目'
   }, [projectTabs, activeProjectId])
-
-  const getCurrentSnapshotForLibrary = useCallback((): ProjectSnapshot => {
-    const s = getCanvasSnapshot()
-    return {
-      version: 1,
-      name: activeProjectName,
-      nodes: s.nodes,
-      edges: s.edges,
-      viewport: s.viewport,
-    }
-  }, [activeProjectName, getCanvasSnapshot])
-
-  const registerCurrentToLibrary = useCallback(
-    (libraryId: string, snapshot: ProjectSnapshot) => {
-      setProjectTabs((prev) =>
-        prev.map((tab) =>
-          tab.id === activeProjectId ? { ...tab, libraryId, name: snapshot.name || tab.name } : tab,
-        ),
-      )
-    },
-    [activeProjectId],
-  )
-
-  const openLibraryProjectInNewTab = useCallback(
-    (snap: ProjectSnapshot, libraryId: string) => {
-      const currentSnapshot = getCanvasSnapshot()
-      const tabId = crypto.randomUUID()
-      setProjectTabs((prev) => [
-        ...prev.map((tab) =>
-          tab.id === activeProjectId ? { ...tab, snapshot: currentSnapshot } : tab,
-        ),
-        {
-          id: tabId,
-          name: snap.name || '本地项目',
-          snapshot: {
-            nodes: snap.nodes,
-            edges: snap.edges,
-            viewport: snap.viewport,
-          },
-          libraryId,
-        },
-      ])
-      void applySnapshotWithLocalAssetHydration({
-        nodes: snap.nodes,
-        edges: snap.edges,
-        viewport: snap.viewport,
-      })
-      setActiveProjectId(tabId)
-      setSelectedNodeId(null)
-    },
-    [activeProjectId, applySnapshotWithLocalAssetHydration, getCanvasSnapshot],
-  )
 
   function openImportedProjectInNewTab(snap: ProjectSnapshot) {
     const currentSnapshot = getCanvasSnapshot()
@@ -5669,8 +5629,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     ) => {
       const id = fresh.id
       const mediaUrl = result.audioUrl || result.previewUrl || result.resultUrl || null
-      const authToken = String(loadAuthSession()?.token || '').trim()
-      const mirrorHeaders = authToken ? ({ Authorization: `Bearer ${authToken}` } as Record<string, string>) : undefined
+      const licenseSnap = loadLicenseSnapshotV2()
+      const mirrorHeaders =
+        licenseSnap?.licenseCode && licenseSnap?.machineId
+          ? ({ 'x-license-code': licenseSnap.licenseCode, 'x-machine-id': licenseSnap.machineId } as Record<
+              string,
+              string
+            >)
+          : undefined
 
       if (kind === 'music') {
         if (!result.audioUrl) {
@@ -5850,7 +5816,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     [appendHistory, updateNodeData],
   )
 
-  const { isRunning: isWorkflowRunnerRunning, runAllWorkflow, executeNodeIds } = useWorkflowRunner({
+  const { isRunning: isWorkflowRunnerRunning, runAllWorkflow: _runAllWorkflow, executeNodeIds } =
+    useWorkflowRunner({
     nodes,
     edges,
     selectedNodeId,
@@ -5889,20 +5856,15 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       })
       await applyWorkflowResultToNode(latest, kind, result)
     },
-  })
+    })
 
-  const licenseReadOnly = isLicenseReadOnly(licenseSnapshotState)
   const ensureLicenseCanSubmit = useCallback((): boolean => {
-    const message = getLicenseSubmitBlockMessage(loadLocalLicenseSnapshot())
-    if (!message) return true
-    window.alert(message)
+    const latest = loadLicenseSnapshotV2()
+    const nextAccess = computeAccessState(latest)
+    if (nextAccess !== 'expired') return true
+    window.alert('您的授权已到期。如需继续使用会员模板/云端能力，请续费并刷新授权。')
     return false
   }, [])
-
-  const runAllWorkflowGuarded = useCallback(() => {
-    if (!ensureLicenseCanSubmit()) return
-    void runAllWorkflow()
-  }, [ensureLicenseCanSubmit, runAllWorkflow])
 
   const pollPendingCloudTaskAndBackfill = useCallback(async (
     taskId: string,
@@ -5914,18 +5876,24 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (cloudTaskPollingIdsRef.current.has(tid)) return
     cloudTaskPollingIdsRef.current.add(tid)
     try {
-      const api = loadAuthApiConfig()
-      const session = loadAuthSession()
-      const base = String(api.baseUrl || '').trim().replace(/\/+$/, '')
-      if (!base || !session?.token) {
-        appendHistory(`云端任务 ${tid} 轮询失败：未配置认证服务地址或登录态已失效`)
+      const snap = loadLicenseSnapshotV2()
+      if (!snap) {
+        appendHistory(`云端任务 ${tid} 轮询失败：未授权（请先激活机器码授权）`)
+        return
+      }
+      const base = String(loadLicenseServerConfig().baseUrl || '').trim().replace(/\/+$/, '')
+      if (!base) {
+        appendHistory(`云端任务 ${tid} 轮询失败：未配置授权服务地址`)
         return
       }
       const endpoint = `${base}/tasks/${encodeURIComponent(tid)}/status`
       const deadline = Date.now() + 10 * 60 * 1000
       while (Date.now() < deadline) {
         const res = await fetch(endpoint, {
-          headers: { Authorization: `Bearer ${session.token}` },
+          headers: {
+            'x-license-code': snap.licenseCode,
+            'x-machine-id': snap.machineId,
+          },
         })
         const json = (await res.json().catch(() => ({}))) as {
           status?: string
@@ -5996,20 +5964,35 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     }
   }, [appendHistory, applyWorkflowResultToNode, updateNodeData])
 
-  const handleAuthSuccess = useCallback((session: AuthSession | null) => {
-    setAuthSession(session)
-    if (session) {
-      saveAuthSession(session)
-      const nextSnapshot = {
-        status: session.licenseStatus,
-        expiresAtMs: session.expiresAtMs,
-        lastNoticeAtMs: undefined,
-      } as const
-      saveLocalLicenseSnapshot(nextSnapshot)
-      setLicenseSnapshotState(nextSnapshot)
-      return
+  useEffect(() => {
+    // 启动时做一次“本地回拨检测 + 轻量联网校验”（失败不阻断）
+    const snap = loadLicenseSnapshotV2()
+    if (!snap) return
+    const tamper = touchLicenseLocalTime(snap)
+    if (!tamper.ok) {
+      // 有回拨线索：提示用户去设置里点击校验
+      if (import.meta.env.DEV) console.warn('[Flowid License] time rollback detected')
     }
-    setLicenseSnapshotState(loadLocalLicenseSnapshot())
+    void (async () => {
+      try {
+        const latest = loadLicenseSnapshotV2()
+        if (!latest) return
+        const res = await verifyLicenseRemote(latest)
+        if (!res.ok) return
+        const now = Date.now()
+        saveLicenseSnapshotV2({
+          ...latest,
+          licenseCode: res.licenseCode,
+          machineId: res.machineId,
+          expiresAtMs: res.expiresAtMs,
+          entitlements: res.entitlements,
+          lastVerifiedAtMs: now,
+          serverAnchor: { serverTimeMs: res.serverTimeMs, localTimeMs: now, updatedAtMs: now },
+        })
+      } catch {
+        // ignore
+      }
+    })()
   }, [])
 
   /**
@@ -7007,10 +6990,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               }
               return
             }
-            /** 避免捕获阶段先关面板、按钮 onClick 再打开，导致无法关闭 */
-            if (leftPanel === 'local-projects' && target.closest('.btn--top-local')) {
-              return
-            }
             const clickedToolbox = target.closest('.studio-left-toolbelt')
             const clickedFlyout = target.closest('.left-flyout')
             const clickedAiDock = target.closest('.ai-assistant-dock')
@@ -7047,7 +7026,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       onGoHome()
                       return
                     }
-                    setLeftPanel('local-projects')
                   }}
                 >
                   <div className="w-6 h-6 bg-orange-600 flex items-center justify-center rounded-sm">
@@ -7151,46 +7129,21 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               {/* Right pill group (fig-1) */}
               <div className="flex items-center gap-4 bg-[#111114] border border-white/5 px-5 py-2 rounded-full shadow-2xl backdrop-blur-xl">
                 <button
-                  ref={localProjectsTopBtnRef}
                   type="button"
                   className={`btn--top-local inline-flex items-center gap-3 px-1 ${
-                    leftPanel === 'local-projects' ? 'text-white' : 'text-white/85 hover:text-white'
+                    'text-white/85 hover:text-white'
                   }`}
-                  title="打开本地项目列表（与当前浏览器工程同步）"
+                  title="选择工程 JSON 并导入"
                   aria-label="本地项目"
                   onClick={() => {
                     dismissCanvasAddMenu()
-                    setLeftPanel((prev) => (prev === 'local-projects' ? null : 'local-projects'))
+                    void openLocalProjectFromFilePicker()
                   }}
                 >
                   <img src={ICON_TOP_HOME} alt="" aria-hidden className="w-4 h-4 opacity-70" />
                   <span className="text-[14px] font-black tracking-widest">本地项目</span>
                 </button>
-
-                <div className="w-[1px] h-3 bg-white/10" aria-hidden />
-
-                <button
-                  type="button"
-                  className="btn--top-recharge inline-flex items-center gap-3 px-1 text-[14px] font-black tracking-widest text-white/70 hover:text-white transition-colors disabled:opacity-50"
-                  onClick={runAllWorkflowGuarded}
-                  disabled={licenseReadOnly}
-                  title={licenseReadOnly ? '授权已到期/冻结，当前为只读模式' : undefined}
-                >
-                  <span className="text-[15px] font-black text-orange-500">? 500</span>
-                  <span className="inline-flex items-center gap-2">
-                    <img src={ICON_TOP_STAR} alt="" aria-hidden className="w-4 h-4 opacity-70" />
-                    <span className="text-[14px] font-black tracking-widest">充值</span>
-                  </span>
-                </button>
               </div>
-
-              <button
-                type="button"
-                className="h-10 bg-white text-black font-black text-[14px] tracking-widest px-6 rounded-full hover:bg-orange-500 hover:text-white transition-all shadow-xl border border-transparent"
-                onClick={() => setAuthModalOpen(true)}
-              >
-                {authSession ? `账号：${authSession.nickname}` : '注册 / 登录'}
-              </button>
             </div>
           </header>
 
@@ -7253,7 +7206,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                   {leftPanel &&
                   leftPanel !== 'settings' &&
                   leftPanel !== 'ai-assistant' &&
-                  leftPanel !== 'local-projects' &&
                   leftPanel !== 'my-assets' &&
                   leftPanel !== 'history' ? (
                     <motion.aside
@@ -7301,31 +7253,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             onRemoveHistoryItems={removeHistoryItems}
           />
 
-          {/* Local projects popover remains header-anchored */}
-          {leftPanel === 'local-projects' ? (
-            <aside
-              className="left-flyout left-flyout--local left-flyout--header-popover"
-              aria-label="本地项目面板"
-              style={
-                localProjectsPopoverLayout
-                  ? {
-                      top: localProjectsPopoverLayout.top,
-                      right: localProjectsPopoverLayout.right,
-                      left: 'auto',
-                    }
-                  : undefined
-              }
-            >
-              <LocalProjectsPanel
-                onClose={() => setLeftPanel(null)}
-                onOpenSnapshot={openLibraryProjectInNewTab}
-                onOpenImported={openImportedProjectInNewTab}
-                onRegisterCurrentToLibrary={registerCurrentToLibrary}
-                getCurrentSnapshot={getCurrentSnapshotForLibrary}
-                currentProjectName={activeProjectName}
-              />
-            </aside>
-          ) : null}
+          {/* Local projects popover removed: use native pickers instead */}
 
           {aiAssistantDialogOpen && typeof document !== 'undefined'
             ? createPortal(
@@ -7386,7 +7314,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 onTestProviderConnection={testProviderConnection}
                 connectionTestMessage={connectionTestMessage}
                 officialTemplates={officialTemplates}
-                onExecutionModeChange={updateExecutionMode}
                 onRefreshOfficialTemplates={refreshOfficialTemplates}
                 aiAssistantConfig={aiConfig}
                 onAiAssistantConfigChange={(patch) => {
@@ -7406,12 +7333,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               />
             </div>
           ) : null}
-          <AuthModal
-            open={authModalOpen}
-            session={authSession}
-            onClose={() => setAuthModalOpen(false)}
-            onSuccess={handleAuthSuccess}
-          />
 
           {canvasAddMenu ? (
             <div
@@ -8128,11 +8049,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         onChange={(pickedId) => {
                           const kind = visiblePromptPanel.kind
                           if (pickedId === 'custom-current') return
-                          const preset = loadCloudModelPresets(kind).find((i) => i.id === pickedId)
+                          const preset = loadCloudSelfPresets().find((i) => i.id === pickedId)
                           if (!preset) return
                           updateNodeData(visiblePromptPanel.node.id, {
                             kind,
-                            cloudModelName: preset.name,
+                            cloudSelfPresetId: preset.id,
+                            cloudModelName: preset.model,
                             cloudModelUrl: preset.baseUrl,
                             cloudApiKey: String((preset as any).apiKey || ''),
                           } as any)

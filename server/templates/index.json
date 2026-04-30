@@ -4,6 +4,7 @@
       "id": "demo-text-to-image-v1",
       "name": "示例文生图模板",
       "version": "1.0.0",
+      "tier": "free",
       "description": "用于演示后端模板管理与参数注入（__PROMPT__）",
       "workflowFile": "demo-text-to-image-v1.workflow.json",
       "paramsSchema": {

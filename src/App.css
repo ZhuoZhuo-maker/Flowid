@@ -69,6 +69,31 @@
   font-family: var(--font-family-sans);
 }
 
+/* 通用滚动条（不依赖 .studio-main 容器）：用于弹窗/覆盖层等区域 */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
 /*
  * 统一滚动条外观（细轨、同色滑块），避免侧栏 / 设置 / 节点 / 底部面板各自一套。
  */
@@ -2970,6 +2995,21 @@ body,
   filter: saturate(0.7) brightness(0.92);
 }
 
+/* 深色下拉：统一 Windows 原生 option 弹层配色 */
+select.flowid-dark-select {
+  color-scheme: dark;
+}
+
+select.flowid-dark-select option {
+  background: #111114;
+  color: rgba(255, 255, 255, 0.78);
+}
+
+select.flowid-dark-select optgroup {
+  background: #111114;
+  color: rgba(255, 255, 255, 0.55);
+}
+
 .workflow-settings-backdrop {
   position: absolute;
   inset: 0;
@@ -3161,6 +3201,72 @@ body,
   margin: 0;
   color: #c8d2e8;
   font-size: 13px;
+}
+
+.auth-modal__links {
+  border: 1px solid #262c39;
+  background: rgba(15, 18, 24, 0.6);
+  border-radius: 12px;
+  padding: 10px 10px;
+}
+
+.auth-modal__link-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 6px;
+}
+
+.auth-modal__link-row + .auth-modal__link-row {
+  border-top: 1px solid rgba(38, 44, 57, 0.9);
+}
+
+.auth-modal__link-row .k {
+  font-size: 12px;
+  color: #9ea9c4;
+  flex-shrink: 0;
+}
+
+.auth-modal__link-row .v {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: rgba(251, 146, 60, 0.95);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 290px;
+  text-align: right;
+}
+
+.auth-modal__link-row .v:hover {
+  text-decoration: underline;
+}
+
+.auth-modal__link-row .v.v-empty {
+  color: rgba(200, 210, 232, 0.45);
+  text-decoration: none;
+}
+
+.auth-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.auth-modal__status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.auth-modal__msg {
+  color: rgba(255, 255, 255, 0.62);
+  line-height: 1.5;
 }
 
 .studio-music-prompt-panel-wrap {
@@ -4803,6 +4909,22 @@ body,
   font-size: 12px;
   color: #94a3b8;
   line-height: 1.5;
+}
+
+.ai-assistant-panel__testRow {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 8px;
+  margin-bottom: 6px;
+}
+
+.ai-assistant-panel__testBtn {
+  height: 34px;
+  padding: 0 14px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
 }
 
 .ai-assistant-panel__avatarWrap {

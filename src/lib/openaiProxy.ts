@@ -1,4 +1,4 @@
-import { loadAuthApiConfig } from './auth'
+import { loadLicenseServerConfig } from './licenseAccess'
 
 type ProxyRequest = {
   url: string
@@ -10,7 +10,7 @@ type ProxyRequest = {
 const DEFAULT_AUTH_PROXY_BASES = ['http://127.0.0.1:3721', 'http://localhost:3721'] as const
 
 function getOpenAiProxyUrlCandidates(): string[] {
-  const configured = String(loadAuthApiConfig().baseUrl || '')
+  const configured = String(loadLicenseServerConfig().baseUrl || '')
     .trim()
     .replace(/\/+$/, '')
   const bases: string[] = []

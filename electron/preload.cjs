@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('flowidDesktop', {
   /** OpenAI 兼容 HTTP（主进程 fetch，供桌面端直连厂商 API） */
   openAiCompatFetch: (payload) => ipcRenderer.invoke('flowid:openai-compat-fetch', payload),
   getAppVersion: () => ipcRenderer.invoke('desktop:get-app-version'),
+  getMachineId: () => ipcRenderer.invoke('desktop:get-machine-id'),
   checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
   readUtf8File: (filePath) => ipcRenderer.invoke('flowid:fs-read-utf8', filePath),
   readBinaryFile: (filePath) => ipcRenderer.invoke('flowid:fs-read-binary', filePath),
