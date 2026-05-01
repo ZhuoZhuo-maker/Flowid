@@ -1,7 +1,13 @@
-import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { Upload, Search, Video, Music, User, Box } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import type { AssetItem } from './types'
+import {
+  imageMimeTypeFromPath,
+  parseFlowidMaterialDragPayload,
+  type FlowidMaterialDragPayload,
+  type MaterialLibraryTabId,
+} from '../../lib/materialLibrary'
 
 const CATEGORIES = [
   { id: 'all', label: '全部', icon: Box },
@@ -15,10 +21,77 @@ const CATEGORIES = [
 type CategoryId = (typeof CATEGORIES)[number]['id']
 
 function categoryForAsset(asset: AssetItem): Exclude<CategoryId, 'all'> {
+  if (asset.materialCategory) return asset.materialCategory
   if (asset.kind === 'audio') return 'audio'
   if (asset.kind === 'image') return 'scene'
   if (asset.kind === 'video') return 'prop'
   return 'other'
+}
+
+/**
+ * 桌面端：页面多为 http(s) 来源时，直接用 file:// 作 img src 会被浏览器拦截；
+ * 经主进程读盘再生成 blob: URL 可正常显示（含中文/特殊字符路径）。
+ */
+function DiskBackedLibraryImage({
+  diskPath,
+  alt,
+  className,
+}: {
+  diskPath: string
+  alt: string
+  className?: string
+}) {
+  const [objectUrl, setObjectUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  const blobRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const desk = window.flowidDesktop
+    setObjectUrl(null)
+    setFailed(false)
+    const readBinary = desk?.readBinaryFile
+    if (!readBinary) {
+      setFailed(true)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const r = await readBinary(diskPath)
+      if (cancelled) return
+      if (!r?.ok || !r.data?.byteLength) {
+        setFailed(true)
+        return
+      }
+      const blob = new Blob([r.data], { type: imageMimeTypeFromPath(diskPath) })
+      const url = URL.createObjectURL(blob)
+      if (cancelled) {
+        URL.revokeObjectURL(url)
+        return
+      }
+      blobRef.current = url
+      setObjectUrl(url)
+    })()
+    return () => {
+      cancelled = true
+      const u = blobRef.current
+      blobRef.current = null
+      if (u) URL.revokeObjectURL(u)
+    }
+  }, [diskPath])
+
+  if (objectUrl) {
+    return <img src={objectUrl} className={className} alt={alt} />
+  }
+  if (failed) {
+    return (
+      <div
+        className={`${className || ''} flex items-center justify-center bg-white/5 text-[10px] text-white/35 text-center px-1`}
+      >
+        预览失败
+      </div>
+    )
+  }
+  return <div className={`${className || ''} bg-white/5 animate-pulse`} aria-hidden />
 }
 
 /**
@@ -32,21 +105,29 @@ export function AssetToolboxPanel({
   onUploadFiles,
   onUseAsset,
   onRemoveAsset,
+  onRenameAsset,
+  onFlowidMaterialDrop,
   embedded = false,
 }: {
   assets: AssetItem[]
   hoveredAssetId: string | null
   setHoveredAssetId: Dispatch<SetStateAction<string | null>>
   onUpload: () => void
-  /** 拖拽到面板时直接走与全局上传相同的处理 */
-  onUploadFiles?: (files: FileList | null) => void
+  /** 拖拽到面板时直接走与全局上传相同的处理；第二个参数为当前分类标签 */
+  onUploadFiles?: (files: FileList | null, opts?: { category?: MaterialLibraryTabId }) => void
   onUseAsset: (asset: AssetItem) => void
   onRemoveAsset: (assetId: string) => void
+  /** 双击重命名（桌面磁盘素材） */
+  onRenameAsset?: (assetId: string, nextName: string) => void | Promise<void>
+  /** 从画布节点拖入的媒体 */
+  onFlowidMaterialDrop?: (payload: FlowidMaterialDragPayload, category: CategoryId) => void | Promise<void>
   /** 嵌入到右侧面板时去掉卡片外壳（避免双层边框/阴影）。 */
   embedded?: boolean
 }) {
   const [activeCategory, setActiveCategory] = useState<CategoryId>('all')
   const [isDragging, setIsDragging] = useState(false)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const filteredAssets = useMemo(() => {
@@ -57,10 +138,26 @@ export function AssetToolboxPanel({
   const handleFiles = (files: FileList | null) => {
     if (!files?.length) return
     if (onUploadFiles) {
-      onUploadFiles(files)
+      onUploadFiles(files, { category: activeCategory })
       return
     }
     onUpload()
+  }
+
+  const beginRename = (asset: AssetItem) => {
+    if (!asset.diskPath || !onRenameAsset) return
+    setRenamingId(asset.id)
+    setRenameDraft(asset.name.replace(/(\.[^.]+)$/, ''))
+  }
+
+  const commitRename = () => {
+    if (!renamingId || !onRenameAsset) {
+      setRenamingId(null)
+      return
+    }
+    const next = renameDraft.trim()
+    if (next) void onRenameAsset(renamingId, next)
+    setRenamingId(null)
   }
 
   const shellClassName = embedded
@@ -91,6 +188,11 @@ export function AssetToolboxPanel({
       onDrop={(e) => {
         e.preventDefault()
         setIsDragging(false)
+        const payload = parseFlowidMaterialDragPayload(e.dataTransfer)
+        if (payload && onFlowidMaterialDrop) {
+          void onFlowidMaterialDrop(payload, activeCategory)
+          return
+        }
         handleFiles(e.dataTransfer.files)
       }}
       className={shellClassName}
@@ -157,11 +259,14 @@ export function AssetToolboxPanel({
                   role="button"
                   tabIndex={0}
                   title={`使用 ${asset.name}`}
-                  onClick={() => onUseAsset(asset)}
+                  onClick={() => {
+                    if (renamingId === asset.id) return
+                    onUseAsset(asset)
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
-                      onUseAsset(asset)
+                      if (renamingId !== asset.id) onUseAsset(asset)
                     }
                   }}
                   className="group relative aspect-square bg-black/40 border border-white/5 rounded-xl overflow-hidden cursor-pointer hover:border-orange-500/50 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-orange-500/50"
@@ -169,11 +274,19 @@ export function AssetToolboxPanel({
                   onMouseLeave={() => setHoveredAssetId(null)}
                 >
                   {asset.kind === 'image' ? (
-                    <img
-                      src={asset.src}
-                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500 pointer-events-none"
-                      alt={asset.name}
-                    />
+                    asset.diskPath && window.flowidDesktop?.readBinaryFile ? (
+                      <DiskBackedLibraryImage
+                        diskPath={asset.diskPath}
+                        alt={asset.name}
+                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500 pointer-events-none"
+                      />
+                    ) : (
+                      <img
+                        src={asset.src}
+                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500 pointer-events-none"
+                        alt={asset.name}
+                      />
+                    )
                   ) : null}
                   {asset.kind === 'video' ? (
                     <div className="w-full h-full flex items-center justify-center bg-purple-500/10 pointer-events-none">
@@ -192,7 +305,45 @@ export function AssetToolboxPanel({
                     </div>
                   </div>
 
-                  {hoveredAssetId === asset.id ? (
+                  <div
+                    className="absolute inset-x-0 bottom-0 z-[5] border-t border-white/10 bg-black/70 px-1.5 py-1 pointer-events-auto"
+                    onClick={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    {renamingId === asset.id ? (
+                      <input
+                        className="w-full bg-black/50 border border-orange-500/40 rounded px-1 py-0.5 text-[11px] font-mono text-white"
+                        value={renameDraft}
+                        autoFocus
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={() => commitRename()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            commitRename()
+                          }
+                          if (e.key === 'Escape') {
+                            e.preventDefault()
+                            setRenamingId(null)
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div
+                        className="text-[11px] font-mono text-white/75 truncate cursor-text select-text"
+                        title={asset.diskPath ? '双击重命名（同步磁盘文件名）' : asset.name}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          beginRename(asset)
+                        }}
+                      >
+                        {asset.name}
+                      </div>
+                    )}
+                  </div>
+
+                  {hoveredAssetId === asset.id && renamingId !== asset.id ? (
                     <button
                       type="button"
                       className="absolute top-1.5 right-1.5 z-10 rounded-md bg-black/70 px-2 py-1 text-[11px] font-black uppercase tracking-wider text-white/90 hover:bg-red-600/90 border border-white/10"

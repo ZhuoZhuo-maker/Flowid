@@ -2,6 +2,10 @@
 
 Flowid 无限画布工作室（React + TypeScript + Vite）。
 
+## 授权服务部署（线上授权码 / 预设模板）
+
+把 **`server/auth-server.cjs`** 部署到公网时，可按步骤操作：**[docs/deploy-auth-server.md](./docs/deploy-auth-server.md)**。
+
 ---
 
 以下为创建工程时自带的 Vite 模板说明（可忽略）。

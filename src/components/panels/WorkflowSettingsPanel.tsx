@@ -30,6 +30,7 @@ import {
   saveLocalDiskPathsSettings,
   type LocalDiskPathsSettings,
 } from '../../lib/localDiskPathsSettings'
+import { ensureMaterialLibraryCategoryDirs } from '../../lib/materialLibrary'
 import {
   unbindFlowidProjectJsonBrowser,
 } from '../../lib/projectDiskMirror'
@@ -43,7 +44,7 @@ import type {
   WorkflowProviderType,
 } from '../../types'
 import type { AiAssistantConfig } from '../../lib/aiAssistantAgent'
-import { USER_AGREEMENT_TEXT } from '../../lib/userAgreement'
+import { USER_AGREEMENT_TEXT, fetchRemoteUserAgreement } from '../../lib/userAgreement'
 import { loadLicenseServerConfig } from '../../lib/licenseAccess'
 import { loadCloudCallLogs, type CloudCallLogEntry } from '../../lib/cloudCallLogs'
 import {
@@ -311,6 +312,11 @@ export function WorkflowSettingsPanel({
   const [cloudSelfMsg, setCloudSelfMsg] = useState<string>('')
   const [cloudLogsPage, setCloudLogsPage] = useState(1)
   const [cloudAssistMsg, setCloudAssistMsg] = useState<string>('')
+  const [userAgreementRemote, setUserAgreementRemote] = useState<{
+    version: string
+    text: string
+    updatedAtMs: number
+  } | null>(null)
   type CloudAssistTokenPreset = {
     id: string
     /** 对应 Provider 分类（例如 openai/doubao/gemini），空字符串代表通用 */
@@ -470,6 +476,25 @@ export function WorkflowSettingsPanel({
       Boolean(window.flowidDesktop?.pickDirectory && window.flowidDesktop?.pickJsonFile),
     [],
   )
+
+  useEffect(() => {
+    let alive = true
+    void fetchRemoteUserAgreement().then((r) => {
+      if (!alive) return
+      setUserAgreementRemote(r)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const onLicenseChanged = () => {
+      void fetchRemoteUserAgreement().then((r) => setUserAgreementRemote(r))
+    }
+    window.addEventListener('flowid:license-changed', onLicenseChanged as EventListener)
+    return () => window.removeEventListener('flowid:license-changed', onLicenseChanged as EventListener)
+  }, [])
 
   const sidebarItems = useMemo(() => SETTINGS_SIDEBAR, [])
   const [editingWorkflow, setEditingWorkflow] = useState<{
@@ -1131,6 +1156,16 @@ export function WorkflowSettingsPanel({
   }, [executionMode, onRefreshOfficialTemplates])
 
   useEffect(() => {
+    const syncPathsFromStorage = () => {
+      setDiskPaths(loadLocalDiskPathsSettings())
+    }
+    window.addEventListener('flowid:local-disk-paths-changed', syncPathsFromStorage as EventListener)
+    return () => {
+      window.removeEventListener('flowid:local-disk-paths-changed', syncPathsFromStorage as EventListener)
+    }
+  }, [])
+
+  useEffect(() => {
     if (activeTab !== 'local-storage') return
     void (async () => {
       const base = loadLocalDiskPathsSettings()
@@ -1299,12 +1334,30 @@ export function WorkflowSettingsPanel({
   /**
    * 清除单行路径（网页目录会同步删除 IndexedDB 句柄；工程目录会解除浏览器绑定）。
    */
-  const clearPathField = async (field: 'inputPath' | 'outputPath' | 'workflowPath' | 'flowidProjectJsonPath') => {
+  const clearPathField = async (
+    field:
+      | 'inputPath'
+      | 'outputPath'
+      | 'workflowPath'
+      | 'flowidProjectJsonPath'
+      | 'materialLibraryPath'
+      | 'systemPromptCoverPath',
+  ) => {
     if (field === 'flowidProjectJsonPath') {
       await unbindFlowidProjectJsonBrowser()
       setBrowserProjectBound(false)
       setDiskPaths((p) => ({ ...p, flowidProjectJsonPath: '' }))
       saveLocalDiskPathsSettings({ flowidProjectJsonPath: '' })
+      return
+    }
+    if (field === 'materialLibraryPath') {
+      setDiskPaths((p) => ({ ...p, materialLibraryPath: '' }))
+      saveLocalDiskPathsSettings({ materialLibraryPath: '' })
+      return
+    }
+    if (field === 'systemPromptCoverPath') {
+      setDiskPaths((p) => ({ ...p, systemPromptCoverPath: '' }))
+      saveLocalDiskPathsSettings({ systemPromptCoverPath: '' })
       return
     }
     if (!isElectronDesktop) {
@@ -1315,11 +1368,80 @@ export function WorkflowSettingsPanel({
   }
 
   /**
+   * 选择素材库根目录（桌面端）：自动创建「人物 / 场景 / 道具 / 音效 / 其他」子文件夹。
+   */
+  const pickMaterialLibraryPath = async () => {
+    if (!isElectronDesktop) {
+      window.alert('素材库与本地文件夹实时同步仅在桌面版可用；网页版可在此填写备忘路径。')
+      return
+    }
+    const desk = window.flowidDesktop
+    if (!desk?.pickDirectory) {
+      window.alert('当前桌面端能力异常，请重启 Flowid 桌面进程后再试。')
+      return
+    }
+    const res = await desk.pickDirectory({
+      defaultPath:
+        String(diskPaths.materialLibraryPath || '').trim() ||
+        String(diskPaths.flowidProjectJsonPath || '').trim() ||
+        diskPaths.workflowPath,
+    })
+    if (!res.ok) {
+      window.alert(res.error || '选择失败')
+      return
+    }
+    if (res.canceled || !res.path) return
+    const ensured = await ensureMaterialLibraryCategoryDirs(res.path)
+    if (!ensured.ok) {
+      window.alert(ensured.error || '创建分类子文件夹失败')
+      return
+    }
+    setDiskPaths((p) => ({ ...p, materialLibraryPath: res.path! }))
+    saveLocalDiskPathsSettings({ materialLibraryPath: res.path! })
+  }
+
+  /**
+   * 选择「系统提示词封面」存储根目录（桌面端）：仅确保所选目录存在。
+   */
+  const pickSystemPromptCoverPath = async () => {
+    if (!isElectronDesktop) {
+      window.alert('系统提示词封面落盘仅在桌面版可用；网页版可在此填写备忘路径。')
+      return
+    }
+    const desk = window.flowidDesktop
+    if (!desk?.pickDirectory || !desk.ensureDirectory) {
+      window.alert('当前桌面端能力异常，请重启 Flowid 桌面进程后再试。')
+      return
+    }
+    const res = await desk.pickDirectory({
+      defaultPath:
+        String(diskPaths.systemPromptCoverPath || '').trim() ||
+        String(diskPaths.materialLibraryPath || '').trim() ||
+        String(diskPaths.flowidProjectJsonPath || '').trim() ||
+        diskPaths.workflowPath,
+    })
+    if (!res.ok) {
+      window.alert(res.error || '选择失败')
+      return
+    }
+    if (res.canceled || !res.path) return
+    const ensured = await desk.ensureDirectory(res.path)
+    if (!ensured.ok) {
+      window.alert(ensured.error || '创建目录失败')
+      return
+    }
+    setDiskPaths((p) => ({ ...p, systemPromptCoverPath: ensured.path || res.path! }))
+    saveLocalDiskPathsSettings({ systemPromptCoverPath: ensured.path || res.path! })
+  }
+
+  /**
    * 将路径配置写入 localStorage。
    */
   const commitDiskPaths = () => {
     saveLocalDiskPathsSettings(diskPaths)
-    window.alert('本地路径已保存。工程将在自动保存时同步写入「Flowid 工程目录」（若已填写）。')
+    window.alert(
+      '本地路径已保存。工程将在自动保存时同步写入「Flowid 工程目录」（若已填写）。\n提示：若在输入框里手改路径，必须点本按钮保存后才会写入「项目档案」扫描目录。',
+    )
   }
 
   /**
@@ -1962,7 +2084,76 @@ export function WorkflowSettingsPanel({
                         type="button"
                         className={`${WF_BTN_CAPSULE_MUTED} text-[11px]`}
                         onClick={() => void clearPathField('flowidProjectJsonPath')}
-                        disabled={!diskPaths.flowidProjectJsonPath.trim() && !browserProjectBound}
+                      >
+                        清除
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+                    <div className="w-24 shrink-0 px-1">
+                      <div className="text-[14px] font-black uppercase text-white/80">素材库</div>
+                      <div className="font-mono text-[11px] uppercase text-white/25">assets</div>
+                    </div>
+                    <input
+                      className={`${WF_INPUT} min-w-0 flex-1`}
+                      value={diskPaths.materialLibraryPath}
+                      placeholder={
+                        isElectronDesktop
+                          ? '右侧面板「我的素材库」同步根目录，将自动创建 人物/场景/道具/音效/其他'
+                          : '桌面版可同步本地素材库；网页版可填写备忘路径'
+                      }
+                      onChange={(e) => setDiskPaths((p) => ({ ...p, materialLibraryPath: e.target.value }))}
+                      aria-label="素材库根目录路径"
+                    />
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <button
+                        type="button"
+                        title="选择文件夹"
+                        className={`${WF_BTN_CAPSULE_DARK} text-[11px]`}
+                        onClick={() => void pickMaterialLibraryPath()}
+                      >
+                        选择
+                      </button>
+                      <button
+                        type="button"
+                        className={`${WF_BTN_CAPSULE_MUTED} text-[11px]`}
+                        onClick={() => void clearPathField('materialLibraryPath')}
+                      >
+                        清除
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+                    <div className="w-24 shrink-0 px-1">
+                      <div className="text-[14px] font-black uppercase text-white/80">封面存储</div>
+                      <div className="font-mono text-[11px] uppercase text-white/25">covers</div>
+                    </div>
+                    <input
+                      className={`${WF_INPUT} min-w-0 flex-1`}
+                      value={diskPaths.systemPromptCoverPath}
+                      placeholder={
+                        isElectronDesktop
+                          ? '例如 D:\\FlowidData\\system-prompt-covers（右栏系统提示词封面上传到此目录）'
+                          : '桌面版可落盘封面；网页版可填写备忘路径'
+                      }
+                      onChange={(e) => setDiskPaths((p) => ({ ...p, systemPromptCoverPath: e.target.value }))}
+                      aria-label="系统提示词封面存储目录"
+                    />
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <button
+                        type="button"
+                        title="选择文件夹"
+                        className={`${WF_BTN_CAPSULE_DARK} text-[11px]`}
+                        onClick={() => void pickSystemPromptCoverPath()}
+                      >
+                        选择
+                      </button>
+                      <button
+                        type="button"
+                        className={`${WF_BTN_CAPSULE_MUTED} text-[11px]`}
+                        onClick={() => void clearPathField('systemPromptCoverPath')}
                       >
                         清除
                       </button>
@@ -1993,6 +2184,22 @@ export function WorkflowSettingsPanel({
                 自动保存：修改任一字段后立即生效并写入本地配置。云端推荐使用 GPT-4o-mini。
               </p>
               <div className="space-y-8">
+                <div className="space-y-2 rounded-2xl border border-white/10 bg-black/30 p-4">
+                  <label className="flex cursor-pointer items-center gap-3">
+                    <input
+                      type="checkbox"
+                      className="h-5 w-5 shrink-0 accent-orange-600 rounded"
+                      checked={aiAssistantConfig.virtualAvatarVisible}
+                      onChange={(e) => onAiAssistantConfigChange({ virtualAvatarVisible: e.target.checked })}
+                    />
+                    <span className="text-[14px] font-black uppercase tracking-widest text-white/50">
+                      显示画布 AI 虚拟助手
+                    </span>
+                  </label>
+                  <p className="m-0 pl-8 text-[11px] leading-relaxed text-white/35">
+                    关闭后隐藏右下角虚拟人；需要对话时请重新开启。
+                  </p>
+                </div>
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <button type="button" className={WF_BTN_CAPSULE_DARK} onClick={startNewAiCorePreset}>
@@ -2989,9 +3196,16 @@ export function WorkflowSettingsPanel({
             <div className={`${WF_CARD} p-6`}>
               <div className="space-y-4">
                 <div className={WF_SECTION_TITLE}>只读协议文本（可滚动）</div>
+                <div className="text-[12px] text-white/35">
+                  {userAgreementRemote
+                    ? `来源：授权服务 · version=${userAgreementRemote.version} · 更新 ${new Date(
+                        userAgreementRemote.updatedAtMs,
+                      ).toLocaleString('zh-CN')}`
+                    : '来源：内置默认（未配置授权服务或拉取失败）'}
+                </div>
                 <textarea
                   readOnly
-                  value={USER_AGREEMENT_TEXT}
+                  value={userAgreementRemote?.text ?? USER_AGREEMENT_TEXT}
                   className={`${WF_INPUT} min-h-[520px] max-h-[60vh] resize-y whitespace-pre-wrap leading-relaxed`}
                   aria-label="用户协议（只读）"
                 />

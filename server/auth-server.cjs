@@ -15,6 +15,7 @@ const TEMPLATE_INDEX_PATH = path.join(TEMPLATES_DIR, 'index.json')
 const SYSTEM_PROMPTS_DIR = path.resolve(__dirname, 'system-prompts')
 const SYSTEM_PROMPTS_INDEX_PATH = path.join(SYSTEM_PROMPTS_DIR, 'index.json')
 const CLOUD_MODELS_PATH = path.resolve(__dirname, 'cloud-models.json')
+const USER_AGREEMENT_PATH = path.resolve(__dirname, 'user-agreement.json')
 const DAY_MS = 24 * 60 * 60 * 1000
 const TASK_TIMEOUT_MS = 30 * 60 * 1000
 const tasks = new Map()
@@ -124,6 +125,33 @@ function writeCloudModels(next) {
   const token = String(next?.token || '')
   const providers = Array.isArray(next?.providers) ? next.providers : []
   fs.writeFileSync(CLOUD_MODELS_PATH, JSON.stringify({ token, providers }, null, 2), 'utf8')
+}
+
+function readUserAgreement() {
+  try {
+    if (!fs.existsSync(USER_AGREEMENT_PATH)) {
+      return { version: '2026-04', text: '', updatedAtMs: 0 }
+    }
+    const raw = fs.readFileSync(USER_AGREEMENT_PATH, 'utf8')
+    const j = JSON.parse(raw)
+    return {
+      version: String(j?.version || '2026-04').trim() || '2026-04',
+      text: String(j?.text || ''),
+      updatedAtMs: Number(j?.updatedAtMs) || 0,
+    }
+  } catch {
+    return { version: '2026-04', text: '', updatedAtMs: 0 }
+  }
+}
+
+/**
+ * @param {{ version?: string, text: string, updatedAtMs?: number }} next
+ */
+function writeUserAgreement(next) {
+  const version = String(next?.version || '').trim() || '2026-04'
+  const text = String(next?.text || '')
+  const updatedAtMs = Number.isFinite(Number(next?.updatedAtMs)) ? Number(next.updatedAtMs) : Date.now()
+  fs.writeFileSync(USER_AGREEMENT_PATH, JSON.stringify({ version, text, updatedAtMs }, null, 2), 'utf8')
 }
 
 function ensureTemplatesIndex() {
@@ -458,6 +486,84 @@ const app = express()
 app.use(cors())
 // Proxy requests (OpenAI compat) may include larger JSON payloads.
 app.use(express.json({ limit: '25mb' }))
+
+// 用户协议：必须在 express.static 之前注册，避免与 public 下路径混淆；若进程未加载到这些路由会表现为 HTTP 404。
+app.get('/user-agreement', (_req, res) => {
+  const u = readUserAgreement()
+  res.json({
+    version: u.version,
+    text: u.text,
+    updatedAtMs: u.updatedAtMs,
+    serverTimeMs: Date.now(),
+  })
+})
+app.get('/admin/user-agreement', adminMiddleware, (_req, res) => {
+  const u = readUserAgreement()
+  res.json({ ...u, serverTimeMs: Date.now() })
+})
+app.post('/admin/user-agreement/save', adminMiddleware, (req, res) => {
+  const text = String(req.body?.text ?? '')
+  if (!String(text).trim()) {
+    res.status(400).json({ message: '协议正文不能为空' })
+    return
+  }
+  const prev = readUserAgreement()
+  const versionIn = String(req.body?.version ?? '').trim()
+  const bump = Boolean(req.body?.bumpVersion)
+  const prevVersion = String(prev.version || '2026-04').trim() || '2026-04'
+  const textChanged = text !== String(prev.text || '')
+  const versionTouched = Boolean(versionIn) && versionIn !== prevVersion
+  let version = versionIn || prevVersion
+  if (bump || (textChanged && !versionIn)) {
+    version = `rev-${Date.now()}`
+  }
+  const prevMs = Number(prev.updatedAtMs) || 0
+  const shouldBumpTime = bump || textChanged || versionTouched || version !== prevVersion
+  const updatedAtMs = shouldBumpTime ? Date.now() : prevMs
+  writeUserAgreement({ version, text, updatedAtMs })
+  res.json({ ok: true, version, text, updatedAtMs, serverTimeMs: Date.now() })
+})
+
+/**
+ * 公开：下载模板工程 JSON 正文。
+ * 必须放在 express.static 之前：否则 `public/` 下若出现与 URL 重叠的路径，可能被静态中间件先处理并 404，动态路由永远接不到。
+ */
+function sendPublicTemplateWorkflow(req, res) {
+  try {
+    const id = String(req.params.id || '').trim()
+    const template = readTemplatesIndex().find((item) => item.id === id)
+    if (!template) {
+      res.status(404).json({ message: '模板不存在' })
+      return
+    }
+    const tier = normalizeTier(template.tier)
+    const resolved = resolveLicenseFromHeadersOptional(req)
+    const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
+    if (tier === 'pro' && !canSeePro) {
+      res.status(403).json({ message: '该模板为会员内容，请先激活授权' })
+      return
+    }
+    const fileName = String(template.workflowFile || '').trim()
+    if (!fileName || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) {
+      res.status(400).json({ message: '模板 workflow 文件名无效' })
+      return
+    }
+    const templatePath = path.join(TEMPLATES_DIR, fileName)
+    if (!fs.existsSync(templatePath)) {
+      res.status(404).json({ message: `模板文件不存在：${fileName}` })
+      return
+    }
+    const raw = fs.readFileSync(templatePath, 'utf8')
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.send(raw)
+  } catch (error) {
+    res.status(500).json({ message: String(error?.message || error || '读取模板失败') })
+  }
+}
+
+app.get('/templates/:id/workflow', sendPublicTemplateWorkflow)
+app.get('/templates/:id/workflow.json', sendPublicTemplateWorkflow)
+
 app.use(express.static(path.join(__dirname, 'public')))
 
 // 后端管理页入口（静态页面；接口仍由 /admin/* 提供）

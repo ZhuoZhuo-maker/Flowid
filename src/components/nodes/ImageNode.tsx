@@ -7,6 +7,7 @@ import {
   saveLocalImageAsset,
 } from '../../lib/localImageAssetStore'
 import type { ImageNodeData } from '../../types'
+import { imageDownloadFileName, setFlowidMaterialDragData } from '../../lib/materialLibrary'
 import { NodeChrome } from './NodeChrome'
 
 /**
@@ -109,6 +110,9 @@ export function ImageNode({
     [applyLocalImageFile],
   )
 
+  const imageDownloadName =
+    data.src ? imageDownloadFileName(data.title, data.src, data.srcFileName) : '图片.png'
+
   return (
     <>
       <Handle type="target" position={Position.Left} className="studio-handle" />
@@ -137,7 +141,22 @@ export function ImageNode({
         >
           {data.src ? (
             <>
-              <img src={data.src} alt="" className="studio-thumb__img" />
+              <img
+                src={data.src}
+                alt=""
+                className="studio-thumb__img"
+                draggable
+                onDragStart={(e) => {
+                  e.stopPropagation()
+                  const title = String(data.title || '').trim() || '图片节点'
+                  setFlowidMaterialDragData(e.dataTransfer, {
+                    nodeId: id,
+                    title,
+                    kind: 'image',
+                    src: data.src,
+                  })
+                }}
+              />
               <div className="studio-thumb__actions">
                 <button
                   type="button"
@@ -161,7 +180,7 @@ export function ImageNode({
                 </a>
                 <a
                   href={data.src}
-                  download
+                  download={imageDownloadName}
                   className="studio-thumb__action"
                   title="下载原图"
                 >

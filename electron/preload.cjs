@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron')
  * 暴露桌面端能力给前端。
  */
 contextBridge.exposeInMainWorld('flowidDesktop', {
+  /** 主进程原生确认框（删除等敏感操作） */
+  confirmDialog: (payload) => ipcRenderer.invoke('flowid:dialog-confirm', payload),
   /** OpenAI 兼容 HTTP（主进程 fetch，供桌面端直连厂商 API） */
   openAiCompatFetch: (payload) => ipcRenderer.invoke('flowid:openai-compat-fetch', payload),
   getAppVersion: () => ipcRenderer.invoke('desktop:get-app-version'),
@@ -13,6 +15,7 @@ contextBridge.exposeInMainWorld('flowidDesktop', {
   readBinaryFile: (filePath) => ipcRenderer.invoke('flowid:fs-read-binary', filePath),
   readDirectory: (dirPath, opts) => ipcRenderer.invoke('flowid:fs-read-directory', dirPath, opts),
   deleteFile: (filePath) => ipcRenderer.invoke('flowid:fs-delete-file', filePath),
+  renameFile: (fromPath, toPath) => ipcRenderer.invoke('flowid:fs-rename-file', fromPath, toPath),
   writeUtf8File: (filePath, text) => ipcRenderer.invoke('flowid:fs-write-utf8', filePath, text),
   writeBinaryFile: (filePath, data) => {
     /** 统一成 ArrayBuffer，避免 Uint8Array 经 IPC 后形态不一致导致主进程拒写 */

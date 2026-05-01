@@ -5,12 +5,14 @@
  * - 浏览器无法仅凭 `F:\...` 这类字符串直接写盘；桌面端（Electron）可对工程目录与 input/output/workflow 做真实读写。
  * - `flowidProjectJsonPath`：Flowid 工程目录（历史字段名）；桌面端写入 `flowid.current.json` 与 `项目名.json`；网页端为目录句柄绑定。
  * - `inputPath` / `outputPath` / `workflowPath`：桌面端分别用于镜像上传图、生成物、工作流 JSON；网页端多为展示用绑定路径。
+ * - `materialLibraryPath`：桌面端「我的素材库」根目录；其下自动维护与分类标签一致的子文件夹并与右侧面板同步。
+ * - `systemPromptCoverPath`：桌面端「系统提示词」封面图根目录；文件名为提示词标题 + 原图扩展名。
  */
 
 const STORAGE_KEY = 'flowid.local.paths.v1'
 
 /**
- * 四类常用目录/文件路径（由用户在设置中填写或通过「浏览」选择）。
+ * 常用目录/文件路径（由用户在设置中填写或通过「浏览」选择）。
  */
 export type LocalDiskPathsSettings = {
   /** 输入素材目录：桌面端保存时会把本地上传的参考图镜像一份到此目录（建议与 ComfyUI input 对齐） */
@@ -21,6 +23,10 @@ export type LocalDiskPathsSettings = {
   workflowPath: string
   /** Flowid 工程目录路径（历史字段名沿用 `flowidProjectJsonPath`） */
   flowidProjectJsonPath: string
+  /** 素材库根目录（桌面端）；子目录：人物 / 场景 / 道具 / 音效 / 其他 */
+  materialLibraryPath: string
+  /** 系统提示词封面存储根目录（桌面端）；按提示词标题命名图片文件 */
+  systemPromptCoverPath: string
 }
 
 /**
@@ -32,6 +38,8 @@ export function getDefaultLocalDiskPathsSettings(): LocalDiskPathsSettings {
     outputPath: '',
     workflowPath: '',
     flowidProjectJsonPath: '',
+    materialLibraryPath: '',
+    systemPromptCoverPath: '',
   }
 }
 
@@ -50,6 +58,10 @@ export function loadLocalDiskPathsSettings(): LocalDiskPathsSettings {
       workflowPath: typeof parsed.workflowPath === 'string' ? parsed.workflowPath : d.workflowPath,
       flowidProjectJsonPath:
         typeof parsed.flowidProjectJsonPath === 'string' ? parsed.flowidProjectJsonPath : d.flowidProjectJsonPath,
+      materialLibraryPath:
+        typeof parsed.materialLibraryPath === 'string' ? parsed.materialLibraryPath : d.materialLibraryPath,
+      systemPromptCoverPath:
+        typeof parsed.systemPromptCoverPath === 'string' ? parsed.systemPromptCoverPath : d.systemPromptCoverPath,
     }
   } catch {
     return getDefaultLocalDiskPathsSettings()

@@ -65,7 +65,14 @@ export function LicenseModal({ open, onClose }: LicenseModalProps) {
       setMsg('激活中…')
       const res = await activateLicenseRemote(licenseCode)
       if (!res.ok) {
-        setMsg(res.message || '激活失败')
+        const st = res.httpStatus ?? 0
+        if (st >= 400 && st < 500) {
+          saveLicenseSnapshotV2(null)
+          setSnapshot(null)
+          setMsg(`${res.message || '激活失败'}（已清除本机授权缓存）`)
+        } else {
+          setMsg(res.message || '激活失败')
+        }
         return
       }
       const next: LicenseSnapshotV2 = {
@@ -106,7 +113,15 @@ export function LicenseModal({ open, onClose }: LicenseModalProps) {
       }
       const res = await verifyLicenseRemote(loadLicenseSnapshotV2()!)
       if (!res.ok) {
-        setMsg(res.message || '校验失败')
+        const st = res.httpStatus ?? 0
+        // 4xx：服务端明确拒绝（码已删、冻结、设备不匹配等）；5xx/网络异常不清本地，避免误伤离线用户。
+        if (st >= 400 && st < 500) {
+          saveLicenseSnapshotV2(null)
+          setSnapshot(null)
+          setMsg(`${res.message || '校验失败'}（已清除本机授权缓存，请重新激活）`)
+        } else {
+          setMsg(res.message || '校验失败')
+        }
         return
       }
       const now = Date.now()

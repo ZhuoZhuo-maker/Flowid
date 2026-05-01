@@ -3,6 +3,11 @@ export {}
 declare global {
   interface Window {
     flowidDesktop?: {
+      /** 主进程确认对话框，返回是否点了「确定」 */
+      confirmDialog?: (payload: {
+        message: string
+        detail?: string
+      }) => Promise<{ ok: boolean; confirmed?: boolean; error?: string }>
       /** 主进程发起 OpenAI 兼容请求（绕过渲染进程 CORS；不经过 auth /proxy/openai） */
       openAiCompatFetch?: (payload: {
         url: string
@@ -35,11 +40,16 @@ declare global {
         opts?: { recursive?: boolean; maxFiles?: number; maxDepth?: number },
       ) => Promise<{
         ok: boolean
-        files?: Array<{ name: string; path: string; size: number; mtimeMs: number }>
+        files?: Array<{ name: string; path: string; size: number; mtimeMs: number; birthtimeMs?: number }>
         error?: string
       }>
       /** 删除文件（桌面端） */
       deleteFile?: (filePath: string) => Promise<{ ok: boolean; error?: string }>
+      /** 重命名 / 移动文件（桌面端） */
+      renameFile?: (
+        fromPath: string,
+        toPath: string,
+      ) => Promise<{ ok: boolean; error?: string }>
       /** 写入本地 UTF-8 文件（桌面端） */
       writeUtf8File?: (
         filePath: string,

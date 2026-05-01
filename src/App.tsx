@@ -1,18 +1,51 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import {
   getLicenseNoticeMessage,
   loadLocalLicenseSnapshot,
   saveLocalLicenseSnapshot,
 } from './lib/license'
-import { Plus, Search, ChevronDown, Trash2 } from 'lucide-react'
+import { Plus, Search, ChevronDown, Trash2, ImageUp } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { StudioApp } from './components/StudioApp'
+import { FlowidMark } from './components/FlowidMark'
+import { PresetTemplateCoverImage } from './components/PresetTemplateCoverImage'
 import { loadLocalDiskPathsSettings } from './lib/localDiskPathsSettings'
 import { parseProjectFile } from './lib/persistence'
 import { computeAccessState, loadLicenseSnapshotV2 } from './lib/licenseAccess'
 import { LicenseModal } from './components/panels/LicenseModal'
-import { USER_AGREEMENT_TEXT, USER_AGREEMENT_VERSION } from './lib/userAgreement'
+import {
+  USER_AGREEMENT_TEXT,
+  USER_AGREEMENT_VERSION,
+  fetchRemoteUserAgreement,
+} from './lib/userAgreement'
 import './App.css'
+import {
+  PRESET_TEMPLATE_MOCKS,
+  buildPresetTemplateCategoryTabs,
+  fetchPresetTemplatesFromServer,
+  fetchPresetTemplateWorkflowText,
+  makePresetThumbDataUri,
+  type PresetTemplate,
+} from './lib/templateCatalog'
+import { imageMimeTypeFromPath } from './lib/materialLibrary'
+import {
+  SYSTEM_PROMPT_COVER_EXT_TRIES,
+  coverLeafForTry,
+  joinDiskPath,
+} from './lib/systemPromptCoverPaths'
+import { saveCoverReplaceByTitle } from './lib/coverDisk'
+
+function isDesktopCoverIo(): boolean {
+  return Boolean(
+    typeof window !== 'undefined' &&
+      window.flowidDesktop?.writeBinaryFile &&
+      window.flowidDesktop?.ensureDirectory,
+  )
+}
+
+/** 预设模板页与项目档案：封面上传触发器统一为圆形，与项目卡片删除按钮同高宽以便对齐 */
+const COVER_UPLOAD_TRIGGER_CLASS =
+  'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white/65 backdrop-blur hover:border-orange-400/45 hover:bg-orange-600/22 hover:text-white transition-colors disabled:opacity-40'
 
 type View = 'archive' | 'templates' | 'workspace'
 
@@ -26,21 +59,14 @@ interface Project {
   filePath?: string
 }
 
-interface Template {
-  id: string
-  name: string
-  category: string
-  image: string
-  description: string
-  tier: 'free' | 'pro'
-}
+type Template = PresetTemplate
 
 const MOCK_PROJECTS: Project[] = [
   {
     id: '1',
     name: '电商模特项目',
-    updatedAt: '2026/04/24',
-    createdAt: '2026/04/20',
+    updatedAt: '2026/04/24 12:00',
+    createdAt: '2026/04/20 09:30',
     thumbnail:
       'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop',
     type: 'local',
@@ -48,8 +74,8 @@ const MOCK_PROJECTS: Project[] = [
   {
     id: '2',
     name: '分镜脚本 A',
-    updatedAt: '2026/04/23',
-    createdAt: '2026/04/18',
+    updatedAt: '2026/04/23 15:20',
+    createdAt: '2026/04/18 10:00',
     thumbnail:
       'https://images.unsplash.com/photo-1633167606207-d840b5070fc2?q=80&w=2564&auto=format&fit=crop',
     type: 'local',
@@ -57,8 +83,8 @@ const MOCK_PROJECTS: Project[] = [
   {
     id: '3',
     name: '未命名项目 111',
-    updatedAt: '2026/04/24',
-    createdAt: '2026/04/24',
+    updatedAt: '2026/04/24 08:45',
+    createdAt: '2026/04/24 08:45',
     thumbnail:
       'https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?q=80&w=2564&auto=format&fit=crop',
     type: 'cloud',
@@ -66,98 +92,44 @@ const MOCK_PROJECTS: Project[] = [
   {
     id: '4',
     name: '景观渲染方案 B',
-    updatedAt: '2026/04/22',
-    createdAt: '2026/04/15',
+    updatedAt: '2026/04/22 18:00',
+    createdAt: '2026/04/15 11:15',
     thumbnail:
       'https://images.unsplash.com/photo-1605142127394-ba5f403063f1?q=80&w=2564&auto=format&fit=crop',
     type: 'local',
   },
 ]
 
-function formatDate(ts: number): string {
+function formatDateTimeZh(ts: number): string {
   if (!Number.isFinite(ts)) return '-'
   try {
-    return new Date(ts).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    const d = new Date(ts)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const h = String(d.getHours()).padStart(2, '0')
+    const min = String(d.getMinutes()).padStart(2, '0')
+    return `${y}/${m}/${day} ${h}:${min}`
   } catch {
     return '-'
   }
 }
 
-function hashToHue(input: string): number {
-  const s = String(input || '')
-  let h = 0
-  for (let i = 0; i < s.length; i += 1) {
-    h = (h * 31 + s.charCodeAt(i)) >>> 0
+/** 首页「新建项目」用：单调递增序号，避免随机三位数看起来「跳号」。 */
+const UNNAMED_PROJECT_SEQ_KEY = 'flowid.unnamed-project-seq.v1'
+
+function nextUnnamedProjectDisplayNumber(): number {
+  try {
+    const raw = localStorage.getItem(UNNAMED_PROJECT_SEQ_KEY)
+    let cur = Number.parseInt(String(raw || '0'), 10)
+    if (!Number.isFinite(cur) || cur < 0) cur = 0
+    const next = cur + 1
+    localStorage.setItem(UNNAMED_PROJECT_SEQ_KEY, String(next))
+    return next
+  } catch {
+    return Math.floor(Math.random() * 900 + 100)
   }
-  return h % 360
 }
-
-function makeThumbDataUri(seed: string): string {
-  const hue = hashToHue(seed)
-  const h2 = (hue + 42) % 360
-  const svg = `
-  <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="750" viewBox="0 0 1200 750">
-    <defs>
-      <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="hsl(${hue}, 70%, 28%)"/>
-        <stop offset="1" stop-color="hsl(${h2}, 70%, 20%)"/>
-      </linearGradient>
-      <radialGradient id="r" cx="30%" cy="20%" r="80%">
-        <stop offset="0" stop-color="rgba(234,88,12,0.22)"/>
-        <stop offset="1" stop-color="rgba(0,0,0,0)"/>
-      </radialGradient>
-    </defs>
-    <rect width="1200" height="750" fill="url(#g)"/>
-    <rect width="1200" height="750" fill="url(#r)"/>
-    <g opacity="0.18" fill="white">
-      <circle cx="220" cy="240" r="120"/>
-      <circle cx="980" cy="140" r="90"/>
-      <circle cx="780" cy="560" r="160"/>
-    </g>
-  </svg>`
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
-}
-
-const TEMPLATE_CATEGORIES = ['全部', '建筑', '角色', '抽象', '工业', '景观']
-
-const MOCK_TEMPLATES: Template[] = [
-  {
-    id: 't1',
-    name: '极简流线型建筑',
-    category: '建筑',
-    image:
-      'https://images.unsplash.com/photo-1506146332389-18140ed74d5a?q=80&w=2564&auto=format&fit=crop',
-    description: '采用参数化设计风格，强调流动感与现代性。',
-    tier: 'free',
-  },
-  {
-    id: 't2',
-    name: '赛博朋克工业组件',
-    category: '工业',
-    image:
-      'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2564&auto=format&fit=crop',
-    description: '硬表面建模参考，包含复杂的机械刻线与发光原件。',
-    tier: 'pro',
-  },
-  {
-    id: 't3',
-    name: '超现实有机生命体',
-    category: '角色',
-    image:
-      'https://images.unsplash.com/photo-1614728263952-84ea206f99b6?q=80&w=2564&auto=format&fit=crop',
-    description: '结合生物形态与几何结构的奇幻物种设计。',
-    tier: 'pro',
-  },
-  {
-    id: 't4',
-    name: '未来城市景观',
-    category: '景观',
-    image:
-      'https://images.unsplash.com/photo-1605142127394-ba5f403063f1?q=80&w=2564&auto=format&fit=crop',
-    description: '多层级城市架构，光影效果针对夜景极致优化。',
-    tier: 'free',
-  },
-]
 
 function Navigation({
   activeView,
@@ -174,9 +146,7 @@ function Navigation({
     <header className="fixed top-6 inset-x-8 h-14 flex items-center justify-between z-50 pointer-events-none">
       <div className="flex items-center gap-4 pointer-events-auto">
         <div className="flex items-center gap-3 bg-[#111114] border border-white/5 px-6 py-2.5 rounded-full shadow-2xl backdrop-blur-xl">
-          <div className="w-6 h-6 bg-orange-600 flex items-center justify-center rounded-sm">
-            <span className="text-[14px] font-black text-white">F</span>
-          </div>
+          <FlowidMark />
           <span className="text-sm font-black tracking-widest uppercase">
             Flowid
           </span>
@@ -269,11 +239,23 @@ function ProjectCard({
   project,
   onClick,
   onDelete,
+  onUploadCover,
+  coverUploadBusy,
+  onCoverFileDrop,
 }: {
   project: Project
   onClick?: () => void
   onDelete?: () => void
+  onUploadCover?: () => void
+  coverUploadBusy?: boolean
+  /** 已有本地封面时用于拖拽替换（不显示上传按钮时仍可用） */
+  onCoverFileDrop?: (file: File) => void | Promise<void>
 }) {
+  const canDropReplaceCover =
+    Boolean(onCoverFileDrop) &&
+    isDesktopCoverIo() &&
+    String(project.thumbnail || '').startsWith('blob:')
+
   return (
     <motion.div
       layout
@@ -282,27 +264,72 @@ function ProjectCard({
       whileHover={{ y: -5 }}
       className="group bg-[#111114] border border-white/5 rounded-2xl overflow-hidden shadow-2xl relative"
     >
-      <div className="aspect-[16/10] bg-[#0A0A0C] relative overflow-hidden">
-        <img
-          src={project.thumbnail}
-          className="w-full h-full object-cover opacity-30 group-hover:scale-110 group-hover:opacity-80 transition-all duration-700"
-        />
+      <div
+        className="aspect-[16/10] bg-[#0A0A0C] relative overflow-hidden"
+        title={canDropReplaceCover ? '拖拽新图片到此处可替换封面' : undefined}
+        onDragOver={(e) => {
+          if (!canDropReplaceCover) return
+          e.preventDefault()
+          e.stopPropagation()
+          e.dataTransfer.dropEffect = 'copy'
+        }}
+        onDrop={(e) => {
+          if (!canDropReplaceCover || !onCoverFileDrop) return
+          e.preventDefault()
+          e.stopPropagation()
+          const f = e.dataTransfer.files?.[0]
+          if (!f || !String(f.type || '').startsWith('image/')) return
+          void onCoverFileDrop(f)
+        }}
+      >
+        {project.thumbnail ? (
+          <img
+            src={project.thumbnail}
+            alt=""
+            className="w-full h-full object-cover opacity-30 group-hover:scale-110 group-hover:opacity-80 transition-all duration-700"
+          />
+        ) : (
+          <div className="absolute inset-0 bg-gradient-to-br from-white/[0.04] to-transparent" />
+        )}
         <div className="absolute inset-0 bg-gradient-to-t from-[#080809] to-transparent opacity-60" />
 
-        <div className="absolute top-4 right-4 flex gap-2 translate-y-4 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              onDelete?.()
-            }}
-            className="w-10 h-10 rounded-xl bg-black/60 backdrop-blur border border-white/10 flex items-center justify-center text-white/40 hover:text-red-500 transition-all"
-            aria-label="删除项目"
-            title="删除项目"
+        {project.filePath ? (
+          <div
+            className={`absolute top-4 right-4 z-[2] flex flex-row items-center gap-2 transition-all ${
+              project.thumbnail
+                ? 'translate-y-4 opacity-0 pointer-events-none group-hover:translate-y-0 group-hover:opacity-100 group-hover:pointer-events-auto'
+                : 'translate-y-0 opacity-100 pointer-events-auto'
+            }`}
           >
-            <Trash2 className="w-5 h-5" />
-          </button>
-        </div>
+            {onUploadCover ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onUploadCover()
+                }}
+                disabled={coverUploadBusy}
+                className={COVER_UPLOAD_TRIGGER_CLASS}
+                aria-label="上传或替换项目封面"
+                title="上传或替换封面（保存到「设置 → 封面存储」，以项目名为文件名）"
+              >
+                <ImageUp className="h-[18px] w-[18px]" strokeWidth={2} />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDelete?.()
+              }}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-black/60 backdrop-blur border border-white/10 text-white/40 hover:text-red-500 transition-all"
+              aria-label="删除项目"
+              title="删除项目（悬停卡片后显示；将删除磁盘上的工程 JSON）"
+            >
+              <Trash2 className="w-5 h-5" />
+            </button>
+          </div>
+        ) : null}
 
         <div className="absolute top-4 left-4">
           <div
@@ -324,7 +351,7 @@ function ProjectCard({
               {project.name}
             </h3>
             <div className="flex items-center gap-3 text-[13px] font-mono uppercase tracking-[0.2em] text-white/50">
-              <span>修改: {project.updatedAt}</span>
+              <span>更新: {project.updatedAt}</span>
               <div className="w-1 h-1 rounded-full bg-white/10" />
               <span>创建: {project.createdAt}</span>
             </div>
@@ -350,7 +377,19 @@ function ProjectCard({
   )
 }
 
-function TemplateCard({ template }: { template: Template }) {
+function TemplateCard({
+  template,
+  busy,
+  onInvoke,
+  coverUploadBusy,
+  onUploadCover,
+}: {
+  template: Template
+  busy: boolean
+  onInvoke: (t: Template) => void | Promise<void>
+  coverUploadBusy?: boolean
+  onUploadCover?: () => void
+}) {
   const access = computeAccessState(loadLicenseSnapshotV2())
   const locked = template.tier === 'pro' && access !== 'valid'
   return (
@@ -362,22 +401,40 @@ function TemplateCard({ template }: { template: Template }) {
       className={`group bg-[#0A0A0B] border border-white/5 overflow-hidden transition-all duration-500 hover:border-orange-500/30 ${locked ? 'opacity-75' : ''}`}
     >
       <div className="aspect-[16/10] relative overflow-hidden">
-        <img
-          src={template.image}
+        <PresetTemplateCoverImage
+          title={template.name}
+          fallbackSrc={template.image}
           alt={template.name}
-          className="w-full h-full object-cover grayscale opacity-50 group-hover:opacity-100 group-hover:grayscale-0 transition-all duration-1000 group-hover:scale-110"
+          className="w-full h-full object-cover grayscale opacity-50 group-hover:opacity-100 group-hover:grayscale-0 transition-all duration-1000 group-hover:scale-110 pointer-events-none"
         />
-        <div className="absolute top-4 left-4">
+        <div className="absolute top-4 left-4 z-10">
           <div className="bg-black/60 backdrop-blur px-3 py-1 border border-white/10 rounded text-[13px] font-mono uppercase tracking-widest text-orange-500">
             {template.category}
           </div>
         </div>
-        {locked ? (
-          <div className="absolute top-4 right-4 bg-black/60 backdrop-blur px-3 py-1 border border-white/10 rounded text-[13px] font-mono uppercase tracking-widest text-white/60">
-            PRO
-          </div>
-        ) : null}
-        <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-60" />
+        <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
+          {locked ? (
+            <div className="bg-black/60 backdrop-blur px-3 py-1 border border-white/10 rounded text-[13px] font-mono uppercase tracking-widest text-white/60">
+              PRO
+            </div>
+          ) : null}
+          {onUploadCover ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                onUploadCover()
+              }}
+              disabled={coverUploadBusy}
+              className={COVER_UPLOAD_TRIGGER_CLASS}
+              title="上传封面（与画布左侧预设模板同步；保存到「设置 → 封面存储」）"
+              aria-label="上传预设模板封面"
+            >
+              <ImageUp className="h-[18px] w-[18px]" strokeWidth={2} />
+            </button>
+          ) : null}
+        </div>
+        <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-t from-black via-transparent to-transparent opacity-60" />
       </div>
 
       <div className="p-6">
@@ -391,14 +448,13 @@ function TemplateCard({ template }: { template: Template }) {
         </p>
         <div className="flex items-center gap-2">
           <button
-            className="flex-1 py-3 bg-white/5 hover:bg-orange-600 hover:text-white transition-all text-[14px] font-black uppercase tracking-widest border border-white/10 group-hover:border-orange-500 disabled:opacity-50 disabled:pointer-events-none"
-            disabled={locked}
+            type="button"
+            className="w-full py-3 bg-white/5 hover:bg-orange-600 hover:text-white transition-all text-[14px] font-black uppercase tracking-widest border border-white/10 group-hover:border-orange-500 disabled:opacity-50 disabled:pointer-events-none"
+            disabled={locked || busy}
             title={locked ? '会员模板：请先输入机器授权码' : undefined}
+            onClick={() => void onInvoke(template)}
           >
-            {locked ? '需要授权' : '调用预设'}
-          </button>
-          <button className="p-3 bg-white/5 hover:text-red-500 transition-all border border-white/10 opacity-0 group-hover:opacity-100">
-            <Trash2 className="w-5 h-5" />
+            {locked ? '需要授权' : busy ? '加载中…' : '调用预设'}
           </button>
         </div>
       </div>
@@ -406,16 +462,47 @@ function TemplateCard({ template }: { template: Template }) {
   )
 }
 
+function readAcceptedAgreementV2Ms(): number | null {
+  try {
+    const raw = localStorage.getItem('flowid.userAgreement.accepted.v2')
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { serverUpdatedAtMs?: number } | null
+    const n = Number(parsed?.serverUpdatedAtMs)
+    return Number.isFinite(n) ? n : null
+  } catch {
+    return null
+  }
+}
+
+function readAcceptedAgreementV1Ok(): boolean {
+  try {
+    const raw = localStorage.getItem('flowid.userAgreement.accepted.v1')
+    if (!raw) return false
+    const parsed = JSON.parse(raw) as { version?: string } | null
+    return Boolean(parsed && parsed.version === USER_AGREEMENT_VERSION)
+  } catch {
+    return false
+  }
+}
+
 function App() {
   const [agreementAccepted, setAgreementAccepted] = useState<boolean>(() => {
     try {
-      const raw = localStorage.getItem('flowid.userAgreement.accepted.v1')
-      if (!raw) return false
-      const parsed = JSON.parse(raw) as { version?: string; acceptedAtMs?: number } | null
-      return Boolean(parsed && parsed.version === USER_AGREEMENT_VERSION)
+      const v2 = readAcceptedAgreementV2Ms()
+      if (v2 != null) return true
+      return readAcceptedAgreementV1Ok()
     } catch {
       return false
     }
+  })
+  const [agreementDisplay, setAgreementDisplay] = useState<{
+    version: string
+    text: string
+    updatedAtMs: number
+  }>({
+    version: USER_AGREEMENT_VERSION,
+    text: USER_AGREEMENT_TEXT,
+    updatedAtMs: 0,
   })
   const [agreementShowFull, setAgreementShowFull] = useState(false)
 
@@ -428,15 +515,81 @@ function App() {
   const [projectsLoading, setProjectsLoading] = useState(false)
   const [licenseSnap, setLicenseSnap] = useState(() => loadLicenseSnapshotV2())
   const [licenseModalOpen, setLicenseModalOpen] = useState(false)
+  const [templateCatalogFromServer, setTemplateCatalogFromServer] = useState<{
+    ok: true
+    items: Template[]
+  } | null>(null)
+  const [templateInvokeBusyId, setTemplateInvokeBusyId] = useState<string | null>(null)
+  const [coverUploadBusyId, setCoverUploadBusyId] = useState<string | null>(null)
+  const [presetTemplateCoverBusyId, setPresetTemplateCoverBusyId] = useState<string | null>(null)
+  const projectThumbBlobUrlsRef = useRef<string[]>([])
+  const projectCoverFileInputRef = useRef<HTMLInputElement>(null)
+  const projectCoverPickIdRef = useRef<string | null>(null)
+  const projectCoverPickNameRef = useRef<string | null>(null)
+  const presetTemplateCoverFileInputRef = useRef<HTMLInputElement>(null)
+  const presetTemplateCoverPickRef = useRef<{ id: string; name: string } | null>(null)
+
   const accessState = computeAccessState(licenseSnap)
+
+  const openTemplateAsProject = useCallback(async (template: Template) => {
+    if (template.tier === 'pro' && computeAccessState(loadLicenseSnapshotV2()) !== 'valid') {
+      return
+    }
+    setTemplateInvokeBusyId(template.id)
+    try {
+      const text = await fetchPresetTemplateWorkflowText(template.id)
+      const snap = parseProjectFile(text)
+      window.dispatchEvent(
+        new CustomEvent('flowid:archive-open-project', {
+          detail: {
+            name: snap.name || template.name,
+            snapshot: {
+              nodes: snap.nodes,
+              edges: snap.edges,
+              viewport: snap.viewport,
+            },
+          },
+        }),
+      )
+      setView('workspace')
+    } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e)
+      if (msg === 'MEMBER_ONLY') {
+        window.alert('该模板为会员内容，请先激活授权。')
+        return
+      }
+      window.alert(msg)
+    } finally {
+      setTemplateInvokeBusyId(null)
+    }
+  }, [])
+
+  const refreshTemplateCatalog = useCallback(async () => {
+    const fromServer = await fetchPresetTemplatesFromServer()
+    setTemplateCatalogFromServer(fromServer)
+  }, [])
+
+  const baseTemplateSource = useMemo(() => {
+    return templateCatalogFromServer?.ok ? templateCatalogFromServer.items : PRESET_TEMPLATE_MOCKS
+  }, [templateCatalogFromServer])
+
+  const templateCategoryOptions = useMemo(
+    () => buildPresetTemplateCategoryTabs(baseTemplateSource, accessState === 'valid'),
+    [baseTemplateSource, accessState],
+  )
+
+  useEffect(() => {
+    setSelectedCategory((cur) => (templateCategoryOptions.includes(cur) ? cur : '全部'))
+  }, [templateCategoryOptions])
+
   const filteredTemplates = useMemo(() => {
-    const base =
+    const byCat =
       selectedCategory === '全部'
-        ? MOCK_TEMPLATES
-        : MOCK_TEMPLATES.filter((t) => t.category === selectedCategory)
-    if (accessState === 'valid') return base
-    return base.filter((t) => t.tier !== 'pro')
-  }, [accessState, selectedCategory])
+        ? baseTemplateSource
+        : baseTemplateSource.filter((t) => t.category === selectedCategory)
+    if (accessState === 'valid') return byCat
+    return byCat.filter((t) => t.tier !== 'pro')
+  }, [baseTemplateSource, accessState, selectedCategory])
 
   useEffect(() => {
     setTemplatePage(0)
@@ -453,20 +606,92 @@ function App() {
   }, [filteredTemplates, templatePage])
 
   useEffect(() => {
-    const onChanged = () => setLicenseSnap(loadLicenseSnapshotV2())
+    void refreshTemplateCatalog()
+  }, [refreshTemplateCatalog])
+
+  useEffect(() => {
+    const onChanged = () => {
+      setLicenseSnap(loadLicenseSnapshotV2())
+      void refreshTemplateCatalog()
+    }
     window.addEventListener('flowid:license-changed', onChanged as EventListener)
     return () => window.removeEventListener('flowid:license-changed', onChanged as EventListener)
+  }, [refreshTemplateCatalog])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      const remote = await fetchRemoteUserAgreement()
+      if (cancelled) return
+      if (remote) {
+        setAgreementDisplay({
+          version: remote.version,
+          text: remote.text,
+          updatedAtMs: remote.updatedAtMs,
+        })
+        const v2 = readAcceptedAgreementV2Ms()
+        const need = v2 == null || remote.updatedAtMs > v2
+        setAgreementAccepted(!need)
+        return
+      }
+      setAgreementDisplay({
+        version: USER_AGREEMENT_VERSION,
+        text: USER_AGREEMENT_TEXT,
+        updatedAtMs: 0,
+      })
+      setAgreementAccepted(readAcceptedAgreementV1Ok())
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    const onLicenseChanged = () => {
+      void (async () => {
+        const remote = await fetchRemoteUserAgreement()
+        if (remote) {
+          setAgreementDisplay({
+            version: remote.version,
+            text: remote.text,
+            updatedAtMs: remote.updatedAtMs,
+          })
+          const v2 = readAcceptedAgreementV2Ms()
+          const need = v2 == null || remote.updatedAtMs > v2
+          setAgreementAccepted(!need)
+          return
+        }
+        setAgreementDisplay({
+          version: USER_AGREEMENT_VERSION,
+          text: USER_AGREEMENT_TEXT,
+          updatedAtMs: 0,
+        })
+        setAgreementAccepted(readAcceptedAgreementV1Ok())
+      })()
+    }
+    window.addEventListener('flowid:license-changed', onLicenseChanged as EventListener)
+    return () => window.removeEventListener('flowid:license-changed', onLicenseChanged as EventListener)
   }, [])
 
   const refreshProjectsFromDisk = async () => {
+    for (const u of projectThumbBlobUrlsRef.current) {
+      try {
+        URL.revokeObjectURL(u)
+      } catch {
+        /* ignore */
+      }
+    }
+    projectThumbBlobUrlsRef.current = []
+
     const desk = window.flowidDesktop
     if (!desk?.readDirectory) {
-      setProjects(MOCK_PROJECTS)
+      setProjects(import.meta.env.PROD ? [] : MOCK_PROJECTS)
       return
     }
     const dir = String(loadLocalDiskPathsSettings().flowidProjectJsonPath || '').trim()
     if (!dir) {
-      setProjects(MOCK_PROJECTS)
+      // 生产包不要用无 filePath 的 MOCK，否则删除等操作会静默无效、易误解。
+      setProjects(import.meta.env.PROD ? [] : MOCK_PROJECTS)
       return
     }
     setProjectsLoading(true)
@@ -481,22 +706,106 @@ function App() {
         .filter((f) => !/^flowid\.current\.json$/i.test(String(f.name || '').trim()))
         .sort((a, b) => Number(b.mtimeMs || 0) - Number(a.mtimeMs || 0))
         .slice(0, 60)
-      const mapped: Project[] = files.map((f, idx) => {
-        const stem = String(f.name || '').replace(/\.[^.]+$/, '')
-        const updatedAt = formatDate(Number(f.mtimeMs || 0))
-        return {
-          id: String(f.path || `${idx}`),
-          name: stem || '未命名项目',
-          updatedAt,
-          createdAt: updatedAt,
-          thumbnail: makeThumbDataUri(stem || String(f.path || '')),
-          type: 'local',
-          filePath: String(f.path || ''),
-        }
-      })
+      const coverRoot = String(loadLocalDiskPathsSettings().systemPromptCoverPath || '').trim()
+      const readBinaryFile = desk.readBinaryFile
+      const mapped: Project[] = await Promise.all(
+        files.map(async (f, idx) => {
+          const stem = String(f.name || '').replace(/\.[^.]+$/, '')
+          const mtime = Number(f.mtimeMs || 0)
+          const bRaw = Number((f as { birthtimeMs?: number }).birthtimeMs)
+          const birthMs = Number.isFinite(bRaw) && bRaw > 0 ? bRaw : mtime
+          const updatedAt = formatDateTimeZh(mtime)
+          const createdAt = formatDateTimeZh(birthMs)
+          let thumbnail = makePresetThumbDataUri(stem || String(f.path || ''))
+          if (coverRoot && readBinaryFile) {
+            for (const ext of SYSTEM_PROMPT_COVER_EXT_TRIES) {
+              const leaf = coverLeafForTry(stem, ext)
+              const fp = joinDiskPath(coverRoot, leaf)
+              const r = await readBinaryFile(fp)
+              if (r.ok && r.data && r.data.byteLength > 0) {
+                const mime = imageMimeTypeFromPath(fp)
+                const blobUrl = URL.createObjectURL(new Blob([r.data], { type: mime }))
+                projectThumbBlobUrlsRef.current.push(blobUrl)
+                thumbnail = blobUrl
+                break
+              }
+            }
+          }
+          return {
+            id: String(f.path || `${idx}`),
+            name: stem || '未命名项目',
+            updatedAt,
+            createdAt,
+            thumbnail,
+            type: 'local' as const,
+            filePath: String(f.path || ''),
+          }
+        }),
+      )
       setProjects(mapped.length ? mapped : [])
     } finally {
       setProjectsLoading(false)
+    }
+  }
+
+  const saveProjectCoverToDisk = async (project: Project, file: File) => {
+    const r = await saveCoverReplaceByTitle(project.name, file)
+    if (!r.ok) {
+      window.alert(r.error)
+      return
+    }
+    void refreshProjectsFromDisk()
+  }
+
+  const requestProjectCoverUpload = (project: Project) => {
+    if (!project.filePath) return
+    projectCoverPickIdRef.current = project.id
+    projectCoverPickNameRef.current = project.name
+    queueMicrotask(() => projectCoverFileInputRef.current?.click())
+  }
+
+  const onProjectCoverFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    const id = projectCoverPickIdRef.current
+    const nameSnap = projectCoverPickNameRef.current
+    e.target.value = ''
+    projectCoverPickIdRef.current = null
+    projectCoverPickNameRef.current = null
+    if (!file || !id || !nameSnap) return
+    const stub: Project = {
+      id,
+      name: nameSnap,
+      updatedAt: '',
+      createdAt: '',
+      thumbnail: '',
+      type: 'local',
+      filePath: id,
+    }
+    setCoverUploadBusyId(id)
+    try {
+      await saveProjectCoverToDisk(stub, file)
+    } finally {
+      setCoverUploadBusyId(null)
+    }
+  }
+
+  const requestPresetTemplateCoverUpload = (template: Template) => {
+    presetTemplateCoverPickRef.current = { id: template.id, name: template.name }
+    queueMicrotask(() => presetTemplateCoverFileInputRef.current?.click())
+  }
+
+  const onPresetTemplateCoverFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    const pick = presetTemplateCoverPickRef.current
+    e.target.value = ''
+    presetTemplateCoverPickRef.current = null
+    if (!file || !pick) return
+    setPresetTemplateCoverBusyId(pick.id)
+    try {
+      const r = await saveCoverReplaceByTitle(pick.name, file)
+      if (!r.ok) window.alert(r.error)
+    } finally {
+      setPresetTemplateCoverBusyId(null)
     }
   }
 
@@ -507,8 +816,8 @@ function App() {
   }, [view])
 
   useEffect(() => {
+    // 路径在「工作区设置」里保存时，App 可能处于 workspace 视图；此处必须始终刷新列表，回到档案页才是新数据。
     const onChanged = () => {
-      if (view !== 'archive') return
       void refreshProjectsFromDisk()
     }
     window.addEventListener('flowid:local-disk-paths-changed', onChanged as EventListener)
@@ -516,7 +825,7 @@ function App() {
       window.removeEventListener('flowid:local-disk-paths-changed', onChanged as EventListener)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate
-  }, [view])
+  }, [])
 
   const filteredProjects = useMemo(() => {
     const q = projectQuery.trim()
@@ -581,7 +890,7 @@ function App() {
   }
 
   const createNewProject = () => {
-    const name = `未命名项目 ${Math.floor(Math.random() * 900 + 100)}`
+    const name = `未命名项目 ${nextUnnamedProjectDisplayNumber()}`
     window.dispatchEvent(
       new CustomEvent('flowid:archive-open-project', {
         detail: {
@@ -599,9 +908,24 @@ function App() {
 
   const deleteProject = async (project: Project) => {
     const fp = String(project.filePath || '').trim()
-    if (!fp) return
-    if (!window.confirm(`确定删除项目「${project.name}」吗？\n将删除文件：\n${fp}`)) return
+    if (!fp) {
+      window.alert(
+        '此卡片没有关联的磁盘 JSON 路径（多为开发环境示例数据，或尚未配置工程目录）。\n请先在「设置 → 本地存储」里配置「工程 JSON 目录」，刷新列表后再删除真实项目文件。',
+      )
+      return
+    }
     const desk = window.flowidDesktop
+    let allow = false
+    if (desk?.confirmDialog) {
+      const cr = await desk.confirmDialog({
+        message: `确定删除项目「${project.name}」吗？`,
+        detail: `将删除文件：\n${fp}`,
+      })
+      allow = Boolean(cr?.confirmed)
+    } else {
+      allow = window.confirm(`确定删除项目「${project.name}」吗？\n将删除文件：\n${fp}`)
+    }
+    if (!allow) return
     if (!desk?.deleteFile) {
       window.alert('当前环境不支持删除文件（仅桌面端可用）。')
       return
@@ -635,6 +959,22 @@ function App() {
 
   return (
     <>
+      <input
+        ref={projectCoverFileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        aria-hidden
+        onChange={(ev) => void onProjectCoverFileInputChange(ev)}
+      />
+      <input
+        ref={presetTemplateCoverFileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        aria-hidden
+        onChange={(ev) => void onPresetTemplateCoverFileInputChange(ev)}
+      />
       {!agreementAccepted ? (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm">
           <div className="w-[min(880px,calc(100vw-48px))] max-h-[min(82vh,calc(100vh-64px))] rounded-3xl border border-white/10 bg-[#0c0c0e] shadow-[0_0_120px_rgba(0,0,0,0.75)] overflow-hidden">
@@ -668,14 +1008,17 @@ function App() {
                   </ul>
                 </div>
                 <div className="text-[12px] text-white/35">
-                  点击「同意并进入」表示您已阅读、理解并同意受本协议约束（版本 {USER_AGREEMENT_VERSION}）。
+                  点击「同意并进入」表示您已阅读、理解并同意受本协议约束（版本 {agreementDisplay.version}
+                  {agreementDisplay.updatedAtMs
+                    ? ` · 修订 ${new Date(agreementDisplay.updatedAtMs).toLocaleString('zh-CN')}`
+                    : ''}）。
                 </div>
               </div>
 
               {agreementShowFull ? (
                 <textarea
                   readOnly
-                  value={USER_AGREEMENT_TEXT}
+                  value={agreementDisplay.text}
                   className="custom-scrollbar w-full rounded-2xl border border-white/10 bg-black/40 p-4 text-[13px] font-mono text-white/65 outline-none whitespace-pre-wrap leading-relaxed max-h-[46vh] resize-y"
                   aria-label="用户协议全文（只读）"
                 />
@@ -700,8 +1043,17 @@ function App() {
                   type="button"
                   className="rounded-full border border-orange-600/30 bg-orange-600 px-6 py-2.5 text-[12px] font-black uppercase tracking-widest text-white shadow-xl shadow-orange-600/20 hover:bg-orange-500 transition-colors"
                   onClick={() => {
-                    const payload = { version: USER_AGREEMENT_VERSION, acceptedAtMs: Date.now() }
-                    localStorage.setItem('flowid.userAgreement.accepted.v1', JSON.stringify(payload))
+                    const now = Date.now()
+                    const v = agreementDisplay.version
+                    const ms = agreementDisplay.updatedAtMs
+                    localStorage.setItem(
+                      'flowid.userAgreement.accepted.v1',
+                      JSON.stringify({ version: v, acceptedAtMs: now }),
+                    )
+                    localStorage.setItem(
+                      'flowid.userAgreement.accepted.v2',
+                      JSON.stringify({ serverUpdatedAtMs: ms, acceptedAtMs: now }),
+                    )
                     setAgreementAccepted(true)
                   }}
                 >
@@ -827,6 +1179,20 @@ function App() {
                         project={p}
                         onClick={() => void openProject(p)}
                         onDelete={() => void deleteProject(p)}
+                        onUploadCover={p.filePath ? () => requestProjectCoverUpload(p) : undefined}
+                        coverUploadBusy={coverUploadBusyId === p.id}
+                        onCoverFileDrop={
+                          p.filePath
+                            ? async (file) => {
+                                setCoverUploadBusyId(p.id)
+                                try {
+                                  await saveProjectCoverToDisk(p, file)
+                                } finally {
+                                  setCoverUploadBusyId(null)
+                                }
+                              }
+                            : undefined
+                        }
                       />
                     ),
                   )
@@ -903,7 +1269,7 @@ function App() {
               </div>
 
               <div className="flex gap-4 mb-16 overflow-x-auto pb-4">
-                {TEMPLATE_CATEGORIES.map((category) => (
+                {templateCategoryOptions.map((category) => (
                   <button
                     key={category}
                     onClick={() => setSelectedCategory(category)}
@@ -920,7 +1286,19 @@ function App() {
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 {pagedTemplates.items.map((t) => (
-                  <TemplateCard key={t.id} template={t} />
+                  <TemplateCard
+                    key={t.id}
+                    template={t}
+                    busy={templateInvokeBusyId === t.id}
+                    onInvoke={openTemplateAsProject}
+                    coverUploadBusy={presetTemplateCoverBusyId === t.id}
+                    onUploadCover={
+                      isDesktopCoverIo() &&
+                      String(loadLocalDiskPathsSettings().systemPromptCoverPath || '').trim()
+                        ? () => requestPresetTemplateCoverUpload(t)
+                        : undefined
+                    }
+                  />
                 ))}
               </div>
 

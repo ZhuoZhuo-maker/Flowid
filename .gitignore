@@ -13,6 +13,7 @@ dist
 exports/youmind-gpt-image-2-prompts
 release
 release-analyzer
+deliverables
 dist-ssr
 *.local
 

@@ -3,6 +3,7 @@ import type { Node } from '@xyflow/react'
 import { useCallback, useRef } from 'react'
 import { useCanvasActions } from '../../context/CanvasContext'
 import type { VideoNodeData } from '../../types'
+import { setFlowidMaterialDragData } from '../../lib/materialLibrary'
 import { NodeChrome } from './NodeChrome'
 
 /**
@@ -87,7 +88,24 @@ export function VideoNode({
         >
           {data.src ? (
             <>
-              <video className="studio-thumb__video" src={data.src} controls muted playsInline />
+              <video
+                className="studio-thumb__video"
+                src={data.src}
+                controls
+                muted
+                playsInline
+                draggable
+                onDragStart={(e) => {
+                  e.stopPropagation()
+                  const title = String(data.title || '').trim() || '视频节点'
+                  setFlowidMaterialDragData(e.dataTransfer, {
+                    nodeId: id,
+                    title,
+                    kind: 'video',
+                    src: data.src,
+                  })
+                }}
+              />
               <div className="studio-thumb__actions">
                 <button
                   type="button"

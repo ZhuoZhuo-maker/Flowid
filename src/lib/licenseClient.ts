@@ -16,6 +16,8 @@ export type LicenseVerifyResponse = {
   ok: false
   message: string
   serverTimeMs?: number
+  /** 校验/激活失败时的 HTTP 状态码（用于区分「服务端拒绝」与网络/5xx） */
+  httpStatus?: number
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -48,7 +50,13 @@ export async function activateLicenseRemote(licenseCode: string): Promise<Licens
     machineId,
   })
   const row = asRecord(data)
-  if (!ok) return { ok: false, message: String(row.message || `激活失败：HTTP ${status}`), serverTimeMs: Number(row.serverTimeMs || 0) || undefined }
+  if (!ok)
+    return {
+      ok: false,
+      message: String(row.message || `激活失败：HTTP ${status}`),
+      serverTimeMs: Number(row.serverTimeMs || 0) || undefined,
+      httpStatus: status,
+    }
   const expiresAtMs = Number(row.expiresAtMs || 0)
   const serverTimeMs = Number(row.serverTimeMs || 0)
   if (!Number.isFinite(expiresAtMs) || expiresAtMs <= 0) {
@@ -84,7 +92,13 @@ export async function verifyLicenseRemote(snapshot: LicenseSnapshotV2): Promise<
     },
   })
   const row = asRecord(data)
-  if (!ok) return { ok: false, message: String(row.message || `校验失败：HTTP ${status}`), serverTimeMs: Number(row.serverTimeMs || 0) || undefined }
+  if (!ok)
+    return {
+      ok: false,
+      message: String(row.message || `校验失败：HTTP ${status}`),
+      serverTimeMs: Number(row.serverTimeMs || 0) || undefined,
+      httpStatus: status,
+    }
   const expiresAtMs = Number(row.expiresAtMs || 0)
   const serverTimeMs = Number(row.serverTimeMs || 0)
   if (!Number.isFinite(expiresAtMs) || expiresAtMs <= 0) {

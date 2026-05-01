@@ -25,19 +25,19 @@ if errorlevel 1 (
 echo [OK ] backend is ready on 3721.
 
 echo.
-echo [STEP 2/4] Check web dev server (3000)...
-netstat -ano | findstr :3000 | findstr LISTENING >nul
+echo [STEP 2/4] Check web dev server (5173, Vite)...
+netstat -ano | findstr :5173 | findstr LISTENING >nul
 if errorlevel 1 (
   echo [INFO] web dev not running, starting one instance...
   start "" /B cmd /c call "%APP_DIR%\tools\run-web-hidden.bat"
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ok=$false; 1..35 | ForEach-Object { if (Get-NetTCPConnection -State Listen -LocalPort 3000 -ErrorAction SilentlyContinue) { $ok=$true; break }; Start-Sleep -Seconds 1 }; if (-not $ok) { exit 1 }"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$ok=$false; 1..35 | ForEach-Object { if (Get-NetTCPConnection -State Listen -LocalPort 5173 -ErrorAction SilentlyContinue) { $ok=$true; break }; Start-Sleep -Seconds 1 }; if (-not $ok) { exit 1 }"
   if errorlevel 1 (
-    echo [ERR] Web dev server did not start on 3000.
+    echo [ERR] Web dev server did not start on 5173.
     pause
     exit /b 2
   )
 )
-echo [OK ] web dev is ready on 3000.
+echo [OK ] web dev is ready on 5173.
 
 echo.
 echo [STEP 3/4] Launch Electron desktop...

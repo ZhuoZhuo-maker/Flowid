@@ -31,6 +31,8 @@ export type AiAssistantConfig = {
   pauseLocalModelWhenWorkflowRunning: boolean
   /** 是否在执行每条动作前弹确认 */
   confirmBeforeRun: boolean
+  /** 画布右下角是否显示 AI 虚拟助手（视频形象） */
+  virtualAvatarVisible: boolean
 }
 
 export type AiAssistantAction =
@@ -53,6 +55,7 @@ export function getDefaultAiAssistantConfig(): AiAssistantConfig {
     ttsCloneAudioName: '',
     pauseLocalModelWhenWorkflowRunning: true,
     confirmBeforeRun: true,
+    virtualAvatarVisible: true,
   }
 }
 
@@ -82,6 +85,8 @@ export function loadAiAssistantConfig(): AiAssistantConfig {
           : d.pauseLocalModelWhenWorkflowRunning,
       confirmBeforeRun:
         typeof parsed.confirmBeforeRun === 'boolean' ? parsed.confirmBeforeRun : d.confirmBeforeRun,
+      virtualAvatarVisible:
+        typeof parsed.virtualAvatarVisible === 'boolean' ? parsed.virtualAvatarVisible : d.virtualAvatarVisible,
     }
   } catch {
     return getDefaultAiAssistantConfig()

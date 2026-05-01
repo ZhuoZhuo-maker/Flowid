@@ -28,6 +28,19 @@
         return fallback
       }
     },
+    /**
+     * 预设工作流 JSON 可能极大；不在浏览器里 JSON.parse，避免主线程卡死（「页面没有响应」）。
+     * 服务端 `parseWorkflowJsonInput` 已支持字符串并负责解析与校验。
+     */
+    workflowJsonTextForSubmit(raw) {
+      const s = String(raw ?? '')
+        .replace(/^\uFEFF/, '')
+        .trim()
+      if (!s) throw new Error('预设 JSON 不能为空')
+      const c = s[0]
+      if (c !== '{' && c !== '[') throw new Error('预设 JSON 格式无效（应以 { 或 [ 开头）')
+      return s
+    },
     confirmDanger(message) {
       if (!window.confirm(message)) return false
       if (!window.confirm('请再次确认该操作。')) return false

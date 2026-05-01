@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { Briefcase, ChevronLeft, ChevronRight, Clock, Shield } from 'lucide-react'
 import type { AssetItem, HistoryItem } from './types'
+import type { FlowidMaterialDragPayload, MaterialLibraryTabId } from '../../lib/materialLibrary'
 import { AssetToolboxPanel } from './AssetToolboxPanel'
 import { HistoryPanel } from './HistoryPanel'
 import { SystemPromptsPanel } from './SystemPromptsPanel'
@@ -21,6 +22,8 @@ export function RightPanel({
   onUploadFiles,
   onUseAsset,
   onRemoveAsset,
+  onRenameAsset,
+  onFlowidMaterialDrop,
   historyItems,
   onRemoveHistoryItems,
 }: {
@@ -32,9 +35,11 @@ export function RightPanel({
   hoveredAssetId: string | null
   setHoveredAssetId: Dispatch<SetStateAction<string | null>>
   onUpload: () => void
-  onUploadFiles?: (files: FileList | null) => void
+  onUploadFiles?: (files: FileList | null, opts?: { category?: MaterialLibraryTabId }) => void
   onUseAsset: (asset: AssetItem) => void
   onRemoveAsset: (assetId: string) => void
+  onRenameAsset?: (assetId: string, nextName: string) => void | Promise<void>
+  onFlowidMaterialDrop?: (payload: FlowidMaterialDragPayload, category: MaterialLibraryTabId) => void | Promise<void>
   historyItems: HistoryItem[]
   onRemoveHistoryItems: (ids: string[]) => void
 }) {
@@ -100,6 +105,8 @@ export function RightPanel({
                     onUploadFiles={onUploadFiles}
                     onUseAsset={onUseAsset}
                     onRemoveAsset={onRemoveAsset}
+                    onRenameAsset={onRenameAsset}
+                    onFlowidMaterialDrop={onFlowidMaterialDrop}
                     embedded
                   />
                 ) : null}

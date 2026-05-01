@@ -58,6 +58,7 @@ import { TextNode } from './nodes/TextNode'
 import { VideoNode } from './nodes/VideoNode'
 import { AddNodePanel } from './panels/AddNodePanel'
 import { DownloadPanel } from './panels/DownloadPanel'
+import { FlowidMark } from './FlowidMark'
 import { RightPanel, type RightPanelTab } from './panels/RightPanel'
 import { AiAssistantPanel, type AiAssistantMessage } from './panels/AiAssistantPanel'
 import { WorkflowSettingsPanel } from './panels/WorkflowSettingsPanel'
@@ -93,6 +94,12 @@ import {
   serializeProject,
 } from '../lib/persistence'
 import { persistProjectSnapshotToExternalStores, tryLoadExternalProjectSnapshot } from '../lib/projectDiskMirror'
+import {
+  FLOWID_PRESET_TEMPLATE_DRAG_MIME,
+  loadPresetTemplateSnapshot,
+  parsePresetTemplateDragPayload,
+  type PresetTemplateDragPayload,
+} from '../lib/templateCatalog'
 import {
   persistAiAssistantConfigToExternalPath,
   tryLoadAiAssistantConfigFromExternalPath,
@@ -138,7 +145,6 @@ import {
   ICON_NODE_PANORAMA,
   ICON_NODE_TEXT,
   ICON_NODE_VIDEO,
-  ICON_TOP_HOME,
 } from '../assets/studioIcons'
 
 const nodeTypes = {
@@ -1786,6 +1792,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     appendCloudTaskRecord,
     onUploadFiles,
     removeAsset,
+    renameAsset,
+    importNodeMediaToLibrary,
     removeHistoryItems,
   } =
     useAssetsHistory({
@@ -1897,6 +1905,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   /** 防重复提交：同一节点任务运行中再次点击执行直接拦截。 */
   const promptPanelSubmittingNodeIdsRef = useRef(new Set<string>())
   const [clipboard, setClipboard] = useState<CanvasClipboard | null>(null)
+  /** 连续内存粘贴时轻微错位，避免叠在视口正中心完全重合 */
+  const internalPasteStaggerRef = useRef(0)
   const undoStackRef = useRef<Omit<ProjectSnapshot, 'version' | 'name'>[]>([])
   const redoStackRef = useRef<Omit<ProjectSnapshot, 'version' | 'name'>[]>([])
   const isRestoringHistoryRef = useRef(false)
@@ -2890,11 +2900,149 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   )
 
   /**
+   * 将一组节点/边合并到当前画布：包围盒中心对齐到 flowAnchor（加与粘贴相同的错位 stagger）。
+   */
+  const mergeSubgraphAtFlowCenter = useCallback(
+    async (
+      incomingNodes: Node<StudioNodeData>[],
+      incomingEdges: Edge[],
+      flowAnchor: XYPosition,
+      opts?: { hydrateLocalAssets?: boolean; historyLabel?: string },
+    ) => {
+      if (!incomingNodes.length) return
+      let nodesToMerge = structuredClone(incomingNodes) as Node<StudioNodeData>[]
+      if (opts?.hydrateLocalAssets) {
+        nodesToMerge = await hydrateNodesLocalImageAssets(nodesToMerge)
+      }
+      const edgesToMerge = structuredClone(incomingEdges) as Edge[]
+      const bb = getNodesBounds(nodesToMerge)
+      if (!bb) return
+      const clipCx = (bb.minX + bb.maxX) / 2
+      const clipCy = (bb.minY + bb.maxY) / 2
+
+      internalPasteStaggerRef.current += 1
+      const s = (internalPasteStaggerRef.current - 1) % 6
+      const staggerX = (s % 3) * 44
+      const staggerY = Math.floor(s / 3) * 44
+      const targetX = flowAnchor.x + staggerX
+      const targetY = flowAnchor.y + staggerY
+      const deltaX = targetX - clipCx
+      const deltaY = targetY - clipCy
+
+      const allocatedTitles = new Set(
+        nodes.map((n) => String(n.data.title ?? '').trim()).filter(Boolean),
+      )
+      const idMap = new Map<string, string>()
+      const pastedNodes = nodesToMerge.map((node) => {
+        const nextId = crypto.randomUUID()
+        idMap.set(node.id, nextId)
+        const rawTitle = String(node.data.title ?? '').trim()
+        const kind = String(node.data.kind || '') as StudioNodeKind
+        const fallbackTitle = `${NODE_KIND_LABEL[kind] || '节点'}节点`
+        const uniqueTitle =
+          node.type === 'ghost' || node.type === 'group'
+            ? rawTitle || fallbackTitle
+            : allocateUniqueNodeTitle(allocatedTitles, rawTitle || fallbackTitle)
+        return {
+          ...structuredClone(node),
+          id: nextId,
+          selected: true,
+          data: {
+            ...node.data,
+            title: uniqueTitle,
+          } as StudioNodeData,
+          position: {
+            x: node.position.x + deltaX,
+            y: node.position.y + deltaY,
+          },
+        }
+      })
+      const pastedEdges = edgesToMerge
+        .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
+        .map((edge) => ({
+          ...structuredClone(edge),
+          id: crypto.randomUUID(),
+          source: idMap.get(edge.source) as string,
+          target: idMap.get(edge.target) as string,
+          selected: false,
+        }))
+      const pastedNodeTitleById = new Map<string, string>(
+        pastedNodes.map((n) => [n.id, String(n.data.title || '').trim()]),
+      )
+      const pastedNodesWithRemappedMentions = pastedNodes.map((node) => {
+        const data = node.data
+        if (data.kind === 'text' || data.kind === 'script') {
+          const nextBody = remapMentionIdsInTextForPaste(String(data.body || ''), idMap, pastedNodeTitleById)
+          if (nextBody === String(data.body || '')) return node
+          return { ...node, data: { ...data, body: nextBody } as StudioNodeData }
+        }
+        if (data.kind === 'image' || data.kind === 'video') {
+          const nextPrompt = remapMentionIdsInTextForPaste(
+            String(data.prompt || ''),
+            idMap,
+            pastedNodeTitleById,
+          )
+          if (nextPrompt === String(data.prompt || '')) return node
+          return { ...node, data: { ...data, prompt: nextPrompt } as StudioNodeData }
+        }
+        if (data.kind === 'audio' || data.kind === 'music') {
+          const nextNote = remapMentionIdsInTextForPaste(String(data.note || ''), idMap, pastedNodeTitleById)
+          if (nextNote === String(data.note || '')) return node
+          return { ...node, data: { ...data, note: nextNote } as StudioNodeData }
+        }
+        return node
+      })
+      setNodes((prev) =>
+        prev.map((node) => ({ ...node, selected: false })).concat(pastedNodesWithRemappedMentions),
+      )
+      setEdges((prev) => prev.concat(pastedEdges))
+      setSelectedNodeId(pastedNodesWithRemappedMentions[0]?.id ?? null)
+      appendHistory(
+        opts?.historyLabel ?? `粘贴节点：${pastedNodesWithRemappedMentions.length} 个`,
+      )
+    },
+    [appendHistory, nodes, setEdges, setNodes],
+  )
+
+  const mergePresetTemplateFromLibrary = useCallback(
+    async (payload: PresetTemplateDragPayload, flowAnchor: XYPosition) => {
+      if (payload.tier === 'pro' && computeAccessState(loadLicenseSnapshotV2()) !== 'valid') {
+        window.alert('该模板为会员内容，请先激活授权。')
+        return
+      }
+      try {
+        const snap = await loadPresetTemplateSnapshot(payload.id)
+        if (!snap.nodes?.length) {
+          window.alert('该预设没有可合并的节点')
+          return
+        }
+        await mergeSubgraphAtFlowCenter(snap.nodes, snap.edges, flowAnchor, {
+          hydrateLocalAssets: true,
+          historyLabel: `已从预设模板合并：${payload.name}（${snap.nodes.length} 个节点）`,
+        })
+      } catch (e) {
+        const msg = String((e as Error)?.message || e)
+        if (msg === 'MEMBER_ONLY') {
+          window.alert('该模板为会员内容，请先激活授权。')
+          return
+        }
+        window.alert(msg)
+      }
+    },
+    [mergeSubgraphAtFlowCenter],
+  )
+
+  /**
    * 画布空白处拖入外部图片文件：在落点创建图片节点。
    */
   const onCanvasDragOver = useCallback((event: React.DragEvent) => {
     if (!event.dataTransfer?.types?.length) return
     const types = Array.from(event.dataTransfer.types)
+    if (types.includes(FLOWID_PRESET_TEMPLATE_DRAG_MIME)) {
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+      return
+    }
     if (!types.includes('Files')) return
     event.preventDefault()
     event.dataTransfer.dropEffect = 'copy'
@@ -2903,6 +3051,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const onCanvasDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault()
+      const presetPayload = parsePresetTemplateDragPayload(event.dataTransfer)
+      if (presetPayload) {
+        const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+        void mergePresetTemplateFromLibrary(presetPayload, pos)
+        return
+      }
       const list = event.dataTransfer?.files
       if (!list?.length) return
       const droppedFiles = Array.from(list)
@@ -2987,6 +3141,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       applyImageFileToNode,
       applyImageFilesToNodes,
       appendHistory,
+      mergePresetTemplateFromLibrary,
       nodes,
       openImportedProjectInNewTab,
       parseProjectFile,
@@ -3831,6 +3986,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     const selectedEdges = edges.filter(
       (edge) => selected.has(edge.source) && selected.has(edge.target),
     )
+    internalPasteStaggerRef.current = 0
     setClipboard({
       nodes: structuredClone(selectedNodes),
       edges: structuredClone(selectedEdges),
@@ -3839,86 +3995,28 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   }, [appendHistory, edges, nodes, selectedNodeIds])
 
   /**
-   * 粘贴剪贴板内容到当前画布，并按固定纵向间距错开避免重叠。
+   * 粘贴剪贴板内容到当前画布。
+   * 将剪贴板包围盒中心对齐到 **当前视口中心**（跨项目粘贴时原坐标可能很远，旧逻辑只加纵向偏移会贴在屏幕外）。
    */
   const pasteClipboardNodes = useCallback(() => {
     if (!clipboard || !clipboard.nodes.length) return
-    const bounds = getNodesBounds(clipboard.nodes)
-    const verticalGap = 20
-    const pasteOffset = {
-      x: 0,
-      y: bounds ? bounds.maxY - bounds.minY + verticalGap : verticalGap,
+    const bb = getNodesBounds(clipboard.nodes)
+    if (!bb) return
+    const clipCx = (bb.minX + bb.maxX) / 2
+    const clipCy = (bb.minY + bb.maxY) / 2
+    let anchorX = clipCx
+    let anchorY = clipCy
+    const root = reactFlowRootRef.current
+    if (root) {
+      const r = root.getBoundingClientRect()
+      if (r.width > 0 && r.height > 0) {
+        const center = screenToFlowPosition({ x: r.left + r.width / 2, y: r.top + r.height / 2 })
+        anchorX = center.x
+        anchorY = center.y
+      }
     }
-    const allocatedTitles = new Set(
-      nodes.map((n) => String(n.data.title ?? '').trim()).filter(Boolean),
-    )
-    const idMap = new Map<string, string>()
-    const pastedNodes = clipboard.nodes.map((node) => {
-      const nextId = crypto.randomUUID()
-      idMap.set(node.id, nextId)
-      const rawTitle = String(node.data.title ?? '').trim()
-      const kind = String(node.data.kind || '') as StudioNodeKind
-      const fallbackTitle = `${NODE_KIND_LABEL[kind] || '节点'}节点`
-      const uniqueTitle =
-        node.type === 'ghost' || node.type === 'group'
-          ? rawTitle || fallbackTitle
-          : allocateUniqueNodeTitle(allocatedTitles, rawTitle || fallbackTitle)
-      return {
-        ...structuredClone(node),
-        id: nextId,
-        selected: true,
-        data: {
-          ...node.data,
-          title: uniqueTitle,
-        } as StudioNodeData,
-        position: {
-          x: node.position.x + pasteOffset.x,
-          y: node.position.y + pasteOffset.y,
-        },
-      }
-    })
-    const pastedEdges = clipboard.edges
-      .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
-      .map((edge) => ({
-        ...structuredClone(edge),
-        id: crypto.randomUUID(),
-        source: idMap.get(edge.source) as string,
-        target: idMap.get(edge.target) as string,
-        selected: false,
-      }))
-    const pastedNodeTitleById = new Map<string, string>(
-      pastedNodes.map((n) => [n.id, String(n.data.title || '').trim()]),
-    )
-    const pastedNodesWithRemappedMentions = pastedNodes.map((node) => {
-      const data = node.data
-      if (data.kind === 'text' || data.kind === 'script') {
-        const nextBody = remapMentionIdsInTextForPaste(String(data.body || ''), idMap, pastedNodeTitleById)
-        if (nextBody === String(data.body || '')) return node
-        return { ...node, data: { ...data, body: nextBody } as StudioNodeData }
-      }
-      if (data.kind === 'image' || data.kind === 'video') {
-        const nextPrompt = remapMentionIdsInTextForPaste(
-          String(data.prompt || ''),
-          idMap,
-          pastedNodeTitleById,
-        )
-        if (nextPrompt === String(data.prompt || '')) return node
-        return { ...node, data: { ...data, prompt: nextPrompt } as StudioNodeData }
-      }
-      if (data.kind === 'audio' || data.kind === 'music') {
-        const nextNote = remapMentionIdsInTextForPaste(String(data.note || ''), idMap, pastedNodeTitleById)
-        if (nextNote === String(data.note || '')) return node
-        return { ...node, data: { ...data, note: nextNote } as StudioNodeData }
-      }
-      return node
-    })
-    setNodes((prev) =>
-      prev.map((node) => ({ ...node, selected: false })).concat(pastedNodesWithRemappedMentions),
-    )
-    setEdges((prev) => prev.concat(pastedEdges))
-    setSelectedNodeId(pastedNodesWithRemappedMentions[0]?.id ?? null)
-    appendHistory(`粘贴节点：${pastedNodesWithRemappedMentions.length} 个`)
-  }, [appendHistory, clipboard, nodes, setEdges, setNodes])
+    void mergeSubgraphAtFlowCenter(clipboard.nodes, clipboard.edges, { x: anchorX, y: anchorY })
+  }, [clipboard, mergeSubgraphAtFlowCenter, screenToFlowPosition])
 
   /**
    * 复制并删除当前选中内容（剪切）。
@@ -5602,23 +5700,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   ])
 
   /**
-   * 从系统预设载入工作流：写入用户本地配置（localStorage），不修改 `public/system-presets/` 下只读文件。
-   */
-  const applySystemPresetFromLibrary = useCallback(
-    (kind: StudioNodeKind, workflowJsonText: string, presetDisplayName: string) => {
-      updateNodeConfig(kind, {
-        workflowJsonText,
-        workflowName: `[系统预设] ${presetDisplayName}`,
-        selectedWorkflowId: undefined,
-      })
-      appendHistory(
-        `已从系统预设载入「${presetDisplayName}」到${NODE_KIND_LABEL[kind]}工作流，可在设置中继续微调`,
-      )
-    },
-    [appendHistory, updateNodeConfig],
-  )
-
-  /**
    * 将工作流执行结果回填到节点并写入历史（供顶部执行入口与底部面板入口共用）。
    */
   const applyWorkflowResultToNode = useCallback(
@@ -6574,8 +6655,21 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     const panelWidth = 360
     const panelHeight = 520
     const gap = 20
+    const margin = 20
     if (typeof window === 'undefined') {
       return { left: 0, top: 0, width: panelWidth, height: panelHeight }
+    }
+    if (!aiConfig.virtualAvatarVisible) {
+      const left = window.innerWidth - panelWidth - margin
+      const top = window.innerHeight - panelHeight - margin
+      const maxLeft = Math.max(0, window.innerWidth - panelWidth)
+      const maxTop = Math.max(0, window.innerHeight - panelHeight)
+      return {
+        left: clampNumber(left, 0, maxLeft),
+        top: clampNumber(top, 0, maxTop),
+        width: panelWidth,
+        height: panelHeight,
+      }
     }
     const desiredLeft = avatarDockRect.left - gap - panelWidth
     const desiredTop = avatarDockRect.top + Math.round(avatarDockRect.height * 0.08)
@@ -6587,7 +6681,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       width: panelWidth,
       height: panelHeight,
     }
-  }, [avatarDockRect.height, avatarDockRect.left, avatarDockRect.top])
+  }, [aiConfig.virtualAvatarVisible, avatarDockRect.height, avatarDockRect.left, avatarDockRect.top])
+
+  useEffect(() => {
+    if (!aiConfig.virtualAvatarVisible) setAiAssistantDialogOpen(false)
+  }, [aiConfig.virtualAvatarVisible])
 
   useEffect(() => {
     const onMouseMove = (event: MouseEvent) => {
@@ -7028,9 +7126,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                     }
                   }}
                 >
-                  <div className="w-6 h-6 bg-orange-600 flex items-center justify-center rounded-sm">
-                    <span className="text-[14px] font-black text-white">F</span>
-                  </div>
+                  <FlowidMark />
                   <span className="text-sm font-black tracking-widest uppercase text-white/90">
                     Flowid
                   </span>
@@ -7130,7 +7226,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               <div className="flex items-center gap-4 bg-[#111114] border border-white/5 px-5 py-2 rounded-full shadow-2xl backdrop-blur-xl">
                 <button
                   type="button"
-                  className={`btn--top-local inline-flex items-center gap-3 px-1 ${
+                  className={`btn--top-local inline-flex items-center px-1 ${
                     'text-white/85 hover:text-white'
                   }`}
                   title="选择工程 JSON 并导入"
@@ -7140,7 +7236,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                     void openLocalProjectFromFilePicker()
                   }}
                 >
-                  <img src={ICON_TOP_HOME} alt="" aria-hidden className="w-4 h-4 opacity-70" />
                   <span className="text-[14px] font-black tracking-widest">本地项目</span>
                 </button>
               </div>
@@ -7174,8 +7269,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       ? 'text-orange-500 bg-orange-500/10'
                       : 'text-white/20 hover:text-white hover:bg-white/5'
                   }`}
-                  title="系统预设"
-                  aria-label="系统预设"
+                  title="预设模板"
+                  aria-label="预设模板"
                   onClick={() => {
                     dismissCanvasAddMenu()
                     setLeftPanel((prev) => (prev === 'download-node' ? null : 'download-node'))
@@ -7224,7 +7319,23 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                           selectedNode={selectedNode}
                           onDownloadSelected={downloadSelectedNode}
                           onDownloadProject={exportJson}
-                          onApplySystemPreset={applySystemPresetFromLibrary}
+                          onMergePresetTemplate={async (payload) => {
+                            const root = reactFlowRootRef.current
+                            let ax = 0
+                            let ay = 0
+                            if (root) {
+                              const r = root.getBoundingClientRect()
+                              if (r.width > 0 && r.height > 0) {
+                                const c = screenToFlowPosition({
+                                  x: r.left + r.width / 2,
+                                  y: r.top + r.height / 2,
+                                })
+                                ax = c.x
+                                ay = c.y
+                              }
+                            }
+                            await mergePresetTemplateFromLibrary(payload, { x: ax, y: ay })
+                          }}
                         />
                       ) : null}
                     </motion.aside>
@@ -7249,6 +7360,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             onUploadFiles={onUploadFiles}
             onUseAsset={addAssetToCanvas}
             onRemoveAsset={removeAsset}
+            onRenameAsset={renameAsset}
+            onFlowidMaterialDrop={importNodeMediaToLibrary}
             historyItems={historyItems}
             onRemoveHistoryItems={removeHistoryItems}
           />
@@ -7611,7 +7724,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 onDoubleClick={focusCanvasContent}
               />
             ) : null}
-            {typeof document !== 'undefined'
+            {typeof document !== 'undefined' && aiConfig.virtualAvatarVisible
               ? createPortal(
                   <div
                     className="studio-ai-avatar-dock"

@@ -3,6 +3,7 @@ import type { Node } from '@xyflow/react'
 import { useCallback, useMemo, useRef } from 'react'
 import type { AudioNodeData } from '../../types'
 import { useCanvasActions } from '../../context/CanvasContext'
+import { setFlowidMaterialDragData } from '../../lib/materialLibrary'
 import { NodeChrome } from './NodeChrome'
 
 /**
@@ -144,7 +145,23 @@ export function AudioNode({
                       </button>
                     </div>
                   </div>
-                  <audio controls src={src} className="studio-audio-preview__player" />
+                  <audio
+                    controls
+                    src={src}
+                    className="studio-audio-preview__player"
+                    draggable
+                    onDragStart={(e) => {
+                      e.stopPropagation()
+                      const titleBase = String(data.title || '').trim() || '音频节点'
+                      const title = index === 0 ? titleBase : `${titleBase}（${index}）`
+                      setFlowidMaterialDragData(e.dataTransfer, {
+                        nodeId: id,
+                        title,
+                        kind: 'audio',
+                        src,
+                      })
+                    }}
+                  />
                 </div>
               ))}
             </div>

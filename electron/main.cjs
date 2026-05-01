@@ -7,6 +7,34 @@ const { autoUpdater } = require('electron-updater')
 
 const isDev = !app.isPackaged
 
+// 将 Chromium 磁盘缓存放到 userData 下，减少 Windows 上「Unable to move the cache / 拒绝访问」与多实例争用默认目录的问题。
+try {
+  const fsSync = require('node:fs')
+  const cacheDir = path.join(app.getPath('userData'), 'chromium-cache')
+  fsSync.mkdirSync(cacheDir, { recursive: true })
+  app.commandLine.appendSwitch('disk-cache-dir', cacheDir)
+} catch {
+  // ignore
+}
+
+function resolveAppIconPath() {
+  // BrowserWindow icon 支持 png/ico。这里放在 electron/assets 里，开发/生产都能读到。
+  // 注意：打包图标（exe/安装器）由 electron-builder 的 build/icon.ico 决定。
+  const candidates = [
+    path.join(__dirname, 'assets', 'icon.png'),
+    path.join(__dirname, 'assets', 'icon.ico'),
+  ]
+  for (const p of candidates) {
+    try {
+      require('node:fs').accessSync(p)
+      return p
+    } catch {
+      // ignore
+    }
+  }
+  return undefined
+}
+
 /**
  * Windows 上部分核显/远程桌面环境会出现 Electron 偶发黑屏；
  * 关闭硬件加速可显著提升稳定性（Flowid 以 2D UI 为主，影响可接受）。
@@ -55,6 +83,7 @@ if (process.platform === 'win32') {
  * 创建桌面主窗口。
  */
 function createMainWindow() {
+  const icon = resolveAppIconPath()
   const win = new BrowserWindow({
     width: 1460,
     height: 920,
@@ -63,6 +92,7 @@ function createMainWindow() {
     autoHideMenuBar: true,
     backgroundColor: '#060b16',
     show: false,
+    ...(icon ? { icon } : null),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -129,8 +159,16 @@ function createMainWindow() {
  */
 function setupAutoUpdate() {
   if (isDev) return
+  // 未配置更新源/未生成 app-update.yml 时，electron-updater 会报 ENOENT，影响首启体验；此时直接跳过。
+  try {
+    const updateYml = path.join(process.resourcesPath || '', 'app-update.yml')
+    require('node:fs').accessSync(updateYml)
+  } catch {
+    return
+  }
   autoUpdater.autoDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  // 关闭「退出时静默安装」：用户点「退出软件」时必须直接退出，不能在 quit 时再偷偷装更新。
+  autoUpdater.autoInstallOnAppQuit = false
 
   autoUpdater.on('error', (error) => {
     dialog.showMessageBox({
@@ -146,19 +184,25 @@ function setupAutoUpdate() {
       .showMessageBox({
         type: 'info',
         title: '发现新版本',
-        message: '新版本已下载完成，是否立即重启更新？',
-        buttons: ['立即更新', '稍后'],
+        message: '新版本已下载完成。请点击「立即更新」安装并重启；若不更新将退出软件。',
+        buttons: ['立即更新', '退出软件'],
         defaultId: 0,
         cancelId: 1,
+        noLink: true,
       })
       .then((result) => {
         if (result.response === 0) {
-          autoUpdater.quitAndInstall()
+          autoUpdater.quitAndInstall(false, true)
+        } else {
+          app.quit()
         }
+      })
+      .catch(() => {
+        app.quit()
       })
   })
 
-  void autoUpdater.checkForUpdatesAndNotify()
+  void autoUpdater.checkForUpdates()
 }
 
 ipcMain.handle('desktop:get-app-version', () => app.getVersion())
@@ -288,7 +332,7 @@ ipcMain.handle('flowid:fs-read-directory', async (_event, dirPath, opts) => {
     const maxFiles = Number.isFinite(maxFilesRaw) ? Math.min(Math.max(50, maxFilesRaw), 10_000) : 2000
     const maxDepth = Number.isFinite(maxDepthRaw) ? Math.min(Math.max(0, maxDepthRaw), 10) : 4
 
-    /** @type {Array<{ name: string, path: string, size: number, mtimeMs: number }>} */
+    /** @type {Array<{ name: string, path: string, size: number, mtimeMs: number, birthtimeMs: number }>} */
     const out = []
     /** @type {Array<{ dir: string, depth: number }>} */
     const queue = [{ dir: base, depth: 0 }]
@@ -314,11 +358,16 @@ ipcMain.handle('flowid:fs-read-directory', async (_event, dirPath, opts) => {
         if (!entry.isFile()) continue
         try {
           const stat = await fs.stat(fullPath)
+          const birth = Number(stat.birthtimeMs)
+          const ctime = Number(stat.ctimeMs)
+          const birthtimeMs =
+            Number.isFinite(birth) && birth > 0 ? birth : Number.isFinite(ctime) && ctime > 0 ? ctime : stat.mtimeMs
           out.push({
             name: entry.name,
             path: fullPath,
             size: stat.size,
             mtimeMs: stat.mtimeMs,
+            birthtimeMs,
           })
         } catch {
           // ignore
@@ -398,6 +447,28 @@ ipcMain.handle('flowid:fs-write-binary', async (_event, filePath, payload) => {
 /**
  * 删除文件（桌面端）。
  */
+/** 渲染进程确认框（避免部分环境下 window.confirm 不可靠） */
+ipcMain.handle('flowid:dialog-confirm', async (_event, payload) => {
+  try {
+    const message = String(payload?.message || '确认要执行此操作吗？').trim()
+    const detail = typeof payload?.detail === 'string' ? payload.detail : undefined
+    const win = BrowserWindow.getFocusedWindow()
+    const r = await dialog.showMessageBox(win ?? undefined, {
+      type: 'question',
+      buttons: ['确定', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+      title: 'Flowid',
+      message,
+      detail,
+    })
+    return { ok: true, confirmed: r.response === 0 }
+  } catch (err) {
+    return { ok: false, confirmed: false, error: String(err?.message || err) }
+  }
+})
+
 ipcMain.handle('flowid:fs-delete-file', async (_event, filePath) => {
   try {
     if (typeof filePath !== 'string' || !filePath.trim()) {
@@ -405,6 +476,25 @@ ipcMain.handle('flowid:fs-delete-file', async (_event, filePath) => {
     }
     const fp = path.normalize(filePath.trim())
     await fs.unlink(fp)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) }
+  }
+})
+
+/**
+ * 重命名（移动）单个文件；目标父目录不存在时递归创建。
+ */
+ipcMain.handle('flowid:fs-rename-file', async (_event, fromPath, toPath) => {
+  try {
+    if (typeof fromPath !== 'string' || typeof toPath !== 'string') {
+      return { ok: false, error: 'bad-args' }
+    }
+    const from = path.normalize(fromPath.trim())
+    const to = path.normalize(toPath.trim())
+    if (!from || !to) return { ok: false, error: 'empty-path' }
+    await fs.mkdir(path.dirname(to), { recursive: true })
+    await fs.rename(from, to)
     return { ok: true }
   } catch (err) {
     return { ok: false, error: String(err?.message || err) }

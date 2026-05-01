@@ -16,6 +16,10 @@ export type AssetItem = {
   kind: AssetKind
   src: string
   createdAt: number
+  /** 桌面端素材库：磁盘绝对路径（存在时表示可重命名/删除真实文件） */
+  diskPath?: string
+  /** 素材库分类（来自子文件夹名） */
+  materialCategory?: 'human' | 'scene' | 'prop' | 'audio' | 'other'
 }
 
 export type HistoryItem = {

@@ -9,7 +9,7 @@
     let list = []
 
     root.innerHTML = `
-      <p class="hint">此页对应前端「<strong>预设模板</strong>」中的<strong>基础免费</strong>条目（<code>tier=free</code>）。此处上传的是<strong>项目预设模板数据</strong>（JSON），用于客户端编排与任务提交，并非 ComfyUI 画布概念。与 Pro 预设分栏维护。</p>
+      <p class="hint">此页对应前端「<strong>预设模板</strong>」中的<strong>基础免费</strong>条目（<code>tier=free</code>）。此处上传的是<strong>项目预设模板数据</strong>（JSON），用于客户端编排与任务提交，并非 ComfyUI 画布概念。与 Pro 预设分栏维护。<strong>大文件</strong>：上传 /「仅更新预设文件」时正文以<strong>原文提交</strong>，由服务端解析，避免浏览器卡死；从右侧<strong>加载已有条目</strong>仍可能因整包 JSON 较大而短暂卡顿。若在框内<strong>选择/复制</strong>仍卡，请<strong>刷新后重试</strong>，并在本页对浏览器扩展（如 Grammarly）关闭「在此网站启用」。</p>
       <div class="admin-resource-grid">
         <div class="admin-card admin-form-block">
           <h3>编辑区 · 上传 / 修改</h3>
@@ -18,8 +18,8 @@
           <label><span>版本</span><input id="wf-version" value="1.0.0" /></label>
           <label><span>分类 category（与前端筛选一致，如 image、建筑、角色）</span><input id="wf-category" value="image" placeholder="image 或自定义分类" /></label>
           <label><span>描述</span><textarea id="wf-desc"></textarea></label>
-          <label><span>paramsSchema（JSON）</span><textarea id="wf-schema" class="tall">{}</textarea></label>
-          <label><span>预设数据 JSON（新建必填；对应后端存储，可用「仅更新预设文件」覆盖）</span><textarea id="wf-json" class="tall" placeholder="{ ... 项目预设模板 JSON ... }"></textarea></label>
+          <label><span>paramsSchema（JSON）</span><textarea id="wf-schema" class="tall admin-json-mass" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" data-gramm="false">{}</textarea></label>
+          <label><span>预设数据 JSON（新建必填；对应后端存储，可用「仅更新预设文件」覆盖）</span><textarea id="wf-json" class="tall admin-json-mass" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" data-gramm="false" wrap="off" placeholder="{ ... 项目预设模板 JSON ... }"></textarea></label>
           <div class="admin-form-actions">
             <button type="button" class="btn" id="wf-clear">清空表单</button>
             <button type="button" class="btn btn-primary" id="wf-save-new">上传新预设</button>
@@ -45,6 +45,45 @@
 
     const q = (id) => root.querySelector(id)
     const msg = () => q('#wf-msg')
+
+    function wireJsonFileDrop(sel, label) {
+      const el = q(sel)
+      if (!el || el.dataset.flowidDropWired === '1') return
+      el.dataset.flowidDropWired = '1'
+      el.classList.add('flowid-drop-target')
+      const prevTitle = el.getAttribute('title') || ''
+      el.setAttribute('title', (prevTitle ? prevTitle + ' · ' : '') + '可将 .json 文件拖入此处')
+      el.addEventListener('dragover', (e) => {
+        e.preventDefault()
+        el.classList.add('is-dragover')
+      })
+      el.addEventListener('dragleave', (e) => {
+        if (!el.contains(e.relatedTarget)) el.classList.remove('is-dragover')
+      })
+      el.addEventListener('drop', (e) => {
+        e.preventDefault()
+        el.classList.remove('is-dragover')
+        const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]
+        if (!file) return
+        const name = String(file.name || '').toLowerCase()
+        if (!name.endsWith('.json') && file.type !== 'application/json') {
+          window.FlowidAdminToast('请拖入 .json 文件', true)
+          return
+        }
+        const reader = new FileReader()
+        reader.onload = function () {
+          el.value = String(reader.result || '')
+          window.FlowidAdminToast(label + '已填入：' + file.name)
+        }
+        reader.onerror = function () {
+          window.FlowidAdminToast('读取文件失败', true)
+        }
+        reader.readAsText(file)
+      })
+    }
+
+    wireJsonFileDrop('#wf-json', '预设')
+    wireJsonFileDrop('#wf-schema', 'paramsSchema')
 
     function rebuildCategoryFilter() {
       const sel = q('#wf-cat')
@@ -151,8 +190,7 @@
 
     q('#wf-save-new').onclick = async () => {
       try {
-        const workflowJson = U.safeJsonParse(q('#wf-json').value, U.INVALID_JSON)
-        if (workflowJson === U.INVALID_JSON) throw new Error('预设 JSON 格式无效')
+        const workflowJson = U.workflowJsonTextForSubmit(q('#wf-json').value)
         const paramsSchema = U.safeJsonParse(q('#wf-schema').value, {})
         if (!q('#wf-name').value.trim()) throw new Error('名称不能为空')
         const body = {
@@ -203,9 +241,11 @@
         window.FlowidAdminToast('请先选择条目', true)
         return
       }
-      const workflowJson = U.safeJsonParse(q('#wf-json').value, U.INVALID_JSON)
-      if (workflowJson === U.INVALID_JSON) {
-        window.FlowidAdminToast('预设 JSON 无效', true)
+      let workflowJson
+      try {
+        workflowJson = U.workflowJsonTextForSubmit(q('#wf-json').value)
+      } catch (e) {
+        window.FlowidAdminToast(String(e.message || e), true)
         return
       }
       try {

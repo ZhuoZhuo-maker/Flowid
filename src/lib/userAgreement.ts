@@ -1,3 +1,5 @@
+import { loadLicenseServerConfig } from './licenseAccess'
+
 export const USER_AGREEMENT_VERSION = '2026-04'
 
 export const USER_AGREEMENT_TEXT = `用户协议
@@ -21,16 +23,13 @@ export const USER_AGREEMENT_TEXT = `用户协议
 二、API使用责任
 
 2.1 自行填写API Key
+
 如您自行填写第三方API Key：
 - API调用产生的费用、数据安全、服务稳定性，由您与该API服务商自行解决
 - 通过API生成的所有内容，其合法性及产生的后果由您自行承担全部责任
 - 本软件不对任何第三方API服务提供保证
-
-2.2 代购API Key
-如您委托本软件代为购买第三方API Key：
-- 委托代理性质：本软件仅作为您的委托代理人，并非AI服务提供商
-- 使用责任：您使用该API Key所进行的一切操作，产生的法律后果由您自行承担
-- 违规处理：如您使用代购API Key生成违法内容，本软件有权立即终止服务，不退还剩余费用
+- 您使用该API Key所进行的一切操作，产生的法律后果由您自行承担
+- 违规处理：如您使用API Key生成违法内容，本软件有权立即终止服务，不退还剩余费用
 - 服务稳定性：因第三方服务商政策变更、账号封禁等导致服务中断，本软件不承担赔偿责任
 
 三、用户行为规范
@@ -87,3 +86,35 @@ export const USER_AGREEMENT_TEXT = `用户协议
 本协议最后更新时间：2026年4月
 `
 
+export type RemoteUserAgreement = {
+  version: string
+  text: string
+  updatedAtMs: number
+}
+
+/**
+ * 从授权服务拉取用户协议（与后端 `GET /user-agreement` 对齐）。
+ * 未配置 baseUrl 或请求失败时返回 null，前端回退到内置 `USER_AGREEMENT_TEXT`。
+ */
+export async function fetchRemoteUserAgreement(): Promise<RemoteUserAgreement | null> {
+  const base = String(loadLicenseServerConfig().baseUrl || '')
+    .trim()
+    .replace(/\/+$/, '')
+  if (!base) return null
+  try {
+    const res = await fetch(`${base}/user-agreement`, { method: 'GET' })
+    if (!res.ok) return null
+    const json = (await res.json()) as Record<string, unknown>
+    const text = String(json?.text || '').trim()
+    if (!text) return null
+    const version = String(json?.version || USER_AGREEMENT_VERSION).trim() || USER_AGREEMENT_VERSION
+    const updatedAtMs = Number(json?.updatedAtMs)
+    return {
+      version,
+      text,
+      updatedAtMs: Number.isFinite(updatedAtMs) ? updatedAtMs : 0,
+    }
+  } catch {
+    return null
+  }
+}

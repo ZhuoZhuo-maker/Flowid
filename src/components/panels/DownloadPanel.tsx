@@ -1,87 +1,136 @@
 import type { Node } from '@xyflow/react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'motion/react'
-import type { StudioNodeData, StudioNodeKind } from '../../types'
+import type { StudioNodeData } from '../../types'
+import { computeAccessState, loadLicenseSnapshotV2 } from '../../lib/licenseAccess'
+import { PresetTemplateCoverImage } from '../PresetTemplateCoverImage'
 import {
-  fetchSystemPresetJsonText,
-  fetchSystemPresetManifest,
-  filterManifestByPresetTab,
-  type SystemPresetManifestEntry,
-} from '../../lib/systemPresets'
+  FLOWID_PRESET_TEMPLATE_DRAG_MIME,
+  PRESET_TEMPLATE_MOCKS,
+  buildPresetTemplateCategoryTabs,
+  fetchPresetTemplatesFromServer,
+  filterPresetTemplatesByCategory,
+  type PresetTemplate,
+  type PresetTemplateDragPayload,
+} from '../../lib/templateCatalog'
 
-const PRESET_TABS = [
-  { id: 'all' as const, label: '全部' },
-  { id: 'image' as const, label: '图片' },
-  { id: 'video' as const, label: '视频' },
-]
+function PresetTemplateTile({
+  t,
+  onMergePresetTemplate,
+  setDragPayload,
+}: {
+  t: PresetTemplate
+  onMergePresetTemplate?: (payload: PresetTemplateDragPayload) => void | Promise<void>
+  setDragPayload: (e: React.DragEvent, t: PresetTemplate) => void
+}) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/30 overflow-hidden hover:border-orange-500/40 transition-colors flex flex-col min-w-0">
+      <div
+        className="relative aspect-square w-full overflow-hidden bg-white/5 shrink-0"
+        title="封面与「预设模板」页一致；上传请在预设模板页操作"
+      >
+        <PresetTemplateCoverImage
+          title={t.name}
+          fallbackSrc={t.image}
+          className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+          alt=""
+        />
+      </div>
+      <div
+        className={`p-1.5 flex flex-col gap-0.5 min-w-0 flex-1 border-t border-white/5 ${
+          onMergePresetTemplate ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+        }`}
+        draggable={Boolean(onMergePresetTemplate)}
+        onDragStart={(e) => {
+          if (!onMergePresetTemplate) return
+          setDragPayload(e, t)
+        }}
+      >
+        <div className="text-[10px] font-bold text-white/90 line-clamp-2 leading-snug" title={t.name}>
+          {t.name}
+        </div>
+        <div className="flex items-center justify-between gap-0.5 text-[9px] font-mono text-white/40">
+          <span className="truncate uppercase">{t.category}</span>
+          {t.tier === 'pro' ? <span className="text-orange-400 shrink-0">PRO</span> : null}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 /**
- * 系统预设 / 下载：与 @flowid (2) SystemPresetsPanel 同款外壳 + 画布原有载入与下载逻辑。
+ * 画布左侧「预设模板」：封面与「预设模板」管理页同源（封面存储）；仅展示、不在此上传；拖到画布空白处合并节点。
  */
 export function DownloadPanel({
   selectedNode,
   onDownloadSelected,
   onDownloadProject,
-  onApplySystemPreset,
+  onMergePresetTemplate,
 }: {
   selectedNode: Node<StudioNodeData> | null
   onDownloadSelected: () => void
   onDownloadProject: () => void
-  onApplySystemPreset?: (
-    kind: StudioNodeKind,
-    workflowJsonText: string,
-    presetDisplayName: string,
-  ) => void
+  onMergePresetTemplate?: (payload: PresetTemplateDragPayload) => void | Promise<void>
 }) {
-  const [presetTab, setPresetTab] = useState<(typeof PRESET_TABS)[number]['id']>('all')
-  const [manifest, setManifest] = useState<SystemPresetManifestEntry[]>([])
-  const [manifestLoading, setManifestLoading] = useState(true)
-  const [applyingId, setApplyingId] = useState<string | null>(null)
-  const [applyError, setApplyError] = useState<string | null>(null)
+  const [licenseTick, setLicenseTick] = useState(0)
+  const [catalog, setCatalog] = useState<{ ok: true; items: PresetTemplate[] } | null>(null)
+  const [catalogLoading, setCatalogLoading] = useState(true)
+  const [selectedCategory, setSelectedCategory] = useState('全部')
+
+  useEffect(() => {
+    const onLic = () => setLicenseTick((n) => n + 1)
+    window.addEventListener('flowid:license-changed', onLic as EventListener)
+    return () => window.removeEventListener('flowid:license-changed', onLic as EventListener)
+  }, [])
+
+  const access = useMemo(() => computeAccessState(loadLicenseSnapshotV2()), [licenseTick])
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      setManifestLoading(true)
-      const list = await fetchSystemPresetManifest()
+      setCatalogLoading(true)
+      const fromServer = await fetchPresetTemplatesFromServer()
       if (!cancelled) {
-        setManifest(list)
-        setManifestLoading(false)
+        setCatalog(fromServer)
+        setCatalogLoading(false)
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [licenseTick])
 
-  const filteredPresets = useMemo(
-    () => filterManifestByPresetTab(manifest, presetTab),
-    [manifest, presetTab],
+  const baseList = useMemo(
+    () => (catalog?.ok ? catalog.items : PRESET_TEMPLATE_MOCKS),
+    [catalog],
+  )
+
+  const categoryTabs = useMemo(
+    () => buildPresetTemplateCategoryTabs(baseList, access === 'valid'),
+    [baseList, access],
+  )
+
+  useEffect(() => {
+    setSelectedCategory((cur) => (categoryTabs.includes(cur) ? cur : '全部'))
+  }, [categoryTabs])
+
+  const filtered = useMemo(
+    () => filterPresetTemplatesByCategory(baseList, selectedCategory, access === 'valid'),
+    [baseList, selectedCategory, access],
   )
 
   const emptyHint = useMemo(() => {
-    if (manifestLoading) return '正在加载系统预设…'
-    if (presetTab === 'image') return '暂无图片类系统预设'
-    if (presetTab === 'video') return '暂无视频类系统预设'
-    return '暂无系统预设'
-  }, [manifestLoading, presetTab])
+    if (catalogLoading) return '正在加载预设模板…'
+    if (!filtered.length) return '暂无预设模板'
+    return ''
+  }, [catalogLoading, filtered.length])
 
-  const handleApplyPreset = useCallback(
-    async (entry: SystemPresetManifestEntry) => {
-      if (!onApplySystemPreset) return
-      setApplyError(null)
-      setApplyingId(entry.id)
-      try {
-        const jsonText = await fetchSystemPresetJsonText(entry.file)
-        onApplySystemPreset(entry.kind, jsonText, entry.name)
-      } catch (e) {
-        setApplyError((e as Error)?.message || '载入预设失败')
-      } finally {
-        setApplyingId(null)
-      }
-    },
-    [onApplySystemPreset],
-  )
+  const setDragPayload = (event: React.DragEvent, t: PresetTemplate) => {
+    const payload: PresetTemplateDragPayload = { id: t.id, name: t.name, tier: t.tier }
+    event.dataTransfer.setData(FLOWID_PRESET_TEMPLATE_DRAG_MIME, JSON.stringify(payload))
+    event.dataTransfer.setData('text/plain', t.name)
+    event.dataTransfer.effectAllowed = 'copy'
+  }
 
   return (
     <motion.div
@@ -92,58 +141,43 @@ export function DownloadPanel({
       className="w-80 bg-[#111114] border border-white/10 rounded-2xl flex flex-col shadow-2xl backdrop-blur-xl overflow-hidden min-h-[500px]"
     >
       <div className="p-4 border-b border-white/5 shrink-0">
-        <div className="text-[14px] font-mono uppercase tracking-[0.2em] text-white/50">系统预设</div>
+        <div className="text-[14px] font-mono uppercase tracking-[0.2em] text-white/50">预设模板</div>
       </div>
 
-      <div className="px-4 py-3 flex gap-4 border-b border-white/5 shrink-0">
-        {PRESET_TABS.map((tab) => (
+      <div className="px-4 py-3 flex gap-2 border-b border-white/5 shrink-0 overflow-x-auto no-scrollbar">
+        {categoryTabs.map((tab) => (
           <button
-            key={tab.id}
+            key={tab}
             type="button"
-            onClick={() => setPresetTab(tab.id)}
-            className={`text-[14px] font-black uppercase tracking-widest ${
-              presetTab === tab.id ? 'text-orange-500' : 'text-white/60 hover:text-white'
+            onClick={() => setSelectedCategory(tab)}
+            className={`shrink-0 px-3 py-1.5 rounded-full text-[13px] font-black uppercase tracking-widest whitespace-nowrap transition-all border ${
+              selectedCategory === tab
+                ? 'bg-orange-600/90 border-orange-500/50 text-white'
+                : 'bg-white/5 border-white/10 text-white/60 hover:border-white/25'
             }`}
           >
-            {tab.label}
+            {tab}
           </button>
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-3 min-h-0">
-        {applyError ? (
-          <div className="mb-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[13px] text-red-200">
-            {applyError}
-          </div>
-        ) : null}
-        {manifestLoading ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center text-[14px] font-black uppercase tracking-widest text-white/40">
-            {emptyHint}
-          </div>
-        ) : filteredPresets.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center opacity-30">
-            <h4 className="text-sm font-black text-white/40 uppercase tracking-widest mb-1">{emptyHint}</h4>
+      <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar p-3 min-h-0">
+        <p className="m-0 mb-2 text-[11px] font-mono text-white/35 uppercase tracking-wider">
+          拖到画布空白处即可合并节点；封面上传在「预设模板」页
+        </p>
+        {catalogLoading || !filtered.length ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center opacity-40">
+            <h4 className="text-sm font-black text-white/50 uppercase tracking-widest">{emptyHint}</h4>
           </div>
         ) : (
-          <div className="space-y-1">
-            {filteredPresets.map((entry) => (
-              <button
-                key={entry.id}
-                type="button"
-                disabled={!onApplySystemPreset || applyingId === entry.id}
-                onClick={() => handleApplyPreset(entry)}
-                className="w-full flex items-center justify-between gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-white/5 disabled:opacity-50 border border-transparent hover:border-white/10"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-black uppercase text-white/90 truncate tracking-wide">
-                    {entry.name}
-                  </span>
-                  <span className="text-[12px] font-mono text-white/40">{entry.kind}</span>
-                </span>
-                <span className="shrink-0 text-[12px] font-black uppercase tracking-widest text-orange-500/90">
-                  {applyingId === entry.id ? '载入中…' : '载入'}
-                </span>
-              </button>
+          <div className="grid grid-cols-3 gap-2 content-start">
+            {filtered.map((t) => (
+              <PresetTemplateTile
+                key={t.id}
+                t={t}
+                onMergePresetTemplate={onMergePresetTemplate}
+                setDragPayload={setDragPayload}
+              />
             ))}
           </div>
         )}

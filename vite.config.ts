@@ -21,6 +21,8 @@ const comfyLocalProxy: ProxyOptions = {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Electron 打包后使用 file:// 加载 dist/index.html，需要相对资源路径（否则 /assets 会指向磁盘根目录导致黑屏）
+  base: './',
   plugins: [react(), tailwindcss()],
   server: {
     /** 固定本机 IPv4，与 `localhost` 分属不同浏览器来源；与默认存档、工作流 localStorage 一致 */

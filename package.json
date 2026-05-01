@@ -3,7 +3,7 @@
   "author": "Flowid Team",
   "description": "Flowid 无限画布工作室",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -14,11 +14,17 @@
     "auth:dev": "node server/auth-server.cjs",
     "auth:dev:open": "start \"\" \"http://127.0.0.1:3721/healthz\" && npm run auth:dev",
     "desktop:dev": "concurrently -k \"npm:dev\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "gen:icon": "node scripts/generate-icon.mjs",
+    "predesktop:build": "npm run gen:icon",
+    "predesktop:dir": "npm run gen:icon",
     "desktop:build": "npm run build && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis",
+    "desktop:build:deliverables": "npm run desktop:build && node scripts/stage-deliverables.mjs",
+    "pack": "npm run desktop:build:deliverables",
     "desktop:dir": "npm run build && cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win dir",
     "analyzer:dev": "electron electron/analyzer-main.cjs",
     "analyzer:build": "cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --config electron-builder.analyzer.json",
-    "export:youmind-prompts": "node scripts/export-youmind-gpt-image-prompts.mjs"
+    "export:youmind-prompts": "node scripts/export-youmind-gpt-image-prompts.mjs",
+    "sync:user-agreement": "node scripts/sync-user-agreement-to-server.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.10.2",
@@ -34,6 +40,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@tailwindcss/vite": "^4.1.14",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -47,8 +54,9 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.34.5",
     "tailwindcss": "^4.1.14",
-    "@tailwindcss/vite": "^4.1.14",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.0",
     "vite": "^8.0.4",
@@ -58,6 +66,7 @@
     "appId": "com.flowid.desktop",
     "productName": "Flowid",
     "directories": {
+      "buildResources": "build",
       "output": "release"
     },
     "files": [
@@ -67,10 +76,11 @@
     ],
     "asar": true,
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis"
       ],
-      "signAndEditExecutable": false,
+      "signAndEditExecutable": true,
       "artifactName": "${productName}_v${version}.${ext}"
     },
     "nsis": {
@@ -78,7 +88,13 @@
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "createDesktopShortcut": true,
-      "shortcutName": "Flowid"
+      "shortcutName": "Flowid",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://flowid-updates-1348874420.cos.ap-chengdu.myqcloud.com/flowid/win/"
     }
   }
 }

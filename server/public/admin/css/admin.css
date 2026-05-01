@@ -221,6 +221,16 @@ a {
   position: sticky;
   top: 0;
   z-index: 5;
+  /**
+   * 长表单（如大段预设 JSON）滚动后，表单项会叠在 sticky 顶栏「下方」的几何区域里；
+   * 若不处理，点击会落在顶栏上，表现为上方输入框「点不动 / 像被禁用」。
+   * 顶栏容器不接收指针，仅标题区域接收，空白处穿透到下方内容。
+   */
+  pointer-events: none;
+}
+
+.admin-main-header > div {
+  pointer-events: auto;
 }
 
 .admin-main-header h2 {
@@ -313,8 +323,40 @@ a {
   resize: vertical;
 }
 
+.admin-form-block textarea.flowid-drop-target.is-dragover {
+  outline: 1px dashed rgba(234, 88, 12, 0.85);
+  outline-offset: 2px;
+  box-shadow: inset 0 0 0 1px rgba(234, 88, 12, 0.2);
+}
+
 .admin-form-block textarea.tall {
   min-height: 220px;
+}
+
+/* 大段 JSON：关闭拼写/部分扩展对全文的扫描，减轻选区、复制、点击时的主线程卡顿 */
+.admin-form-block textarea.admin-json-mass {
+  text-rendering: optimizeSpeed;
+}
+
+/* 管理卡片内直接放置的 input/textarea（未包在 .admin-form-block 时）仍使用暗色主题，避免浏览器默认白底 */
+.admin-card__bd > label > textarea,
+.admin-card__bd textarea.mono,
+.admin-card__bd input.mono {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.32);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+.admin-card__bd textarea.mono {
+  min-height: 320px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  resize: vertical;
 }
 
 .admin-form-actions {

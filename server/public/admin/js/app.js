@@ -8,6 +8,7 @@
     'templates-pro': window.FlowidAdminPanelTemplatesPro,
     'prompts-free': window.FlowidAdminPanelPromptsFree,
     'prompts-pro': window.FlowidAdminPanelPromptsPro,
+    'user-agreement': window.FlowidAdminPanelUserAgreement,
   }
 
   const NAV = [
@@ -45,6 +46,11 @@
       id: 'prompts-pro',
       title: '授权 Pro 提示词',
       sub: '仅 pro 系统提示词',
+    },
+    {
+      id: 'user-agreement',
+      title: '用户协议',
+      sub: '编辑正文与版本号；客户端从 /user-agreement 同步',
     },
   ]
 
