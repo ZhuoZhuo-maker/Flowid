@@ -124,7 +124,9 @@ echo [STEP 7/7] Push to origin/%BRANCH%...
 call git push -u origin %BRANCH%
 if errorlevel 1 (
   echo [ERR] git push failed.
-  echo [HINT] If you intentionally overwrite remote ^(dangerous^): git push --force-with-lease origin %BRANCH%
+  echo [HINT] Gitee: single file in history must be under 100MB. Large installers under deliverables/ must not be in Git.
+  echo [HINT] After fixing history locally: git push --force-with-lease origin %BRANCH%
+  echo [HINT] See scripts\strip-deliverables-exe-from-history.bat in this repo.
   set "EXIT_CODE=14"
   goto :end
 )
