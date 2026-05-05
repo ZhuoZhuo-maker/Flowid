@@ -1,10 +1,12 @@
 ﻿import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { Node } from '@xyflow/react'
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 import { useCanvasActions } from '../../context/CanvasContext'
 import type { VideoNodeData } from '../../types'
-import { setFlowidMaterialDragData } from '../../lib/materialLibrary'
+import { parseFlowidMaterialDragPayload, setFlowidMaterialDragData } from '../../lib/materialLibrary'
 import { NodeChrome } from './NodeChrome'
+import { NodeOutputThumbnailStrip } from './NodeOutputThumbnailStrip'
+import { VIDEO_IN_UNIFIED } from '../../lib/videoNodeInports'
 
 /**
  * 视频节点：成片或片段占位，后续可接预览播放器与关键帧。
@@ -40,9 +42,17 @@ export function VideoNode({
     return null
   }, [])
 
+  const stripItems = useMemo(() => data.resultThumbnails ?? [], [data.resultThumbnails])
+
   return (
     <>
-      <Handle type="target" position={Position.Left} className="studio-handle" />
+      <Handle
+        type="target"
+        position={Position.Left}
+        id={VIDEO_IN_UNIFIED}
+        className="studio-handle studio-handle--video-in studio-handle--video-in-unified"
+        title="入边：文本/剧本（多路时按画布位置分配提示词 1、2）、图片、音频、视频等"
+      />
       <NodeChrome
         icon={<span className="glyph">映</span>}
         title={data.title}
@@ -53,6 +63,18 @@ export function VideoNode({
         editableTitle
         onTitleChange={(nextTitle) =>
           updateNodeData(id, { kind: 'video', title: nextTitle })
+        }
+        footer={
+          stripItems.length > 0 ? (
+            <NodeOutputThumbnailStrip
+              nodeId={id}
+              nodeTitle={data.title}
+              dataKind="video"
+              items={stripItems}
+              expanded={data.resultThumbnailsExpanded === true}
+              primarySrc={data.src}
+            />
+          ) : null
         }
       >
         <div
@@ -66,6 +88,11 @@ export function VideoNode({
           onDrop={(event) => {
             event.preventDefault()
             event.stopPropagation()
+            const material = parseFlowidMaterialDragPayload(event.dataTransfer)
+            if (material?.kind === 'video' && material.src) {
+              updateNodeData(id, { kind: 'video', src: material.src })
+              return
+            }
             const f = pickFirstVideoFile(event.dataTransfer)
             if (!f) return
             updateNodeData(id, {

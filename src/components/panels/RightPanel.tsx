@@ -11,6 +11,7 @@ import { SystemPromptsPanel } from './SystemPromptsPanel'
 export type RightPanelTab = 'assets' | 'history' | 'system-prompts'
 
 export function RightPanel({
+  canvasDayMode = false,
   isOpen,
   onToggleOpen,
   activeTab,
@@ -27,6 +28,8 @@ export function RightPanel({
   historyItems,
   onRemoveHistoryItems,
 }: {
+  /** 与画布「日间模式」一致：右栏浅色玻璃态 */
+  canvasDayMode?: boolean
   isOpen: boolean
   onToggleOpen: () => void
   activeTab: RightPanelTab
@@ -59,7 +62,11 @@ export function RightPanel({
         <button
           type="button"
           onClick={onToggleOpen}
-          className="w-6 h-24 bg-[#111114] border border-white/10 rounded-l-xl flex items-center justify-center text-white/50 hover:text-white/80 transition-colors shadow-2xl backdrop-blur-xl"
+          className={
+            canvasDayMode
+              ? 'w-6 h-24 bg-[#FFFFFF] border border-[#E8E8E8] rounded-l-xl flex items-center justify-center text-[#525252] hover:text-[#262626] transition-colors shadow-[0_8px_28px_rgba(38,38,38,0.08)] backdrop-blur-xl'
+              : 'w-6 h-24 bg-[#111114] border border-white/10 rounded-l-xl flex items-center justify-center text-white/50 hover:text-white/80 transition-colors shadow-2xl backdrop-blur-xl'
+          }
           aria-label={isOpen ? '收起右侧面板' : '展开右侧面板'}
           title={isOpen ? '收起' : '展开'}
         >
@@ -72,18 +79,30 @@ export function RightPanel({
               initial={{ x: 20, opacity: 0 }}
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: 20, opacity: 0 }}
-              className="w-80 h-full bg-[#111114] border border-white/10 rounded-r-2xl border-l-0 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden"
+              className={
+                canvasDayMode
+                  ? 'w-80 h-full bg-[#FFFFFF] border border-[#E8E8E8] rounded-r-2xl border-l-0 shadow-[0_12px_40px_rgba(38,38,38,0.08)] backdrop-blur-xl flex flex-col overflow-hidden'
+                  : 'w-80 h-full bg-[#111114] border border-white/10 rounded-r-2xl border-l-0 shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden'
+              }
             >
-              <div className="flex border-b border-white/5 p-1">
+              <div
+                className={
+                  canvasDayMode ? 'flex border-b border-[#E8E8E8] p-1 bg-[#F5F5F5]' : 'flex border-b border-white/5 p-1'
+                }
+              >
                 {tabs.map((tab) => (
                   <button
                     key={tab.id}
                     type="button"
                     onClick={() => onTabChange(tab.id)}
                     className={`flex-1 flex justify-center py-4 transition-all rounded-lg group ${
-                      activeTab === tab.id
-                        ? 'text-orange-500 bg-white/5'
-                        : 'text-white/50 hover:text-white/80'
+                      canvasDayMode
+                        ? activeTab === tab.id
+                          ? 'text-[#262626] bg-[#FFFFFF] shadow-sm border border-[#E8E8E8]'
+                          : 'text-[#525252] hover:text-[#262626] hover:bg-[#FFFFFF]'
+                        : activeTab === tab.id
+                          ? 'text-orange-500 bg-white/5'
+                          : 'text-white/50 hover:text-white/80'
                     }`}
                     aria-label={
                       tab.id === 'assets' ? '素材库' : tab.id === 'history' ? '历史' : '系统提示词'
@@ -95,7 +114,10 @@ export function RightPanel({
                 ))}
               </div>
 
-              <div className="flex-1 overflow-y-auto p-0 custom-scrollbar">
+              <div
+                className="flex-1 overflow-y-auto p-0 custom-scrollbar"
+                data-right-panel-body={canvasDayMode ? 'day' : undefined}
+              >
                 {activeTab === 'assets' ? (
                   <AssetToolboxPanel
                     assets={assets}

@@ -243,11 +243,13 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
         </div>
       </div>
 
-      <div className="px-4 py-3 flex gap-2 overflow-x-auto no-scrollbar border-b border-white/5 shrink-0 select-none">
+      <div className="system-prompts-category-tabs px-4 py-3 flex gap-2 overflow-x-auto no-scrollbar border-b border-white/5 shrink-0 select-none">
         {categories.map((cat) => (
           <button
             key={cat.id}
             type="button"
+            data-active={activeCategory === cat.id ? 'true' : undefined}
+            aria-pressed={activeCategory === cat.id}
             onClick={() => setActiveCategory(cat.id)}
             className={`px-3 py-1.5 rounded-lg text-[14px] font-black uppercase tracking-widest whitespace-nowrap transition-all border ${
               activeCategory === cat.id

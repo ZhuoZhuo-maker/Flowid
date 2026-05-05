@@ -1,4 +1,5 @@
 import type { NodeRunProgress, WorkflowProviderConfig } from '../types'
+import { encodeComfyDevProxyBaseSegment } from './comfyDevProxyCodec'
 
 type SubmitPromptResponse = {
   prompt_id?: string
@@ -375,6 +376,7 @@ function normalizeBaseUrl(baseUrl: string): string {
 
 /**
  * 本地 ComfyUI 在浏览器直连时可能触发 CORS/PNA，开发态走 Vite 同源代理更稳定。
+ * 远程 http(s) Comfy（如云 GPU）在开发态同样走 `/__comfy_dev_proxy__/` 同源反代，避免上传/轮询被 CORS 拦截。
  * 生产构建无 Vite 代理时，必须使用真实 baseUrl（由 Comfy 开启 CORS 或同源反代）。
  */
 function resolveRequestBase(baseUrl: string): string {
@@ -389,6 +391,9 @@ function resolveRequestBase(baseUrl: string): string {
     const isDefaultComfyPort = url.port === '8188'
     if (isLocalHost && isDefaultComfyPort) {
       return '/__comfy_local__'
+    }
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return `/__comfy_dev_proxy__/${encodeComfyDevProxyBaseSegment(normalized)}`
     }
   } catch {
     // fallback to raw baseUrl
@@ -790,22 +795,125 @@ function collectMediaRefsFromAny(value: unknown, refs: ComfyMediaRef[]) {
   Object.values(record).forEach((item) => collectMediaRefsFromAny(item, refs))
 }
 
+function mediaRefRank(item: ComfyMediaRef): number {
+  const normalize = (value: string | undefined) => (value || '').trim().toLowerCase()
+  const t = normalize(item.type)
+  const s = normalize(item.subfolder)
+  // 1) 明确 output：优先使用 SaveImage/SaveVideo 的最终产物
+  if (t === 'output' || s === 'output' || s.startsWith('output/')) return 0
+  // 2) temp 预览：可显示但可能被后续清理
+  if (t === 'temp' || s === 'temp' || s.startsWith('temp/')) return 1
+  // 3) input：一般是上传参考图，不应作为回填结果
+  if (t === 'input' || s === 'input' || s.startsWith('input/')) return 3
+  // 4) 未标注类型：放在 output/temp 之后、input 之前
+  return 2
+}
+
 function pickFirstMediaRef(refs: ComfyMediaRef[]): ComfyMediaRef | null {
   if (!refs.length) return null
-  const normalize = (value: string | undefined) => (value || '').trim().toLowerCase()
-  const mediaRank = (item: ComfyMediaRef): number => {
-    const t = normalize(item.type)
-    const s = normalize(item.subfolder)
-    // 1) 明确 output：优先使用 SaveImage/SaveVideo 的最终产物
-    if (t === 'output' || s === 'output' || s.startsWith('output/')) return 0
-    // 2) temp 预览：可显示但可能被后续清理
-    if (t === 'temp' || s === 'temp' || s.startsWith('temp/')) return 1
-    // 3) input：一般是上传参考图，不应作为回填结果
-    if (t === 'input' || s === 'input' || s.startsWith('input/')) return 3
-    // 4) 未标注类型：放在 output/temp 之后、input 之前
-    return 2
+  return [...refs].sort((a, b) => mediaRefRank(a) - mediaRefRank(b))[0] ?? refs[0]
+}
+
+function mediaRefDedupeKey(ref: ComfyMediaRef): string {
+  const t = String(ref.type || '').trim().toLowerCase()
+  const s = String(ref.subfolder || '').trim().toLowerCase()
+  const f = String(ref.filename || '').trim().toLowerCase()
+  return `${t}|${s}|${f}`
+}
+
+function buildComfyViewUrl(requestBase: string, ref: ComfyMediaRef): string {
+  const params = new URLSearchParams({
+    filename: ref.filename,
+    subfolder: ref.subfolder ?? '',
+    type: ref.type ?? 'output',
+  })
+  return `${requestBase}/view?${params.toString()}`
+}
+
+/**
+ * 从 `/view?...` URL 中提取 filename 参数，失败返回空串。
+ */
+export function readFilenameFromComfyViewUrl(viewUrl: string | null | undefined): string {
+  const raw = String(viewUrl || '').trim()
+  if (!raw) return ''
+  try {
+    const absolute = raw.startsWith('http')
+      ? raw
+      : `${typeof window !== 'undefined' ? window.location.origin : ''}${raw.startsWith('/') ? '' : '/'}${raw}`
+    const parsed = new URL(absolute)
+    return String(parsed.searchParams.get('filename') || '').trim()
+  } catch {
+    const m = raw.match(/[?&]filename=([^&]+)/i)
+    if (!m?.[1]) return ''
+    try {
+      return decodeURIComponent(m[1]).trim()
+    } catch {
+      return m[1].trim()
+    }
   }
-  return [...refs].sort((a, b) => mediaRank(a) - mediaRank(b))[0] ?? refs[0]
+}
+
+/**
+ * 从 ComfyUI history 收集与 `pickComfyResultImageUrl` 同源的视觉类 refs（outputs → ui → 可选全条目扫描）。
+ */
+function collectComfyHistoryVisualRefsForResult(
+  historyEntry: Record<string, unknown>,
+  allowFullEntryFallback: boolean,
+): ComfyMediaRef[] {
+  const pushImageLikeRefs = (nodeOutput: Record<string, unknown>, target: ComfyMediaRef[]) => {
+    const pushRef = (item: ComfyImageRef) => {
+      const filename = String(item.filename ?? item.name ?? '').trim()
+      if (!filename) return
+      target.push({
+        filename,
+        subfolder: item.subfolder,
+        type: item.type,
+      })
+    }
+    const images = nodeOutput.images as ComfyImageRef[] | undefined
+    if (images?.length) {
+      images.forEach((item) => pushRef(item))
+    }
+    const gifs = nodeOutput.gifs as ComfyImageRef[] | undefined
+    if (gifs?.length) {
+      gifs.forEach((item) => pushRef(item))
+    }
+    const videos = nodeOutput.videos as ComfyImageRef[] | undefined
+    if (videos?.length) {
+      videos.forEach((item) => pushRef(item))
+    }
+    collectMediaRefsFromAny(nodeOutput, target)
+  }
+
+  const refs: ComfyMediaRef[] = []
+  const outputs = normalizeHistoryOutputs(historyEntry)
+  if (outputs && typeof outputs === 'object' && !Array.isArray(outputs)) {
+    const visitOutputs = (value: unknown, depth: number) => {
+      if (depth > DEEP_OUTPUT_SCAN_MAX_DEPTH || value == null) return
+      if (Array.isArray(value)) {
+        for (const item of value) visitOutputs(item, depth + 1)
+        return
+      }
+      if (typeof value !== 'object') return
+      pushImageLikeRefs(value as Record<string, unknown>, refs)
+      for (const child of Object.values(value as Record<string, unknown>)) {
+        visitOutputs(child, depth + 1)
+      }
+    }
+    visitOutputs(outputs, 0)
+  }
+  if (refs.length) return refs
+
+  const ui = historyEntry.ui as Record<string, unknown> | undefined
+  if (ui && typeof ui === 'object' && !Array.isArray(ui)) {
+    collectMediaRefsFromAny(ui, refs)
+  }
+  if (refs.length) return refs
+
+  if (!allowFullEntryFallback) return []
+  const fallbackRefs: ComfyMediaRef[] = []
+  collectMediaRefsFromAny(historyEntry, fallbackRefs)
+  return fallbackRefs
 }
 
 /**
@@ -1355,89 +1463,50 @@ export function pickComfyResultImageUrl({
 }): string | null {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
-  const pushImageLikeRefs = (nodeOutput: Record<string, unknown>, target: ComfyMediaRef[]) => {
-    const pushRef = (item: ComfyImageRef) => {
-      const filename = String(item.filename ?? item.name ?? '').trim()
-      if (!filename) return
-      target.push({
-        filename,
-        subfolder: item.subfolder,
-        type: item.type,
-      })
-    }
-    const images = nodeOutput.images as ComfyImageRef[] | undefined
-    if (images?.length) {
-      images.forEach((item) => pushRef(item))
-    }
-    /** 部分工作流以 `gifs` 输出帧序列（结构与 `images` 一致） */
-    const gifs = nodeOutput.gifs as ComfyImageRef[] | undefined
-    if (gifs?.length) {
-      gifs.forEach((item) => pushRef(item))
-    }
-    /** 视频节点/工作流常见 `videos` 数组，结构与 `images` 一致 */
-    const videos = nodeOutput.videos as ComfyImageRef[] | undefined
-    if (videos?.length) {
-      videos.forEach((item) => pushRef(item))
-    }
-    collectMediaRefsFromAny(nodeOutput, target)
-  }
-
-  const refs: ComfyMediaRef[] = []
-  const outputs = normalizeHistoryOutputs(historyEntry)
-  if (outputs && typeof outputs === 'object' && !Array.isArray(outputs)) {
-    const visitOutputs = (value: unknown, depth: number) => {
-      if (depth > DEEP_OUTPUT_SCAN_MAX_DEPTH || value == null) return
-      if (Array.isArray(value)) {
-        for (const item of value) visitOutputs(item, depth + 1)
-        return
-      }
-      if (typeof value !== 'object') return
-      pushImageLikeRefs(value as Record<string, unknown>, refs)
-      for (const child of Object.values(value as Record<string, unknown>)) {
-        visitOutputs(child, depth + 1)
-      }
-    }
-    visitOutputs(outputs, 0)
-  }
-  let first = pickFirstMediaRef(refs)
-  if (first) {
-    const params = new URLSearchParams({
-      filename: first.filename,
-      subfolder: first.subfolder ?? '',
-      type: first.type ?? 'output',
-    })
-    return `${requestBase}/view?${params.toString()}`
-  }
-
-  const ui = historyEntry.ui as Record<string, unknown> | undefined
-  if (ui && typeof ui === 'object' && !Array.isArray(ui)) {
-    const uiRefs: ComfyMediaRef[] = []
-    collectMediaRefsFromAny(ui, uiRefs)
-    first = pickFirstMediaRef(uiRefs)
-    if (first) {
-      const params = new URLSearchParams({
-        filename: first.filename,
-        subfolder: first.subfolder ?? '',
-        type: first.type ?? 'output',
-      })
-      return `${requestBase}/view?${params.toString()}`
-    }
-  }
-
-  if (!allowFullEntryFallback) {
-    return null
-  }
-  // 兜底：部分工作流不会把媒体放在 outputs/ui，直接扫描整个 history 条目（可能误扫 prompt 内字符串，仅在上层允许时启用）。
-  const fallbackRefs: ComfyMediaRef[] = []
-  collectMediaRefsFromAny(historyEntry, fallbackRefs)
-  first = pickFirstMediaRef(fallbackRefs)
+  const refs = collectComfyHistoryVisualRefsForResult(historyEntry, allowFullEntryFallback)
+  const first = pickFirstMediaRef(refs)
   if (!first) return null
-  const params = new URLSearchParams({
-    filename: first.filename,
-    subfolder: first.subfolder ?? '',
-    type: first.type ?? 'output',
-  })
-  return `${requestBase}/view?${params.toString()}`
+  return buildComfyViewUrl(requestBase, first)
+}
+
+/**
+ * 从 ComfyUI history 提取本次任务全部视觉输出 view URL（多分镜/多 SaveImage 等），排除 input 档与可选文件名黑名单。
+ */
+export function pickComfyResultImageViewUrls({
+  providerConfig,
+  historyEntry,
+  allowFullEntryFallback = true,
+  excludeFilenames,
+}: {
+  providerConfig: WorkflowProviderConfig
+  historyEntry: Record<string, unknown>
+  allowFullEntryFallback?: boolean
+  /** 与本次上传注入文件名一致时跳过，避免把参考图回显当输出 */
+  excludeFilenames?: Iterable<string>
+}): string[] {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const exclude = new Set(
+    Array.from(excludeFilenames ?? [])
+      .map((s) => String(s || '').trim())
+      .filter(Boolean),
+  )
+  const refs = collectComfyHistoryVisualRefsForResult(historyEntry, allowFullEntryFallback)
+  const ranked = [...refs]
+    .filter((r) => mediaRefRank(r) < 3)
+    .sort((a, b) => mediaRefRank(a) - mediaRefRank(b))
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const ref of ranked) {
+    const key = mediaRefDedupeKey(ref)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const url = buildComfyViewUrl(requestBase, ref)
+    const fn = readFilenameFromComfyViewUrl(url)
+    if (fn && exclude.has(fn)) continue
+    out.push(url)
+  }
+  return out
 }
 
 /**

@@ -3,8 +3,14 @@ import * as THREE from 'three'
 /**
  * 按 WebGL1/2 常见限制设置贴图采样：非 2 的幂（NPOT）尺寸**不能**可靠使用 mipmap，
  * 若仍用 `LinearMipmapLinearFilter`，在部分显卡/浏览器上贴图不完整 → **整球全黑**。
+ *
+ * 等距柱状全景在球面上 u=0 与 u=1 为同一经线：水平方向用 `RepeatWrapping` 可避免
+ * `ClampToEdge` 在接缝处双线性采样「夹边」造成的竖线/错层感（与源图拼接质量也有关）。
  */
-export function applyWebglSafePanoramaTextureSampling(texture: THREE.Texture): void {
+export function applyWebglSafePanoramaTextureSampling(
+  texture: THREE.Texture,
+  renderer?: THREE.WebGLRenderer,
+): void {
   const img = texture.image as
     | HTMLImageElement
     | HTMLCanvasElement
@@ -24,12 +30,17 @@ export function applyWebglSafePanoramaTextureSampling(texture: THREE.Texture): v
   }
   const pot =
     w > 0 && h > 0 && (w & (w - 1)) === 0 && (h & (h - 1)) === 0
-  texture.wrapS = THREE.ClampToEdgeWrapping
+  texture.wrapS = THREE.RepeatWrapping
   texture.wrapT = THREE.ClampToEdgeWrapping
   texture.generateMipmaps = pot
   texture.minFilter = pot ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter
   texture.magFilter = THREE.LinearFilter
   texture.colorSpace = THREE.SRGBColorSpace
+  const maxA = (renderer?.capabilities as { getMaxAnisotropy?: () => number } | undefined)
+    ?.getMaxAnisotropy?.()
+  if (maxA != null && maxA > 0) {
+    texture.anisotropy = Math.min(16, maxA)
+  }
   texture.needsUpdate = true
 }
 
@@ -52,7 +63,7 @@ export function prepareEquirectTextureForGpu(
     const ih = raw.height
     const maxDim = Math.max(512, renderer.capabilities.maxTextureSize || 8192)
     if (iw <= maxDim && ih <= maxDim) {
-      applyWebglSafePanoramaTextureSampling(texture)
+      applyWebglSafePanoramaTextureSampling(texture, renderer)
       return texture
     }
     const scale = maxDim / Math.max(iw, ih)
@@ -78,13 +89,13 @@ export function prepareEquirectTextureForGpu(
      * 像素与「直接上传 ImageBitmap」一致；`CanvasTexture` 默认 `flipY=true` 会再翻一次 → 超大图缩放分支上下颠倒。
      */
     next.flipY = false
-    applyWebglSafePanoramaTextureSampling(next)
+    applyWebglSafePanoramaTextureSampling(next, renderer)
     return next
   }
 
   const img = texture.image as HTMLImageElement | undefined
   if (!img || !('naturalWidth' in img)) {
-    applyWebglSafePanoramaTextureSampling(texture)
+    applyWebglSafePanoramaTextureSampling(texture, renderer)
     return texture
   }
 
@@ -93,7 +104,7 @@ export function prepareEquirectTextureForGpu(
   const maxDim = Math.max(512, renderer.capabilities.maxTextureSize || 8192)
 
   if (iw <= maxDim && ih <= maxDim) {
-    applyWebglSafePanoramaTextureSampling(texture)
+    applyWebglSafePanoramaTextureSampling(texture, renderer)
     return texture
   }
 
@@ -114,6 +125,6 @@ export function prepareEquirectTextureForGpu(
   texture.dispose()
 
   const next = new THREE.CanvasTexture(canvas)
-  applyWebglSafePanoramaTextureSampling(next)
+  applyWebglSafePanoramaTextureSampling(next, renderer)
   return next
 }

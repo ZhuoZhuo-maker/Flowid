@@ -103,6 +103,18 @@ export type ShortcutCommandId =
   | 'fitView'
   | 'resetZoom'
 
+/** 单次运行可能产生的多条媒体（分镜多图等），用于节点底部缩略图条 */
+export type NodeResultThumbnail = {
+  id: string
+  url: string
+  /** 本图在 IndexedDB 中的资产 id（仅部分图片经本地落库后有） */
+  assetId?: string
+  fileName?: string
+  /** 镜像到本地输出目录后的绝对路径 */
+  diskPath?: string
+  mediaKind: 'image' | 'video' | 'audio'
+}
+
 /**
  * 各节点在 React Flow `data` 中承载的业务字段。
  */
@@ -145,6 +157,11 @@ export type StudioNodeDataBase = {
   srcAssetId?: string
   referenceImageSources?: string[]
   referenceImageAssetIds?: string[]
+
+  /** 运行产生的媒体缩略图队列（最新批次在前）；主预览仍为 `src` */
+  resultThumbnails?: NodeResultThumbnail[]
+  /** 为 true 时展开底部输出缩略图行（默认折叠） */
+  resultThumbnailsExpanded?: boolean
 }
 
 export type TextNodeData = StudioNodeDataBase & {
@@ -161,6 +178,12 @@ export type ScriptNodeData = StudioNodeDataBase & {
   body: string
 }
 
+/**
+ * 画布「加点抠图」：坐标为相对主图 **像素宽高** 的 0～1 归一化（与 object-fit: contain 无关，Comfy 与主图对齐）。
+ * `t=1` 表示保留（绿），`t=0` 表示去掉（红）。
+ */
+export type MattingPoint = { x: number; y: number; t: 0 | 1 }
+
 export type ImageNodeData = StudioNodeDataBase & {
   kind: 'image'
   /** 参考图 URL 或占位说明 */
@@ -176,6 +199,12 @@ export type ImageNodeData = StudioNodeDataBase & {
   referenceImageSources?: string[]
   /** 与 `referenceImageSources` 对齐的本地资产 id 列表（空串表示非本地资产） */
   referenceImageAssetIds?: string[]
+  /** 主图上的抠图前后景点；执行时注入占位符 `__MATTING_POINTS_JSON__` 等 */
+  mattingPoints?: MattingPoint[]
+  /** 主图 naturalWidth，与 mattingPoints 一起用于生成 Comfy 像素坐标 */
+  mattingRefWidth?: number
+  /** 主图 naturalHeight */
+  mattingRefHeight?: number
 }
 
 export type VideoNodeData = StudioNodeDataBase & {
@@ -186,7 +215,19 @@ export type VideoNodeData = StudioNodeDataBase & {
   srcFileName?: string
   /** 本地上传主图在 IndexedDB 中的资产 id（用于重启后恢复） */
   srcAssetId?: string
+  /** 第一路提示词（左侧统一入边桩 `video-in`；多路文本按画布位置排序分配） */
   prompt: string
+  /**
+   * 第二路提示词，与 `prompt` 独立；工作流占位符 `__PROMPT2__`（`__PROMPT__` 为口 1）。
+   */
+  prompt2?: string
+  /** 第三、四路提示词（多文本节点连入统一口时按画布位置分配）；占位符 `__PROMPT3__`、`__PROMPT4__` */
+  prompt3?: string
+  prompt4?: string
+  /**
+   * 第五路及以后（与 `prompt`～`prompt4` 顺序一致）；工作流里写 `__PROMPT5__`、`__PROMPT6__`… 时自动注入。
+   */
+  extraPrompts?: string[]
   /** 底部面板选择的工作流名称 */
   model?: string
   /** 底部面板上传的多张参考图（blob URL） */

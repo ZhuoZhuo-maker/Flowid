@@ -13,6 +13,8 @@ export type CanvasActions = {
     imageObjectUrl: string,
     gapFlow?: number,
   ) => Promise<void>
+  /** 从画布节点触发单节点执行（与底部面板「执行」一致） */
+  runNodeFromCanvas: (nodeId: string) => void | Promise<void>
 }
 
 type CanvasContextValue = CanvasActions
@@ -27,6 +29,7 @@ interface CanvasProviderProps {
   updateNodeMeta: CanvasActions['updateNodeMeta']
   removeNodeById: CanvasActions['removeNodeById']
   addPanoramaViewToCanvas: CanvasActions['addPanoramaViewToCanvas']
+  runNodeFromCanvas: CanvasActions['runNodeFromCanvas']
 }
 
 export function CanvasProvider({
@@ -37,6 +40,7 @@ export function CanvasProvider({
   updateNodeMeta,
   removeNodeById,
   addPanoramaViewToCanvas,
+  runNodeFromCanvas,
 }: CanvasProviderProps) {
   const value = useMemo(
     () => ({
@@ -46,6 +50,7 @@ export function CanvasProvider({
       updateNodeMeta,
       removeNodeById,
       addPanoramaViewToCanvas,
+      runNodeFromCanvas,
     }),
     [
       updateNodeData,
@@ -54,6 +59,7 @@ export function CanvasProvider({
       updateNodeMeta,
       removeNodeById,
       addPanoramaViewToCanvas,
+      runNodeFromCanvas,
     ]
   )
 

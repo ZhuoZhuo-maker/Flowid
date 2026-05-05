@@ -56,6 +56,7 @@ export function createStudioNode(
           prompt: '',
           model: '',
           referenceImageSources: [],
+          mattingPoints: [],
         },
       }
     case 'video':
@@ -68,6 +69,9 @@ export function createStudioNode(
           runStatus: 'idle',
           src: '',
           prompt: '',
+          prompt2: '',
+          prompt3: '',
+          prompt4: '',
           model: '',
           referenceImageSources: [],
         },

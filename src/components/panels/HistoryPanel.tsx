@@ -1,8 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Clock } from 'lucide-react'
 import { motion } from 'motion/react'
 import type { HistoryItem } from './types'
 import { loadLocalDiskPathsSettings } from '../../lib/localDiskPathsSettings'
+import { sanitizeFileStem } from '../../lib/localAssetDiskMirror'
+
+/** 与 `mirrorComfyOutputToDisk` 的 `${stem}-${isoStamp}.ext` 命名一致，用于从展示名还原 stem。 */
+function hasOutputMirrorTimestampSuffix(leaf: string): boolean {
+  return /-\d{4}-\d{2}-\d{2}T[\d-]+Z$/i.test(String(leaf || '').trim())
+}
+
+function stripOutputMirrorTimestampSuffix(leaf: string): string {
+  return String(leaf || '')
+    .trim()
+    .replace(/-\d{4}-\d{2}-\d{2}T[\d-]+Z$/i, '')
+    .trim()
+}
+
+function diskHistoryLeafStemForDedup(leaf: string): string {
+  const s = String(leaf || '').trim()
+  if (!hasOutputMirrorTimestampSuffix(s)) return sanitizeFileStem(s)
+  return sanitizeFileStem(stripOutputMirrorTimestampSuffix(s))
+}
 
 const HISTORY_TABS = ['全部', '图片', '视频', '音频', '音乐'] as const
 type HistoryTab = (typeof HISTORY_TABS)[number]
@@ -75,6 +94,105 @@ function resolveMediaKind(item: HistoryItem): 'image' | 'video' | 'audio' | 'mus
 }
 
 /**
+ * 视频历史条目封面：静音加载后 seek 到首帧附近并暂停，用画面作缩略图；点击由上层切到播放态。
+ */
+function HistoryVideoPosterThumb({ src, onPlay }: { src: string; onPlay: () => void }) {
+  const vRef = useRef<HTMLVideoElement>(null)
+  const [posterFailed, setPosterFailed] = useState(false)
+
+  useEffect(() => {
+    setPosterFailed(false)
+  }, [src])
+
+  return (
+    <div className="relative h-full w-full overflow-hidden bg-black">
+      {!posterFailed ? (
+        <video
+          ref={vRef}
+          src={src}
+          muted
+          playsInline
+          preload="metadata"
+          className="pointer-events-none block h-full w-full object-cover"
+          onLoadedMetadata={() => {
+            const v = vRef.current
+            if (!v) return
+            try {
+              const d = v.duration
+              if (Number.isFinite(d) && d > 0) {
+                v.currentTime = Math.min(0.12, Math.max(0.001, d * 0.02))
+              } else {
+                v.currentTime = 0.08
+              }
+            } catch {
+              try {
+                v.currentTime = 0
+              } catch {
+                // ignore
+              }
+            }
+          }}
+          onSeeked={() => {
+            try {
+              vRef.current?.pause()
+            } catch {
+              // ignore
+            }
+          }}
+          onError={() => setPosterFailed(true)}
+        />
+      ) : (
+        <div className="absolute inset-0 flex items-center justify-center text-[12px] text-white/40">视</div>
+      )}
+      <button
+        type="button"
+        className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 text-[22px] text-white/90 transition-colors hover:bg-black/10 hover:text-orange-300"
+        onClick={onPlay}
+        title="播放"
+      >
+        <span className="drop-shadow-[0_1px_3px_rgba(0,0,0,0.95)]" aria-hidden>
+          ▷
+        </span>
+      </button>
+    </div>
+  )
+}
+
+/**
+ * 历史缩略图内联视频：不用原生 `controls`，避免浏览器自带的「⋯」等控件；
+ * 进入后自动播放，点击画面暂停/继续，播完由上层收起。
+ */
+function HistoryInlineVideo({ src, onEnded }: { src: string; onEnded: () => void }) {
+  const ref = useRef<HTMLVideoElement>(null)
+
+  useLayoutEffect(() => {
+    const v = ref.current
+    if (!v) return
+    void v.play().catch(() => {})
+  }, [src])
+
+  return (
+    <video
+      ref={ref}
+      src={src}
+      playsInline
+      preload="auto"
+      className="block h-full w-full cursor-pointer bg-black object-cover"
+      title="点击画面暂停或继续"
+      onEnded={onEnded}
+      onLoadedData={(e) => {
+        void e.currentTarget.play().catch(() => {})
+      }}
+      onClick={(e) => {
+        const v = e.currentTarget
+        if (v.paused) void v.play()
+        else v.pause()
+      }}
+    />
+  )
+}
+
+/**
  * 历史记录面板：展示最近操作流水。
  */
 export function HistoryPanel({
@@ -88,7 +206,6 @@ export function HistoryPanel({
   embedded?: boolean
 }) {
   const [activeTab, setActiveTab] = useState<HistoryTab>('全部')
-  const [playingSrc, setPlayingSrc] = useState<string | null>(null)
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [diskHistoryItems, setDiskHistoryItems] = useState<HistoryItem[] | null>(null)
@@ -108,6 +225,8 @@ export function HistoryPanel({
   const [brokenImageIds, setBrokenImageIds] = useState<Set<string>>(() => new Set())
   const [previewSrcById, setPreviewSrcById] = useState<Record<string, string>>({})
   const previewSrcRef = useRef<Record<string, string>>({})
+  /** 在缩略图方格内内联播放音视频的条目 id（不占额外高度，再点「收起」或切换条目关闭） */
+  const [activeInlinePlayerId, setActiveInlinePlayerId] = useState<string | null>(null)
 
   useEffect(() => {
     const onChanged = () => setDiskPathsTick((v) => v + 1)
@@ -213,7 +332,35 @@ export function HistoryPanel({
    */
   const sourceItems = useMemo(() => {
     if (diskHistoryItems === null) return historyItems
-    const merged = [...historyItems, ...diskHistoryItems]
+    /**
+     * 一次 Comfy 任务多路视频/图会镜像多个 `标题-ISO时间戳.ext` 到输出目录；
+     * 磁盘扫描会每条文件占一格，与内存里「视频生成成功」一条并列，截断标题后像重复执行多次。
+     * 对已识别为镜像时间戳命名的磁盘条目：若与近期同类型内存条目的标题 stem 一致，则不再重复展示。
+     */
+    const memoryKinds = new Set(['image', 'video', 'audio', 'music'])
+    const memoryMedia = historyItems.filter((h) => {
+      const src = String(h.src || '').trim()
+      if (!src || src.startsWith('file://')) return false
+      const k = h.kind
+      return Boolean(k && memoryKinds.has(k))
+    })
+    const timeSkewMs = 180_000
+    const filteredDisk = diskHistoryItems.filter((d) => {
+      if (!d.id?.startsWith('output:')) return true
+      const leaf = String(d.title || '').trim()
+      if (!leaf || !hasOutputMirrorTimestampSuffix(leaf)) return true
+      const diskStem = diskHistoryLeafStemForDedup(leaf)
+      const diskCt = Number(d.createdAt) || 0
+      const shadowed = memoryMedia.some((h) => {
+        const memStem = sanitizeFileStem(String(h.title || '').trim())
+        if (memStem !== diskStem) return false
+        if (h.kind && d.kind && h.kind !== d.kind) return false
+        const memCt = Number(h.createdAt) || 0
+        return Math.abs(memCt - diskCt) < timeSkewMs
+      })
+      return !shadowed
+    })
+    const merged = [...historyItems, ...filteredDisk]
     merged.sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))
     return merged
   }, [diskHistoryItems, historyItems])
@@ -322,11 +469,10 @@ export function HistoryPanel({
     }
   }, [displayItems])
 
-  /**
-   * 历史卡片播放：点击同一条二次触发可暂停。
-   */
-  const onTogglePlay = (src: string) => {
-    setPlayingSrc((prev) => (prev === src ? null : src))
+  const resolvePlayableSrc = (h: DisplayHistoryItem): string => {
+    const rawSrc = String(h.src || '')
+    const isLocalFile = rawSrc.startsWith('file://')
+    return (previewSrcById[h.id] || (!isLocalFile ? rawSrc : '')) as string
   }
 
   const toggleSelect = (id: string) => {
@@ -403,6 +549,7 @@ export function HistoryPanel({
             onClick={() => {
               setBatchMode((prev) => !prev)
               setSelectedIds([])
+              setActiveInlinePlayerId(null)
             }}
             className={`rounded-lg border px-2.5 py-1 text-[12px] font-black uppercase tracking-widest transition-colors ${
               batchMode
@@ -448,130 +595,136 @@ export function HistoryPanel({
           </div>
         ) : (
           <div className={`grid gap-3 ${displayItems.length >= 8 ? 'grid-cols-3' : 'grid-cols-2'}`}>
-            {displayItems.map((h) => (
-              <div
-                key={h.id}
-                className="group flex flex-col gap-1.5 rounded-xl border border-white/5 bg-black/30 p-2 hover:border-orange-500/30 transition-colors"
-              >
-                <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-black/40">
-                  {batchMode ? (
-                    <button
-                      type="button"
-                      title="选择"
-                      onClick={() => toggleSelect(h.id)}
-                      className={`absolute left-1.5 top-1.5 z-10 h-4 w-4 rounded-full border-2 ${
-                        selectedIds.includes(h.id)
-                          ? 'border-orange-500 bg-orange-500'
-                          : 'border-white/40 bg-black/50'
-                      }`}
-                    />
-                  ) : null}
-                  {h.mediaKind === 'image' && h.src ? (
-                    brokenImageIds.has(h.id) ? (
-                      <span
-                        className="flex h-full w-full items-center justify-center text-[12px] text-white/40"
-                        title="预览不可用或资源已失效"
-                      >
-                        图
-                      </span>
-                    ) : (
+            {displayItems.map((h) => {
+              const playable = resolvePlayableSrc(h)
+              const inlineOpen = !batchMode && activeInlinePlayerId === h.id
+              return (
+                <div
+                  key={h.id}
+                  className="group flex flex-col gap-1.5 rounded-xl border border-white/5 bg-black/30 p-2 hover:border-orange-500/30 transition-colors"
+                >
+                  <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-black/40">
+                    {batchMode ? (
+                      <button
+                        type="button"
+                        title="选择"
+                        onClick={() => toggleSelect(h.id)}
+                        className={`absolute left-1.5 top-1.5 z-10 h-4 w-4 rounded-full border-2 ${
+                          selectedIds.includes(h.id)
+                            ? 'border-orange-500 bg-orange-500'
+                            : 'border-white/40 bg-black/50'
+                        }`}
+                      />
+                    ) : null}
+                    {h.mediaKind === 'image' && h.src ? (
+                      brokenImageIds.has(h.id) ? (
+                        <span
+                          className="flex h-full w-full items-center justify-center text-[12px] text-white/40"
+                          title="预览不可用或资源已失效"
+                        >
+                          图
+                        </span>
+                      ) : (
+                        (() => {
+                          const rawSrc = String(h.src || '')
+                          const isLocalFile = rawSrc.startsWith('file://')
+                          const preview = previewSrcById[h.id]
+                          const imgSrc = preview || (!isLocalFile ? rawSrc : '')
+                          if (!imgSrc) {
+                            return (
+                              <span className="flex h-full w-full items-center justify-center text-[12px] text-white/40">
+                                图
+                              </span>
+                            )
+                          }
+                          return (
+                            <img
+                              src={imgSrc}
+                              alt={h.title || '图片'}
+                              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                              onError={() =>
+                                setBrokenImageIds((prev) => {
+                                  const next = new Set(prev)
+                                  next.add(h.id)
+                                  return next
+                                })
+                              }
+                            />
+                          )
+                        })()
+                      )
+                    ) : null}
+                    {(h.mediaKind === 'audio' || h.mediaKind === 'music') && h.src ? (
                       (() => {
-                        const rawSrc = String(h.src || '')
-                        const isLocalFile = rawSrc.startsWith('file://')
-                        const preview = previewSrcById[h.id]
-                        const imgSrc = preview || (!isLocalFile ? rawSrc : '')
-                        if (!imgSrc) {
+                        if (!playable) {
                           return (
                             <span className="flex h-full w-full items-center justify-center text-[12px] text-white/40">
-                              图
+                              音
                             </span>
                           )
                         }
+                        if (inlineOpen) {
+                          return (
+                            <audio
+                              src={playable}
+                              controls
+                              autoPlay
+                              className="h-full w-full max-h-full object-contain"
+                              onEnded={() =>
+                                setActiveInlinePlayerId((cur) => (cur === h.id ? null : cur))
+                              }
+                            />
+                          )
+                        }
                         return (
-                          <img
-                            src={imgSrc}
-                            alt={h.title || '图片'}
-                            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                            onError={() =>
-                              setBrokenImageIds((prev) => {
-                                const next = new Set(prev)
-                                next.add(h.id)
-                                return next
-                              })
-                            }
+                          <button
+                            type="button"
+                            className="flex h-full w-full items-center justify-center text-[22px] text-white/70 hover:text-orange-400"
+                            onClick={() => setActiveInlinePlayerId(h.id)}
+                            title="在缩略图内播放"
+                          >
+                            ▶
+                          </button>
+                        )
+                      })()
+                    ) : null}
+                    {h.mediaKind === 'video' && h.src ? (
+                      (() => {
+                        if (!playable) {
+                          return (
+                            <span className="flex h-full w-full items-center justify-center text-[12px] text-white/40">
+                              视
+                            </span>
+                          )
+                        }
+                        if (inlineOpen) {
+                          return (
+                            <HistoryInlineVideo
+                              src={playable}
+                              onEnded={() =>
+                                setActiveInlinePlayerId((cur) => (cur === h.id ? null : cur))
+                              }
+                            />
+                          )
+                        }
+                        return (
+                          <HistoryVideoPosterThumb
+                            src={playable}
+                            onPlay={() => setActiveInlinePlayerId(h.id)}
                           />
                         )
                       })()
-                    )
-                  ) : null}
-                  {(h.mediaKind === 'audio' || h.mediaKind === 'music') && h.src ? (
-                    (() => {
-                      const rawSrc = String(h.src || '')
-                      const isLocalFile = rawSrc.startsWith('file://')
-                      const playableSrc = (previewSrcById[h.id] || (!isLocalFile ? rawSrc : '')) as string
-                      if (!playableSrc) {
-                        return (
-                          <span className="flex h-full w-full items-center justify-center text-[12px] text-white/40">
-                            音
-                          </span>
-                        )
-                      }
-                      return (
-                        <button
-                          type="button"
-                          className="flex h-full w-full items-center justify-center text-[22px] text-white/70 hover:text-orange-400"
-                          onClick={() => onTogglePlay(playableSrc)}
-                          title="播放音频"
-                        >
-                          {playingSrc === playableSrc ? '⏸' : '▶'}
-                        </button>
-                      )
-                    })()
-                  ) : null}
-                  {h.mediaKind === 'video' && h.src ? (
-                    (() => {
-                      const rawSrc = String(h.src || '')
-                      const isLocalFile = rawSrc.startsWith('file://')
-                      const href = (previewSrcById[h.id] || (!isLocalFile ? rawSrc : '')) as string
-                      if (!href) {
-                        return (
-                          <span className="flex h-full w-full items-center justify-center text-[12px] text-white/40">
-                            视
-                          </span>
-                        )
-                      }
-                      return (
-                        <a
-                          className="flex h-full w-full items-center justify-center text-[22px] text-white/70 hover:text-orange-400"
-                          href={href}
-                          target="_blank"
-                          rel="noreferrer"
-                          title="打开视频"
-                        >
-                          ▷
-                        </a>
-                      )
-                    })()
-                  ) : null}
+                    ) : null}
+                  </div>
+                  <div className="truncate text-center text-[11px] font-black uppercase tracking-wider text-white/55">
+                    {h.displayTitle}
+                  </div>
                 </div>
-                <div className="truncate text-center text-[11px] font-black uppercase tracking-wider text-white/55">
-                  {h.displayTitle}
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
-
-      {playingSrc ? (
-        <audio
-          className="visually-hidden"
-          src={playingSrc}
-          autoPlay
-          controls
-          onEnded={() => setPlayingSrc(null)}
-        />
-      ) : null}
 
       {batchMode ? (
         <div className="flex gap-2 border-t border-white/5 bg-black/20 p-3 shrink-0">

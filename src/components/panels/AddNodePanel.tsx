@@ -26,7 +26,14 @@ const KIND_COLOR: Record<string, string> = {
 /**
  * 添加节点面板：与 @flowid (2) 同款布局/动效；条目与行为仍由上层 `addNodeItems` 驱动。
  */
-export function AddNodePanel({ addNodeItems }: { addNodeItems: AddNodeMenuItem[] }) {
+export function AddNodePanel({
+  addNodeItems,
+  canvasDayMode = false,
+}: {
+  addNodeItems: AddNodeMenuItem[]
+  /** 画布日间模式：白底面板与深灰文案 */
+  canvasDayMode?: boolean
+}) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const displayItems = useMemo(() => {
@@ -46,12 +53,26 @@ export function AddNodePanel({ addNodeItems }: { addNodeItems: AddNodeMenuItem[]
   }, [addNodeItems])
 
   return (
-    <div className="w-64 bg-[#111114] border border-white/10 rounded-2xl p-4 shadow-2xl backdrop-blur-xl">
-      <div className="text-[14px] font-mono uppercase tracking-[0.2em] text-white/50 mb-4 px-2">添加节点</div>
+    <div
+      className={
+        canvasDayMode
+          ? 'w-64 rounded-2xl border border-[#E8E8E8] bg-white p-4 shadow-xl'
+          : 'w-64 rounded-2xl border border-white/10 bg-[#111114] p-4 shadow-2xl backdrop-blur-xl'
+      }
+    >
+      <div
+        className={
+          canvasDayMode
+            ? 'mb-4 px-2 font-mono text-[14px] uppercase tracking-[0.2em] text-[#525252]'
+            : 'mb-4 px-2 font-mono text-[14px] uppercase tracking-[0.2em] text-white/50'
+        }
+      >
+        添加节点
+      </div>
       <div className="space-y-1">
         {displayItems.map((item) => {
           const Icon = KIND_ICON[item.id] ?? FileText
-          const colorClass = KIND_COLOR[item.id] ?? 'text-white/70'
+          const colorClass = KIND_COLOR[item.id] ?? (canvasDayMode ? 'text-[#525252]' : 'text-white/70')
           return (
             <button
               key={item.id}
@@ -61,21 +82,43 @@ export function AddNodePanel({ addNodeItems }: { addNodeItems: AddNodeMenuItem[]
                 setSelectedId(item.id)
                 item.action()
               }}
-              className={`w-full flex items-center gap-4 p-3 rounded-xl hover:bg-white/5 transition-all text-left group ${
-                selectedId === item.id ? 'bg-white/5' : ''
+              className={`group flex w-full items-center gap-4 rounded-xl p-3 text-left transition-all ${
+                canvasDayMode
+                  ? selectedId === item.id
+                    ? 'bg-[#F5F5F5]'
+                    : 'hover:bg-[#F5F5F5]'
+                  : `hover:bg-white/5 ${selectedId === item.id ? 'bg-white/5' : ''}`
               }`}
             >
               <div
-                className={`p-2 rounded-lg bg-white/5 group-hover:bg-white/10 ${colorClass} transition-colors shrink-0`}
+                className={
+                  canvasDayMode
+                    ? `shrink-0 rounded-lg bg-[#F5F5F5] p-2 transition-colors group-hover:bg-[#EBEBEB] ${colorClass}`
+                    : `shrink-0 rounded-lg bg-white/5 p-2 transition-colors group-hover:bg-white/10 ${colorClass}`
+                }
               >
                 <Icon size={18} />
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[15px] font-black uppercase text-white/90 group-hover:text-white">
+              <div className="min-w-0 flex-1">
+                <div
+                  className={
+                    canvasDayMode
+                      ? 'text-[15px] font-black uppercase text-[#262626] group-hover:text-[#171717]'
+                      : 'text-[15px] font-black uppercase text-white/90 group-hover:text-white'
+                  }
+                >
                   {item.title}
                 </div>
                 {item.subtitle ? (
-                  <div className="text-[13px] text-white/50 truncate">{item.subtitle}</div>
+                  <div
+                    className={
+                      canvasDayMode
+                        ? 'truncate text-[13px] text-[#737373]'
+                        : 'truncate text-[13px] text-white/50'
+                    }
+                  >
+                    {item.subtitle}
+                  </div>
                 ) : null}
               </div>
             </button>

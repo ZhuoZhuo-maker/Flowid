@@ -18,40 +18,67 @@ function PresetTemplateTile({
   t,
   onMergePresetTemplate,
   setDragPayload,
+  canvasDayMode = false,
 }: {
   t: PresetTemplate
   onMergePresetTemplate?: (payload: PresetTemplateDragPayload) => void | Promise<void>
   setDragPayload: (e: React.DragEvent, t: PresetTemplate) => void
+  canvasDayMode?: boolean
 }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-black/30 overflow-hidden hover:border-orange-500/40 transition-colors flex flex-col min-w-0">
+    <div
+      className={
+        canvasDayMode
+          ? 'flex min-w-0 flex-col overflow-hidden rounded-lg border border-[#E8E8E8] bg-white transition-colors hover:border-[rgba(234,88,12,0.45)]'
+          : 'flex min-w-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-black/30 transition-colors hover:border-orange-500/40'
+      }
+    >
       <div
-        className="relative aspect-square w-full overflow-hidden bg-white/5 shrink-0"
+        className={
+          canvasDayMode
+            ? 'relative aspect-square w-full shrink-0 overflow-hidden bg-[#F5F5F5]'
+            : 'relative aspect-square w-full shrink-0 overflow-hidden bg-white/5'
+        }
         title="封面与「预设模板」页一致；上传请在预设模板页操作"
       >
         <PresetTemplateCoverImage
           title={t.name}
           fallbackSrc={t.image}
-          className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
           alt=""
         />
       </div>
       <div
-        className={`p-1.5 flex flex-col gap-0.5 min-w-0 flex-1 border-t border-white/5 ${
-          onMergePresetTemplate ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
-        }`}
+        className={`flex min-w-0 flex-1 flex-col gap-0.5 border-t p-1.5 ${
+          canvasDayMode ? 'border-[#E8E8E8]' : 'border-white/5'
+        } ${onMergePresetTemplate ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'}`}
         draggable={Boolean(onMergePresetTemplate)}
         onDragStart={(e) => {
           if (!onMergePresetTemplate) return
           setDragPayload(e, t)
         }}
       >
-        <div className="text-[10px] font-bold text-white/90 line-clamp-2 leading-snug" title={t.name}>
+        <div
+          className={
+            canvasDayMode
+              ? 'line-clamp-2 text-[10px] font-bold leading-snug text-[#262626]'
+              : 'line-clamp-2 text-[10px] font-bold leading-snug text-white/90'
+          }
+          title={t.name}
+        >
           {t.name}
         </div>
-        <div className="flex items-center justify-between gap-0.5 text-[9px] font-mono text-white/40">
+        <div
+          className={
+            canvasDayMode
+              ? 'flex items-center justify-between gap-0.5 font-mono text-[9px] text-[#737373]'
+              : 'flex items-center justify-between gap-0.5 font-mono text-[9px] text-white/40'
+          }
+        >
           <span className="truncate uppercase">{t.category}</span>
-          {t.tier === 'pro' ? <span className="text-orange-400 shrink-0">PRO</span> : null}
+          {t.tier === 'pro' ? (
+            <span className={canvasDayMode ? 'shrink-0 text-orange-600' : 'shrink-0 text-orange-400'}>PRO</span>
+          ) : null}
         </div>
       </div>
     </div>
@@ -66,11 +93,14 @@ export function DownloadPanel({
   onDownloadSelected,
   onDownloadProject,
   onMergePresetTemplate,
+  canvasDayMode = false,
 }: {
   selectedNode: Node<StudioNodeData> | null
   onDownloadSelected: () => void
   onDownloadProject: () => void
   onMergePresetTemplate?: (payload: PresetTemplateDragPayload) => void | Promise<void>
+  /** 画布日间模式：白底面板、分类 pill 与系统提示词选中态一致 */
+  canvasDayMode?: boolean
 }) {
   const [licenseTick, setLicenseTick] = useState(0)
   const [catalog, setCatalog] = useState<{ ok: true; items: PresetTemplate[] } | null>(null)
@@ -138,22 +168,42 @@ export function DownloadPanel({
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -16 }}
       transition={{ duration: 0.18 }}
-      className="w-80 bg-[#111114] border border-white/10 rounded-2xl flex flex-col shadow-2xl backdrop-blur-xl overflow-hidden min-h-[500px]"
+      className={
+        canvasDayMode
+          ? 'flex min-h-[500px] w-80 flex-col overflow-hidden rounded-2xl border border-[#E8E8E8] bg-white shadow-xl'
+          : 'flex min-h-[500px] w-80 flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#111114] shadow-2xl backdrop-blur-xl'
+      }
     >
-      <div className="p-4 border-b border-white/5 shrink-0">
-        <div className="text-[14px] font-mono uppercase tracking-[0.2em] text-white/50">预设模板</div>
+      <div className={`shrink-0 border-b p-4 ${canvasDayMode ? 'border-[#E8E8E8]' : 'border-white/5'}`}>
+        <div
+          className={
+            canvasDayMode
+              ? 'font-mono text-[14px] uppercase tracking-[0.2em] text-[#525252]'
+              : 'font-mono text-[14px] uppercase tracking-[0.2em] text-white/50'
+          }
+        >
+          预设模板
+        </div>
       </div>
 
-      <div className="px-4 py-3 flex gap-2 border-b border-white/5 shrink-0 overflow-x-auto no-scrollbar">
+      <div
+        className={`no-scrollbar flex shrink-0 gap-2 overflow-x-auto border-b px-4 py-3 ${
+          canvasDayMode ? 'border-[#E8E8E8]' : 'border-white/5'
+        }`}
+      >
         {categoryTabs.map((tab) => (
           <button
             key={tab}
             type="button"
             onClick={() => setSelectedCategory(tab)}
-            className={`shrink-0 px-3 py-1.5 rounded-full text-[13px] font-black uppercase tracking-widest whitespace-nowrap transition-all border ${
+            className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-[13px] font-black uppercase tracking-widest transition-all ${
               selectedCategory === tab
-                ? 'bg-orange-600/90 border-orange-500/50 text-white'
-                : 'bg-white/5 border-white/10 text-white/60 hover:border-white/25'
+                ? canvasDayMode
+                  ? 'border-[rgba(234,88,12,0.38)] bg-[rgba(234,88,12,0.18)] text-[#9a3412]'
+                  : 'border-orange-500/50 bg-orange-600/90 text-white'
+                : canvasDayMode
+                  ? 'border-[#E8E8E8] bg-[#F5F5F5] text-[#525252] hover:border-[#D4D4D4]'
+                  : 'border-white/10 bg-white/5 text-white/60 hover:border-white/25'
             }`}
           >
             {tab}
@@ -161,20 +211,35 @@ export function DownloadPanel({
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar p-3 min-h-0">
-        <p className="m-0 mb-2 text-[11px] font-mono text-white/35 uppercase tracking-wider">
+      <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden p-3">
+        <p
+          className={
+            canvasDayMode
+              ? 'm-0 mb-2 font-mono text-[11px] uppercase tracking-wider text-[#737373]'
+              : 'm-0 mb-2 font-mono text-[11px] uppercase tracking-wider text-white/35'
+          }
+        >
           拖到画布空白处即可合并节点；封面上传在「预设模板」页
         </p>
         {catalogLoading || !filtered.length ? (
           <div className="flex flex-col items-center justify-center py-16 text-center opacity-40">
-            <h4 className="text-sm font-black text-white/50 uppercase tracking-widest">{emptyHint}</h4>
+            <h4
+              className={
+                canvasDayMode
+                  ? 'text-sm font-black uppercase tracking-widest text-[#525252]'
+                  : 'text-sm font-black uppercase tracking-widest text-white/50'
+              }
+            >
+              {emptyHint}
+            </h4>
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-2 content-start">
+          <div className="grid grid-cols-3 content-start gap-2">
             {filtered.map((t) => (
               <PresetTemplateTile
                 key={t.id}
                 t={t}
+                canvasDayMode={canvasDayMode}
                 onMergePresetTemplate={onMergePresetTemplate}
                 setDragPayload={setDragPayload}
               />
@@ -184,22 +249,41 @@ export function DownloadPanel({
       </div>
 
       {selectedNode ? (
-        <div className="shrink-0 border-t border-white/5 bg-black/20 p-4 space-y-2">
+        <div
+          className={`shrink-0 space-y-2 border-t p-4 ${
+            canvasDayMode ? 'border-[#E8E8E8] bg-[#FAFAFA]' : 'border-white/5 bg-black/20'
+          }`}
+        >
           <button
             type="button"
             onClick={onDownloadSelected}
-            className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 text-[13px] font-black uppercase tracking-widest text-white/85 hover:bg-white/10 transition-colors"
+            className={
+              canvasDayMode
+                ? 'w-full rounded-xl border border-[#E8E8E8] bg-white py-2.5 text-[13px] font-black uppercase tracking-widest text-[#262626] transition-colors hover:bg-[#F5F5F5]'
+                : 'w-full rounded-xl border border-white/10 bg-white/5 py-2.5 text-[13px] font-black uppercase tracking-widest text-white/85 transition-colors hover:bg-white/10'
+            }
           >
             下载选中节点
           </button>
           <button
             type="button"
             onClick={onDownloadProject}
-            className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 text-[13px] font-black uppercase tracking-widest text-white/85 hover:bg-white/10 transition-colors"
+            className={
+              canvasDayMode
+                ? 'w-full rounded-xl border border-[#E8E8E8] bg-white py-2.5 text-[13px] font-black uppercase tracking-widest text-[#262626] transition-colors hover:bg-[#F5F5F5]'
+                : 'w-full rounded-xl border border-white/10 bg-white/5 py-2.5 text-[13px] font-black uppercase tracking-widest text-white/85 transition-colors hover:bg-white/10'
+            }
           >
             下载工程 JSON
           </button>
-          <div className="truncate text-center text-[12px] font-mono text-white/45" title={String(selectedNode.data.title)}>
+          <div
+            className={
+              canvasDayMode
+                ? 'truncate text-center font-mono text-[12px] text-[#737373]'
+                : 'truncate text-center font-mono text-[12px] text-white/45'
+            }
+            title={String(selectedNode.data.title)}
+          >
             {selectedNode.data.title}
           </div>
         </div>

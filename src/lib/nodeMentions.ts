@@ -1,11 +1,5 @@
 import type { Node } from '@xyflow/react'
-import type {
-  AudioNodeData,
-  ImageNodeData,
-  PanoramaNodeData,
-  StudioNodeData,
-  VideoNodeData,
-} from '../types'
+import type { ImageNodeData, PanoramaNodeData, StudioNodeData } from '../types'
 
 /**
  * 兼容旧数据：无节点 id 时的 @ 写法（不推荐，仅标题全等 + 图-n 简写）。
@@ -148,15 +142,9 @@ export function mentionAlreadyReferencesNodeId(text: string, nodeId: string): bo
   return parseMentionRefs(text).some((r) => r.nodeId === nodeId)
 }
 
-/** 可作为 @ 引用「沿用生成画面/音频」的节点类型 */
-function isVisualMentionKind(kind: StudioNodeData['kind']): boolean {
-  return (
-    kind === 'image' ||
-    kind === 'video' ||
-    kind === 'audio' ||
-    kind === 'music' ||
-    kind === 'panorama'
-  )
+/** 可作为「图片输入 / 参考图缩略图」链路的 @ 目标：仅静态图与全景（视频/音频走各自管线） */
+function isImagePipelineMentionKind(kind: StudioNodeData['kind']): boolean {
+  return kind === 'image' || kind === 'panorama'
 }
 
 /**
@@ -228,7 +216,7 @@ function collectResolvedVisualMentionsWithUrl(
   const refs = parseMentionRefs(text)
   const out: ResolvedVisualMentionWithUrl[] = []
   for (const ref of refs) {
-    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId, isVisualMentionKind)
+    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId, isImagePipelineMentionKind)
     if (!hit) continue
     const kind = hit.data.kind
     if (kind === 'panorama') {
@@ -237,12 +225,9 @@ function collectResolvedVisualMentionsWithUrl(
       if (u) out.push({ ref, node: hit, url: u })
       continue
     }
-    if (kind !== 'image' && kind !== 'video' && kind !== 'audio' && kind !== 'music') continue
-    const src = String((hit.data as ImageNodeData | VideoNodeData | AudioNodeData).src || '').trim()
-    const refsList =
-      (hit.data as ImageNodeData | VideoNodeData | AudioNodeData).referenceImageSources?.filter(
-        Boolean,
-      ) ?? []
+    const d = hit.data as ImageNodeData
+    const src = String(d.src || '').trim()
+    const refsList = d.referenceImageSources?.filter(Boolean) ?? []
     const url = src || refsList[0]
     if (url) out.push({ ref, node: hit, url })
   }
@@ -313,7 +298,7 @@ export function collectMentionNames(text: string): string[] {
 }
 
 /**
- * 从引用的节点中提取可作为「图片输入」的 URL。
+ * 从引用的节点中提取可作为「图片输入」的 URL（仅 @图片 / @全景；不含 @视频 / @音频）。
  * 优先使用节点主资源 src；若没有则回退到 referenceImageSources 首项。
  * 顺序按默认标题「某类型节点N」中 N 升序；无序号标题排在后面，同组内按原文 `@` 出现顺序。
  */
@@ -328,7 +313,7 @@ export function collectMentionImageSources(
 }
 
 /**
- * 列出提示词中 @ 引用且解析为「含图 URL」的条目，供提示框展示缩略图。
+ * 列出提示词中 @ 引用且解析为「图片/全景 URL」的条目，供提示框展示缩略图。
  * 顺序与 `collectMentionImageSources` 一致：默认标题序号升序，其余按原文出现顺序。
  */
 export function listMentionImageAttachments(

@@ -1,6 +1,7 @@
 import type { ProjectSnapshot } from '../types'
 import { createDefaultProject } from '../data/defaultProject'
 import { LEGACY_LOCAL_STORAGE_KEYS } from './legacyLocalStorageKeys'
+import { migrateVideoTargetEdges } from './videoNodeInports'
 
 const STORAGE_KEY = 'flowid.project.v1'
 const DEFAULT_NODE_WIDTH = 430
@@ -115,7 +116,10 @@ export function loadStoredProject(): ProjectSnapshot {
     if (!safe.nodes.length) {
       return createDefaultProject()
     }
-    return safe
+    return {
+      ...safe,
+      edges: migrateVideoTargetEdges(safe.nodes, safe.edges),
+    }
   } catch {
     return createDefaultProject()
   }
@@ -151,5 +155,8 @@ export function parseProjectFile(text: string): ProjectSnapshot {
   if (!safe.nodes.length) {
     throw new Error('工程中没有可加载的合法节点（已过滤未知类型）')
   }
-  return safe
+  return {
+    ...safe,
+    edges: migrateVideoTargetEdges(safe.nodes, safe.edges),
+  }
 }

@@ -1,10 +1,11 @@
 ﻿import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { Node } from '@xyflow/react'
 import { useCallback, useMemo, useRef } from 'react'
-import type { AudioNodeData } from '../../types'
+import type { AudioNodeData, NodeResultThumbnail } from '../../types'
 import { useCanvasActions } from '../../context/CanvasContext'
-import { setFlowidMaterialDragData } from '../../lib/materialLibrary'
+import { parseFlowidMaterialDragPayload, setFlowidMaterialDragData } from '../../lib/materialLibrary'
 import { NodeChrome } from './NodeChrome'
+import { NodeOutputThumbnailStrip } from './NodeOutputThumbnailStrip'
 
 /**
  * 音频节点：配音、配乐或音效占位。
@@ -24,6 +25,16 @@ export function AudioNode({
     if (fromList.length) return fromList
     return data.src ? [data.src] : []
   }, [data.resultSources, data.src])
+
+  const stripItems = useMemo((): NodeResultThumbnail[] => {
+    const stored = data.resultThumbnails?.filter((t) => t.url) ?? []
+    if (stored.length) return stored
+    return resultSources.map((url, i) => ({
+      id: `legacy:${i}:${String(url).slice(0, 120)}`,
+      url,
+      mediaKind: 'audio',
+    }))
+  }, [data.resultThumbnails, resultSources])
 
   /**
    * 提取首个音频文件（支持拖拽/粘贴）。
@@ -93,6 +104,20 @@ export function AudioNode({
           updateNodeData(id, { kind: data.kind, title: nextTitle })
         }
         showStatusBadge={!isMusic}
+        footer={
+          stripItems.length > 0 ? (
+            <NodeOutputThumbnailStrip
+              nodeId={id}
+              nodeTitle={data.title}
+              dataKind={data.kind === 'music' ? 'music' : 'audio'}
+              items={stripItems}
+              expanded={data.resultThumbnailsExpanded === true}
+              primarySrc={data.src}
+              audioResultSources={resultSources}
+              hasStoredAudioThumbnails={Boolean(data.resultThumbnails?.length)}
+            />
+          ) : null
+        }
       >
         <div
           className="studio-thumb studio-thumb--audio nowheel nodrag"
@@ -105,6 +130,15 @@ export function AudioNode({
           onDrop={(event) => {
             event.preventDefault()
             event.stopPropagation()
+            const material = parseFlowidMaterialDragPayload(event.dataTransfer)
+            if (material?.kind === 'audio' && material.src) {
+              updateNodeData(id, {
+                kind: data.kind,
+                src: material.src,
+                resultSources: [material.src, ...(data.resultSources ?? []).filter((s) => s !== material.src)],
+              })
+              return
+            }
             const f = pickFirstAudioFile(event.dataTransfer)
             if (!f) return
             pushAudioResult(f)

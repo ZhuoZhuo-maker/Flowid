@@ -43,29 +43,99 @@ function mimeTypeFromExt(ext: string): string {
 
 /**
  * 输出目录镜像兜底：按“节点标题 + 扩展名”读取本地 output 文件。
+ * 支持的命名格式：
+ * 1. 节点标题.扩展名 (如 "视频节点1.mp4")
+ * 2. 节点标题-时间戳.扩展名 (如 "视频节点1-2024-01-01T00-00-00-000Z.mp4")
  */
 async function readDesktopMirroredOutputBlobByStem(
   stem: string,
   mediaKind: 'image' | 'video' | 'audio',
 ): Promise<Blob | null> {
   const cleanStem = String(stem || '').trim()
-  if (!cleanStem) return null
+  console.log('[Flowid] readDesktopMirroredOutputBlobByStem:', { stem: cleanStem, mediaKind })
+  if (!cleanStem) {
+    console.log('[Flowid] Empty stem')
+    return null
+  }
   const desktop = window.flowidDesktop
-  if (!desktop?.readBinaryFile) return null
+  if (!desktop?.readBinaryFile) {
+    console.log('[Flowid] No readBinaryFile API')
+    return null
+  }
   const outputPath = loadLocalDiskPathsSettings().outputPath.trim()
-  if (!outputPath) return null
+  console.log('[Flowid] outputPath:', outputPath)
+  if (!outputPath) {
+    console.log('[Flowid] outputPath not configured')
+    return null
+  }
+
   const extCandidates =
     mediaKind === 'image'
       ? ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']
       : mediaKind === 'video'
         ? ['.mp4', '.webm', '.mov', '.mkv', '.avi']
         : ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac', '.bin']
+
   for (const ext of extCandidates) {
     const filePath = joinPath(outputPath, `${cleanStem}${ext}`)
     const res = await desktop.readBinaryFile(filePath)
     if (!res?.ok || !res.data || res.data.byteLength <= 0) continue
     return new Blob([res.data], { type: mimeTypeFromExt(ext) })
   }
+
+  const dirResult = await desktop.readDirectory?.(outputPath)
+  console.log('[Flowid] readDirectory result:', dirResult?.ok, dirResult?.files?.length)
+  if (!dirResult?.ok || !Array.isArray(dirResult.files)) {
+    console.log('[Flowid] No files found')
+    return null
+  }
+
+  const stemLower = cleanStem.toLowerCase()
+  console.log('[Flowid] Looking for files starting with:', stemLower)
+  const matchedFiles: Array<{ name: string; ext: string; mtimeMs: number }> = []
+
+  for (const entry of dirResult.files) {
+    const fileName = String(entry.name || '').trim()
+    if (!fileName) continue
+
+    const nameLower = fileName.toLowerCase()
+    
+    let matchedExt: string | undefined
+    for (const ext of extCandidates) {
+      if (nameLower.endsWith(ext.toLowerCase())) {
+        matchedExt = ext
+        break
+      }
+    }
+    if (!matchedExt) continue
+
+    console.log('[Flowid] Checking file:', fileName, 'startsWith:', nameLower.startsWith(stemLower + '-'))
+
+    if (nameLower.startsWith(stemLower + '-')) {
+      console.log('[Flowid] Found match:', fileName)
+      matchedFiles.push({
+        name: fileName,
+        ext: matchedExt,
+        mtimeMs: Number(entry.mtimeMs || 0),
+      })
+    }
+  }
+
+  console.log('[Flowid] Total matched files:', matchedFiles.length)
+
+  if (matchedFiles.length > 0) {
+    matchedFiles.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    const newest = matchedFiles[0]
+    console.log('[Flowid] Selected file:', newest.name)
+    const filePath = joinPath(outputPath, newest.name)
+    const res = await desktop.readBinaryFile(filePath)
+    if (res?.ok && res.data && res.data.byteLength > 0) {
+      console.log('[Flowid] File read successfully')
+      return new Blob([res.data], { type: mimeTypeFromExt(newest.ext) })
+    }
+  }
+
+  console.log('[Flowid] No matching file found')
   return null
 }
 

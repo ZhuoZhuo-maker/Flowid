@@ -21,13 +21,19 @@ import {
   saveLocalImageAsset,
 } from '../../lib/localImageAssetStore'
 import { prepareEquirectTextureForGpu } from '../../lib/panoramaTextureClamp'
+import {
+  downloadBlobAsFile,
+  imageUrlToDataUrl,
+  runMlSharpPredict,
+} from '../../lib/mlSharpPredict'
 
 type PanoramaCore = {
   renderer: THREE.WebGLRenderer
   scene: THREE.Scene
   camera: THREE.PerspectiveCamera
   controls: OrbitControls
-  sphere: THREE.Mesh
+  sphere: THREE.Mesh<THREE.BufferGeometry, THREE.Material>
+  /** 彩图纹理（dispose 用） */
   texture: THREE.Texture | null
   raf: number
   resizeObserver: ResizeObserver
@@ -35,6 +41,12 @@ type PanoramaCore = {
 
 /** 导出图节点与全景节点在流坐标中的横向间距（与需求一致：20） */
 const PANORAMA_EXPORT_GAP_FLOW = 20
+
+/** 略降 FOV 可减轻透视「桶形」观感（等距图贴球面本身仍有固有畸变） */
+const PANORAMA_CAMERA_FOV = 58
+/** 球面水平/垂直分段：略提高经线密度，减轻接缝处几何折线感 */
+const PANORAMA_SPHERE_WIDTH_SEGS = 96
+const PANORAMA_SPHERE_HEIGHT_SEGS = 64
 
 /** 内联预览：轨道推拉最大距离（与首次创建 OrbitControls 时保持一致） */
 const ORBIT_INLINE_MAX_DISTANCE = 8
@@ -49,6 +61,38 @@ const ORBIT_IMMERSE_MAX_DISTANCE = 28
  * 双指捏合缩放会带 ctrlKey，Three OrbitControls 内已对 delta 额外放大，仍兼容。
  */
 const ORBIT_IMMERSE_ZOOM_SPEED = 1.55
+
+/** 沉浸态：WASD 水平微移（单点全景无真实视差，仅小范围「预览位移」） */
+const WANDER_SPEED = 0.14
+const WANDER_MAX_RADIUS = 16
+
+function applyImmersiveKeyboardWander(
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControls,
+  keys: Set<string>,
+): void {
+  if (!keys.size) return
+  const forward = new THREE.Vector3()
+  camera.getWorldDirection(forward)
+  forward.y = 0
+  if (forward.lengthSq() < 1e-10) forward.set(0, 0, -1)
+  forward.normalize()
+  const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0))
+  if (right.lengthSq() < 1e-10) right.set(1, 0, 0)
+  right.normalize()
+  const move = new THREE.Vector3()
+  if (keys.has('w')) move.addScaledVector(forward, WANDER_SPEED)
+  if (keys.has('s')) move.addScaledVector(forward, -WANDER_SPEED)
+  if (keys.has('a')) move.addScaledVector(right, -WANDER_SPEED)
+  if (keys.has('d')) move.addScaledVector(right, WANDER_SPEED)
+  if (move.lengthSq() < 1e-10) return
+  const offset = new THREE.Vector3().subVectors(controls.target, camera.position)
+  const nextCam = camera.position.clone().add(move)
+  const r = nextCam.length()
+  if (r > WANDER_MAX_RADIUS) nextCam.multiplyScalar(WANDER_MAX_RADIUS / r)
+  camera.position.copy(nextCam)
+  controls.target.copy(nextCam.clone().add(offset))
+}
 
 /** 读取已解码贴图的像素尺寸（Image / ImageBitmap / Canvas 底图） */
 function getTextureImageSize(tex: THREE.Texture): { w: number; h: number } {
@@ -92,6 +136,7 @@ function isNearEquirectangularAspect(w: number, h: number, tolerance = 0.35): bo
 
 /**
  * VR360 全景节点：为 **VR 球面环视** 使用等距柱状（Equirectangular）全景图；沉浸全屏环视并支持导出当前视角到画布。
+ * 「伪3D」通过本机 Apple ml-sharp（需配置 ML_SHARP_ROOT + Vite 开发/预览服务）导出 3DGS .ply。
  */
 export function PanoramaNode({
   id,
@@ -113,6 +158,10 @@ export function PanoramaNode({
   const [exporting, setExporting] = useState(false)
   const [immersiveOpen, setImmersiveOpen] = useState(false)
   const [coreLayoutEpoch, bumpCoreLayout] = useReducer((n: number) => n + 1, 0)
+  const immersiveOpenRef = useRef(false)
+  const wanderKeysRef = useRef<Set<string>>(new Set())
+  const [pseudoBusy, setPseudoBusy] = useState(false)
+  const [pseudoErr, setPseudoErr] = useState<string | null>(null)
 
   const exportW = data.exportWidth ?? 1024
   const exportH = data.exportHeight ?? 1024
@@ -141,6 +190,10 @@ export function PanoramaNode({
     setImmersiveOpen(false)
   }, [data.src])
 
+  useLayoutEffect(() => {
+    immersiveOpenRef.current = immersiveOpen
+  }, [immersiveOpen])
+
   /** 挂载 Three.js：内看球面 + 轨道控制（单实例，沉浸时迁移 canvas DOM） */
   useEffect(() => {
     const viewport = inlineMountRef.current
@@ -155,7 +208,7 @@ export function PanoramaNode({
     setVrFormatHint(null)
 
     const scene = new THREE.Scene()
-    const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 2000)
+    const camera = new THREE.PerspectiveCamera(PANORAMA_CAMERA_FOV, 1, 0.1, 2000)
     camera.position.set(0, 0, 0.01)
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
@@ -164,19 +217,29 @@ export function PanoramaNode({
     renderer.domElement.classList.add('studio-panorama__canvas')
     host.appendChild(renderer.domElement)
 
-    const geometry = new THREE.SphereGeometry(500, 64, 48)
+    const geometry = new THREE.SphereGeometry(
+      500,
+      PANORAMA_SPHERE_WIDTH_SEGS,
+      PANORAMA_SPHERE_HEIGHT_SEGS,
+    )
     geometry.scale(-1, 1, 1)
-    /** DoubleSide：避免部分驱动下内看球面被整片剔除呈黑屏；toneMapped 关闭减少色彩管线误判 */
-    const material = new THREE.MeshBasicMaterial({
+    const loadingMaterial = new THREE.MeshBasicMaterial({
+      color: 0x0a0e14,
       side: THREE.DoubleSide,
       toneMapped: false,
       depthWrite: false,
     })
-    const sphere = new THREE.Mesh(geometry, material)
+    const sphere: THREE.Mesh<THREE.BufferGeometry, THREE.Material> = new THREE.Mesh(
+      geometry,
+      loadingMaterial,
+    )
     scene.add(sphere)
 
     const controls = new OrbitControls(camera, renderer.domElement)
-    controls.enablePan = false
+    controls.enablePan = true
+    controls.panSpeed = 0.35
+    controls.screenSpacePanning = false
+    controls.keyPanSpeed = 7
     controls.enableZoom = true
     controls.enableDamping = true
     controls.dampingFactor = 0.08
@@ -190,7 +253,9 @@ export function PanoramaNode({
     const abortMount = () => {
       controls.dispose()
       geometry.dispose()
-      material.dispose()
+      const sm = sphere.material as THREE.MeshBasicMaterial
+      sm.map = null
+      sm.dispose()
       const canvas = renderer.domElement
       const p = canvas.parentNode
       if (p) {
@@ -246,8 +311,16 @@ export function PanoramaNode({
       } else {
         setVrFormatHint(null)
       }
-      material.map = finalTex
-      material.needsUpdate = true
+
+      loadingMaterial.dispose()
+      const basicMat = new THREE.MeshBasicMaterial({
+        map: finalTex,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+        depthWrite: true,
+      })
+      sphere.material = basicMat
+
       const fit = () => {
         if (renderer.domElement.parentElement !== host) return
         /** 以外框 viewport 为准量尺寸，避免 0 尺寸 framebuffer */
@@ -264,6 +337,9 @@ export function PanoramaNode({
 
       const loop = () => {
         if (cancelled || !coreRef.current) return
+        if (immersiveOpenRef.current) {
+          applyImmersiveKeyboardWander(camera, controls, wanderKeysRef.current)
+        }
         controls.update()
         renderer.render(scene, camera)
         coreRef.current.raf = requestAnimationFrame(loop)
@@ -285,7 +361,6 @@ export function PanoramaNode({
     return () => {
       cancelled = true
       disposeCore()
-      /** 禁止对 React 管理的节点做 removeChild 清空：会破坏协调并触发 NotFoundError */
     }
   }, [srcTrim, disposeCore])
 
@@ -404,15 +479,37 @@ export function PanoramaNode({
   }, [])
 
   /**
-   * Esc 退出沉浸（不依赖全屏 API 是否成功）。
+   * 沉浸态：Esc 退出；WASD 水平微移（与轨道旋转叠加，位移已限幅）。
    */
   useEffect(() => {
-    if (!immersiveOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeImmersive()
+    if (!immersiveOpen) {
+      wanderKeysRef.current.clear()
+      return
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    const onDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        closeImmersive()
+        return
+      }
+      if (e.repeat) return
+      const t = e.target as HTMLElement | null
+      if (t?.closest('input, textarea, select, [contenteditable="true"]')) return
+      const k = e.key.toLowerCase()
+      if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
+        wanderKeysRef.current.add(k)
+        e.preventDefault()
+      }
+    }
+    const onUp = (e: KeyboardEvent) => {
+      wanderKeysRef.current.delete(e.key.toLowerCase())
+    }
+    window.addEventListener('keydown', onDown)
+    window.addEventListener('keyup', onUp)
+    return () => {
+      wanderKeysRef.current.clear()
+      window.removeEventListener('keydown', onDown)
+      window.removeEventListener('keyup', onUp)
+    }
   }, [immersiveOpen, closeImmersive])
 
   /**
@@ -477,6 +574,29 @@ export function PanoramaNode({
     [data.src, id, updateNodeData],
   )
 
+  const runPseudo3dExportPly = useCallback(async () => {
+    if (!srcTrim) {
+      window.alert('请先上传全景图')
+      return
+    }
+    setPseudoBusy(true)
+    setPseudoErr(null)
+    try {
+      const dataUrl = await imageUrlToDataUrl(srcTrim)
+      const blob = await runMlSharpPredict(dataUrl)
+      const base = String(data.srcFileName || 'panorama').replace(/\.[^.]+$/, '') || 'panorama'
+      downloadBlobAsFile(blob, `${base}-3dgs.ply`)
+    } catch (e) {
+      const msg = (e as Error).message || String(e)
+      setPseudoErr(msg)
+      window.alert(
+        `${msg}\n\n提示：在「工作流设置 → 本地路径」填写并保存「ml-sharp 根目录」与可选「SHARP 命令」；本机需已克隆 Apple ml-sharp 并安装依赖。使用 pnpm dev / vite preview 时才会提供 /api/ml-sharp/predict。纯 dist 静态部署需自建等价接口。`,
+      )
+    } finally {
+      setPseudoBusy(false)
+    }
+  }, [data.srcFileName, srcTrim])
+
   return (
     <>
       <Handle type="target" position={Position.Left} className="studio-handle" />
@@ -504,33 +624,53 @@ export function PanoramaNode({
               </div>
             ) : null}
             {loadError ? <div className="studio-panorama__error">{loadError}</div> : null}
+            <div className="studio-panorama__viewportFloatingUi nodrag">
+              <div className="studio-panorama__toolbar studio-panorama__toolbar--dual">
+                <button
+                  type="button"
+                  className="studio-panorama__btn studio-panorama__btn--primary"
+                  disabled={!srcTrim || Boolean(loadError)}
+                  onClick={openImmersive}
+                >
+                  360°沉浸预览
+                </button>
+                <button
+                  type="button"
+                  className="studio-panorama__btn studio-panorama__btn--accent"
+                  title="请选用 VR/全景工作流导出的等距柱状图（Equirectangular），宽高比约 2:1"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  上传全景图
+                </button>
+              </div>
+              <div className="studio-panorama__pseudo3dRow">
+                <button
+                  type="button"
+                  className="studio-panorama__btn studio-panorama__btn--pseudo3d"
+                  disabled={!srcTrim || Boolean(loadError) || pseudoBusy}
+                  title="调用本机 Apple ml-sharp（sharp predict）从当前图生成 3D 高斯 .ply；路径在「工作流设置 → 本地路径」；需 pnpm dev"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void runPseudo3dExportPly()
+                  }}
+                >
+                  {pseudoBusy ? '伪3D 生成中…' : '伪3D · 导出 PLY'}
+                </button>
+              </div>
+              {pseudoErr && !pseudoBusy ? (
+                <div className="studio-panorama__pseudo3dErr" role="status">
+                  {pseudoErr.split('\n')[0]}
+                </div>
+              ) : null}
+            </div>
           </div>
 
           {vrFormatHint && !loadError ? (
             <div className="studio-panorama__vrWarn">{vrFormatHint}</div>
           ) : null}
 
-          <div className="studio-panorama__toolbar studio-panorama__toolbar--dual">
-            <button
-              type="button"
-              className="studio-panorama__btn studio-panorama__btn--primary"
-              disabled={!srcTrim || Boolean(loadError)}
-              onClick={openImmersive}
-            >
-              360°沉浸预览
-            </button>
-            <button
-              type="button"
-              className="studio-panorama__btn studio-panorama__btn--accent"
-              title="请选用 VR/全景工作流导出的等距柱状图（Equirectangular），宽高比约 2:1"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              上传全景图
-            </button>
-          </div>
-
           <p className="studio-panorama__hint">
-            {`本节点用于 VR 球面环视，请使用等距柱状全景图（常用宽高比约 2:1）。先点「360°沉浸预览」进入全屏环视；在预览区或全屏画面内可用鼠标滚轮、触控板双指滑动或捏合进行拉近/拉远（与画布视口缩放手势互不抢占）。再点右上角「导出当前视角」可将当前视角截图保存到画布。`}
+            {`本节点用于 VR 球面环视，请使用等距柱状全景图（常用宽高比约 2:1）。鼠标移入上方预览区会显示操作按钮（沉浸、上传、伪3D 等），移开隐藏。沉浸：鼠标拖拽环视、滚轮缩放；WASD 水平微移、右键平移；Esc 退出；全屏右上角可导出当前视角平面图。「伪3D」需「工作流设置 → 本地路径」配置 ml-sharp 与 pnpm dev。`}
           </p>
 
           <input
@@ -564,6 +704,9 @@ export function PanoramaNode({
                 >
                   关闭
                 </button>
+              </div>
+              <div className="studio-panorama-immersive__keysHint" aria-hidden>
+                WASD 水平微移 · 右键拖拽平移 · Esc 退出
               </div>
               <div
                 ref={immersiveStageRef}

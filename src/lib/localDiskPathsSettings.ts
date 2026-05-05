@@ -27,6 +27,15 @@ export type LocalDiskPathsSettings = {
   materialLibraryPath: string
   /** 系统提示词封面存储根目录（桌面端）；按提示词标题命名图片文件 */
   systemPromptCoverPath: string
+  /**
+   * Apple ml-sharp 仓库根目录（与 `sharp predict` 的 cwd 一致；用于全景节点「伪3D · 导出 PLY」）。
+   * 与 Comfy 的 input/output 不是同一概念；可与环境变量 `ML_SHARP_ROOT` 二选一，设置面板优先随请求下发。
+   */
+  mlSharpRootPath: string
+  /**
+   * ml-sharp 可执行入口：默认 `sharp`；若用 `python -m ...` 可填 `python` 并在下方用脚本包装，或填可执行文件绝对路径。
+   */
+  mlSharpCliPath: string
 }
 
 /**
@@ -40,6 +49,8 @@ export function getDefaultLocalDiskPathsSettings(): LocalDiskPathsSettings {
     flowidProjectJsonPath: '',
     materialLibraryPath: '',
     systemPromptCoverPath: '',
+    mlSharpRootPath: '',
+    mlSharpCliPath: '',
   }
 }
 
@@ -62,6 +73,10 @@ export function loadLocalDiskPathsSettings(): LocalDiskPathsSettings {
         typeof parsed.materialLibraryPath === 'string' ? parsed.materialLibraryPath : d.materialLibraryPath,
       systemPromptCoverPath:
         typeof parsed.systemPromptCoverPath === 'string' ? parsed.systemPromptCoverPath : d.systemPromptCoverPath,
+      mlSharpRootPath:
+        typeof parsed.mlSharpRootPath === 'string' ? parsed.mlSharpRootPath : d.mlSharpRootPath,
+      mlSharpCliPath:
+        typeof parsed.mlSharpCliPath === 'string' ? parsed.mlSharpCliPath : d.mlSharpCliPath,
     }
   } catch {
     return getDefaultLocalDiskPathsSettings()

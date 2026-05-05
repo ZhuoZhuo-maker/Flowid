@@ -158,8 +158,9 @@ function joinPath(baseDir: string, fileName: string): string {
 
 /**
  * 将展示名整理为安全文件名片段。
+ * 导出供历史面板等与落盘文件名规则对齐的去重逻辑使用。
  */
-function sanitizeFileStem(raw: string): string {
+export function sanitizeFileStem(raw: string): string {
   const base = String(raw || '').trim() || 'flowid'
   return base
     // eslint-disable-next-line no-control-regex -- 与工程文件名规则一致，剔除非法字符
