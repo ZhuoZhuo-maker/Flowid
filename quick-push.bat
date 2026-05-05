@@ -22,7 +22,7 @@ echo [STEP 1/7] Detect current branch...
 set "BRANCH="
 set "BRANCH_FILE=%TEMP%\flowid-branch.txt"
 del /q "%BRANCH_FILE%" 2>nul
-git branch --show-current 1>"%BRANCH_FILE%" 2>nul
+call git branch --show-current 1>"%BRANCH_FILE%" 2>nul
 set /p BRANCH=<"%BRANCH_FILE%" 2>nul
 del /q "%BRANCH_FILE%" 2>nul
 if "%BRANCH%"=="" (
@@ -38,17 +38,17 @@ echo [OK ] Branch: %BRANCH%
 
 echo.
 echo [STEP 2/7] Ensure remote origin...
-git remote get-url origin >nul 2>nul
+call git remote get-url origin >nul 2>nul
 if errorlevel 1 (
   echo [INFO] origin not set, adding: %REMOTE_URL%
-  git remote add origin "%REMOTE_URL%"
+  call git remote add origin "%REMOTE_URL%"
 ) else (
   echo [OK ] origin already set.
 )
 
 echo.
 echo [STEP 3/7] Show working tree status...
-git status --short
+call git status --short
 
 echo.
 set "MSG="
@@ -61,14 +61,14 @@ if defined AUTO_MSG (
 
 echo.
 echo [STEP 4/7] Stage changes...
-git add .
+call git add .
 if errorlevel 1 (
   echo [ERR] git add failed.
   set "EXIT_CODE=12"
   goto :end
 )
 
-git diff --cached --quiet
+call git diff --cached --quiet
 if not errorlevel 1 (
   echo [WARN] No staged changes. Nothing to commit.
   set "EXIT_CODE=0"
@@ -81,7 +81,7 @@ echo [STEP 5/7] Commit...
 if not defined AUTO_YES (
   echo [INFO] About to commit with message: %MSG%
 )
-git commit -m "%MSG%"
+call git commit -m "%MSG%"
 if errorlevel 1 (
   echo [ERR] git commit failed.
   set "EXIT_CODE=13"
@@ -92,31 +92,36 @@ echo [OK ] Committed.
 :push_only
 echo.
 echo [STEP 6/7] Fetch origin and pull --rebase before push ^(avoids Gitee fetch-first reject^)
-git fetch origin
+rem Nested parentheses + git.cmd on Windows can corrupt ERRORLEVEL; use CALL and flat flow.
+call git fetch origin
 if errorlevel 1 (
   echo [WARN] git fetch failed; push may still fail. Check network / SSH key / remote URL.
-) else (
-  git show-ref --verify --quiet "refs/remotes/origin/%BRANCH%"
-  if errorlevel 1 (
-    echo [INFO] No remote-tracking branch origin/%BRANCH% yet - skipping pull, typical on first push.
-  ) else (
-    rem Uses --autostash to stash local edits during pull when needed; requires Git 2.14+
-    git pull --rebase --autostash origin %BRANCH%
-    if errorlevel 1 (
-      echo [ERR] git pull --rebase failed. Likely merge conflicts or autostash pop conflicts.
-      echo [HINT] Fix files, then: git add -A
-      echo [HINT] Then: git rebase --continue
-      echo [HINT] Or abort: git rebase --abort
-      set "EXIT_CODE=15"
-      goto :end
-    )
-    echo [OK ] Local branch rebased onto origin/%BRANCH%.
-  )
+  goto :qp_push
 )
 
+call git show-ref --verify --quiet "refs/remotes/origin/%BRANCH%"
+if errorlevel 1 (
+  echo [INFO] No remote-tracking branch origin/%BRANCH% yet - skipping pull, typical on first push.
+  goto :qp_push
+)
+
+rem --autostash: temp stash during pull when needed; requires Git 2.14+
+call git pull --rebase --autostash origin %BRANCH%
+if errorlevel 1 (
+  echo [ERR] git pull --rebase failed. Likely merge conflicts or autostash pop conflicts.
+  echo [HINT] Run: git status
+  echo [HINT] Fix files, then: git add -A
+  echo [HINT] Then: git rebase --continue
+  echo [HINT] Or abort: git rebase --abort
+  set "EXIT_CODE=15"
+  goto :end
+)
+echo [OK ] Local branch rebased onto origin/%BRANCH%.
+
+:qp_push
 echo.
 echo [STEP 7/7] Push to origin/%BRANCH%...
-git push -u origin %BRANCH%
+call git push -u origin %BRANCH%
 if errorlevel 1 (
   echo [ERR] git push failed.
   echo [HINT] If you intentionally overwrite remote ^(dangerous^): git push --force-with-lease origin %BRANCH%
