@@ -18,7 +18,7 @@ if /i "%~2"=="--auto" set "AUTO_YES=1"
 if /i "%~1"=="--auto" set "AUTO_MSG=1"
 if /i "%~2"=="--auto" set "AUTO_MSG=1"
 
-echo [STEP 1/6] Detect current branch...
+echo [STEP 1/7] Detect current branch...
 set "BRANCH="
 set "BRANCH_FILE=%TEMP%\flowid-branch.txt"
 del /q "%BRANCH_FILE%" 2>nul
@@ -37,7 +37,7 @@ if "%BRANCH%"=="" (
 echo [OK ] Branch: %BRANCH%
 
 echo.
-echo [STEP 2/6] Ensure remote origin...
+echo [STEP 2/7] Ensure remote origin...
 git remote get-url origin >nul 2>nul
 if errorlevel 1 (
   echo [INFO] origin not set, adding: %REMOTE_URL%
@@ -47,7 +47,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [STEP 3/6] Show working tree status...
+echo [STEP 3/7] Show working tree status...
 git status --short
 
 echo.
@@ -60,7 +60,7 @@ if defined AUTO_MSG (
 )
 
 echo.
-echo [STEP 4/6] Stage changes...
+echo [STEP 4/7] Stage changes...
 git add .
 if errorlevel 1 (
   echo [ERR] git add failed.
@@ -77,7 +77,7 @@ if not errorlevel 1 (
 echo [OK ] Staged.
 
 echo.
-echo [STEP 5/6] Commit...
+echo [STEP 5/7] Commit...
 if not defined AUTO_YES (
   echo [INFO] About to commit with message: %MSG%
 )
@@ -91,10 +91,35 @@ echo [OK ] Committed.
 
 :push_only
 echo.
-echo [STEP 6/6] Push to origin/%BRANCH%...
+echo [STEP 6/7] Fetch origin and pull --rebase before push ^(avoids Gitee fetch-first reject^)
+git fetch origin
+if errorlevel 1 (
+  echo [WARN] git fetch failed; push may still fail. Check network / SSH key / remote URL.
+) else (
+  git show-ref --verify --quiet "refs/remotes/origin/%BRANCH%"
+  if errorlevel 1 (
+    echo [INFO] No remote-tracking branch origin/%BRANCH% yet - skipping pull, typical on first push.
+  ) else (
+    rem Uses --autostash to stash local edits during pull when needed; requires Git 2.14+
+    git pull --rebase --autostash origin %BRANCH%
+    if errorlevel 1 (
+      echo [ERR] git pull --rebase failed. Likely merge conflicts or autostash pop conflicts.
+      echo [HINT] Fix files, then: git add -A
+      echo [HINT] Then: git rebase --continue
+      echo [HINT] Or abort: git rebase --abort
+      set "EXIT_CODE=15"
+      goto :end
+    )
+    echo [OK ] Local branch rebased onto origin/%BRANCH%.
+  )
+)
+
+echo.
+echo [STEP 7/7] Push to origin/%BRANCH%...
 git push -u origin %BRANCH%
 if errorlevel 1 (
   echo [ERR] git push failed.
+  echo [HINT] If you intentionally overwrite remote ^(dangerous^): git push --force-with-lease origin %BRANCH%
   set "EXIT_CODE=14"
   goto :end
 )
