@@ -3,6 +3,15 @@ setlocal EnableExtensions EnableDelayedExpansion
 if defined FLOWID_DEBUG echo on
 cd /d "%~dp0"
 
+rem =============================================================================
+rem quick-push.bat — one-click sync to Gitee (origin, current branch)
+rem   Double-click (no args): auto message "chore: update", no confirm prompt,
+rem   then fetch + pull --rebase --autostash + push (avoids "fetch first" reject).
+rem   Optional: --no-pause  close window without "Press any key"
+rem             --yes / --auto  same as no-arg for message/skip confirm
+rem             custom message: quick-push.bat "your message"
+rem =============================================================================
+
 set "EXIT_CODE=0"
 set "BRANCH="
 set "NO_PAUSE="
@@ -17,6 +26,21 @@ if /i "%~1"=="--auto" set "AUTO_YES=1"
 if /i "%~2"=="--auto" set "AUTO_YES=1"
 if /i "%~1"=="--auto" set "AUTO_MSG=1"
 if /i "%~2"=="--auto" set "AUTO_MSG=1"
+
+rem No arguments (typical double-click): fully non-interactive commit + push
+if "%~1"=="" (
+  set "AUTO_MSG=1"
+  set "AUTO_YES=1"
+  echo [INFO] No args: using auto commit message and skip confirm ^(double-click mode^).
+)
+
+rem Single --no-pause: same as double-click + close window without keypress
+if /i "%~1"=="--no-pause" if "%~2"=="" (
+  set "AUTO_MSG=1"
+  set "AUTO_YES=1"
+  set "NO_PAUSE=1"
+  echo [INFO] --no-pause only: auto message, skip confirm, no pause at end.
+)
 
 echo [STEP 1/7] Detect current branch...
 set "BRANCH="
