@@ -20,7 +20,8 @@ export function useWorkflowRunner({
   selectedNodeId: string | null
   setNodes: React.Dispatch<React.SetStateAction<Node<StudioNodeData>[]>>
   appendHistory: (text: string) => void
-  executeSingleNode?: (node: Node<StudioNodeData>) => Promise<void>
+  /** 返回 `false` 表示本节点被跳过（如敏感词拦截），不记为执行失败 */
+  executeSingleNode?: (node: Node<StudioNodeData>) => Promise<boolean | void>
 }) {
   const [isRunning, setIsRunning] = useState(false)
   const isExecutableNode = useCallback((node: Node<StudioNodeData>) => {
@@ -149,7 +150,12 @@ export function useWorkflowRunner({
               throw new Error('节点不存在')
             }
             if (executeSingleNode) {
-              await executeSingleNode(currNode)
+              const skip = await executeSingleNode(currNode)
+              if (skip === false) {
+                setRunStatus([id], 'idle', true)
+                appendHistory(`已跳过：${id}（敏感词校验）`)
+                continue
+              }
             } else {
               await sleep(500 + Math.floor(Math.random() * 700))
             }

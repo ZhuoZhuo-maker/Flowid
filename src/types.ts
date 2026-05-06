@@ -162,6 +162,8 @@ export type StudioNodeDataBase = {
   resultThumbnails?: NodeResultThumbnail[]
   /** 为 true 时展开底部输出缩略图行（默认折叠） */
   resultThumbnailsExpanded?: boolean
+  /** 当前授权下，按本节点工作流/模型预估的单次预扣积分（仅展示，不落盘） */
+  pointsReserveHint?: number
 }
 
 export type TextNodeData = StudioNodeDataBase & {

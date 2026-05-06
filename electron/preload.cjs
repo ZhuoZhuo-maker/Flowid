@@ -32,4 +32,9 @@ contextBridge.exposeInMainWorld('flowidDesktop', {
   ensureDirectory: (dirPath) => ipcRenderer.invoke('flowid:fs-ensure-directory', dirPath),
   ensureSubdirectory: (basePath, childName) =>
     ipcRenderer.invoke('flowid:fs-ensure-subdirectory', basePath, childName),
+  /** 本地积分 SQLite（userData/flowid-points.sqlite3） */
+  pointsGet: (licenseCode) => ipcRenderer.invoke('flowid:points-get', { licenseCode }),
+  pointsBind: (payload) => ipcRenderer.invoke('flowid:points-bind', payload),
+  pointsAdjust: (payload) => ipcRenderer.invoke('flowid:points-adjust', payload),
+  pointsLog: (payload) => ipcRenderer.invoke('flowid:points-log', payload),
 })

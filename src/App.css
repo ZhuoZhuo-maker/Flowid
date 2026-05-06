@@ -382,7 +382,63 @@ body,
 }
 
 .studio-flow-wrap .react-flow {
-  background: #0b0d12;
+  /** 深色画布：略提亮，避免纯黑压迫感（具体色值见下方 Tailwind 覆盖区，需与之一致） */
+  background: #1a2233;
+}
+
+/** 画布颗粒纹理（深色 / 日间：极淡工程网点） */
+.studio-canvas-grain {
+  opacity: 0.05;
+  background-image: radial-gradient(circle, #fff 1.2px, transparent 1.2px);
+  background-size: 48px 48px;
+}
+
+/** 日间：无网格，画布底色 #F5F5F5 */
+.studio-flow-wrap--canvas-day .studio-canvas-grain {
+  opacity: 1;
+  background-color: #f5f5f5;
+  background-image: none;
+}
+
+/** 日间画布底色见文件末尾 `.studio-flow-wrap--canvas-day .react-flow`（带 !important，避免被覆盖） */
+
+/** 日间顶栏：项目胶囊（与设置页类似的浅底 + 选中态蓝） */
+.studio-flow-wrap--canvas-day .studio-canvas-topbar .studio-project-pill {
+  height: auto;
+  min-height: 28px;
+  border-color: #e8e8e8;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(38, 38, 38, 0.06);
+}
+
+.studio-flow-wrap--canvas-day .studio-canvas-topbar .studio-project-pill.is-active {
+  border-color: #d4d4d4;
+  background: #ffffff;
+  box-shadow:
+    0 0 0 1px rgba(38, 38, 38, 0.08),
+    0 4px 14px rgba(38, 38, 38, 0.06);
+}
+
+.studio-flow-wrap--canvas-day .studio-canvas-topbar .studio-project-pill__input {
+  border-color: #e8e8e8;
+  background: #ffffff;
+  color: #262626;
+}
+
+.studio-flow-wrap--canvas-day .studio-canvas-topbar .studio-project-pill__close {
+  color: #737373;
+}
+
+.studio-flow-wrap--canvas-day .studio-canvas-topbar .studio-project-pill__close:hover {
+  color: #262626;
+}
+
+.studio-flow-wrap--canvas-day .studio-canvas-topbar .studio-project-pill.is-active .studio-project-pill__name {
+  color: #262626;
+}
+
+.studio-flow-wrap--canvas-day .studio-canvas-topbar .studio-project-pill:not(.is-active) .studio-project-pill__name {
+  color: #525252;
 }
 
 /* 左工具栏：靠左中部悬浮 */
@@ -955,64 +1011,80 @@ body,
   top: 0;
 }
 
+/**
+ * 右键「新增节点」子卡：与 `.studio-multi-select-ctx__main` 同材质（夜间勿用浅灰半透明，避免与主菜单割裂）
+ */
 .add-node-card {
-  width: 157px;
-  border: 1px solid #3f3f3f;
-  border-radius: 16px;
-  background: #262626;
-  box-shadow: 0 4px 4px rgba(105, 96, 96, 0.25);
-  padding: 12px;
+  width: 168px;
+  min-width: 157px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: #111114;
+  box-shadow: 0 22px 64px rgba(0, 0, 0, 0.55);
+  padding: 6px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
 }
 
 .add-node-card__title {
-  color: #828282;
+  color: rgba(255, 255, 255, 0.45);
   font-size: 12px;
   line-height: 18.6px;
 }
 
 .add-node-card__divider {
   height: 1px;
-  background: #3a3a3a;
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .add-node-card__item {
   width: 100%;
-  border: none;
-  background: transparent;
-  border-radius: 4px;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  color: #7f8798;
-  padding: 0;
+  align-items: center;
+  gap: 10px;
+  color: rgba(255, 255, 255, 0.78);
+  padding: 8px 10px;
   cursor: pointer;
-  min-height: 30px;
+  min-height: 40px;
   text-align: left;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .add-node-card__item.is-active {
-  background: #3b3b3b;
-  color: #dce2ee;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
   box-shadow: none;
 }
 
 .add-node-card__item:hover {
-  background: #3b3b3b;
-  color: #dce2ee;
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .add-node-card__itemIcon {
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: #3b3b3b;
+  background: rgba(255, 255, 255, 0.06);
   display: grid;
   place-items: center;
   font-size: 18px;
   line-height: 1;
+  flex-shrink: 0;
+  transition: background-color 0.12s ease;
 }
 
 .add-node-card__itemIcon img {
@@ -1023,11 +1095,11 @@ body,
 }
 
 .add-node-card__item.is-active .add-node-card__itemIcon {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .add-node-card__item:hover .add-node-card__itemIcon {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .add-node-card__itemMain {
@@ -1039,14 +1111,14 @@ body,
 }
 
 .add-node-card__itemText {
-  font-size: 12px;
-  line-height: 18.6px;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .add-node-card__itemSub {
   font-size: 10px;
   line-height: 14px;
-  color: #5c6577;
+  color: rgba(255, 255, 255, 0.4);
   white-space: normal;
 }
 
@@ -1088,6 +1160,125 @@ body,
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/**
+ * 画布日间：节点右键主菜单 / 新增节点子卡 / 分组标题栏菜单（portal 在 body，依赖 html[data-flowid-canvas-day]）
+ */
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx__main {
+  border-color: #e8e8e8;
+  background: #ffffff;
+  box-shadow: 0 16px 48px rgba(38, 38, 38, 0.14);
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .studio-group__menuItem {
+  background: #fafafa;
+  border-color: transparent;
+  color: #262626;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .studio-group__menuItem:hover {
+  background: #f0f0f0;
+  border-color: transparent;
+  color: #171717;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .studio-group__menuItem:disabled {
+  opacity: 0.45;
+  color: #a3a3a3;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .studio-group__menuItem.is-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: transparent;
+  color: #b91c1c;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .studio-group__menuItem.is-danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+  color: #991b1b;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card {
+  border-color: #e8e8e8;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(38, 38, 38, 0.1);
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__divider {
+  background: #e8e8e8;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__item {
+  color: #525252;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__item:hover,
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__item.is-active {
+  background: #f5f5f5;
+  color: #262626;
+  box-shadow: none;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__itemIcon {
+  background: #f0f0f0;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__item:hover .add-node-card__itemIcon,
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__item.is-active .add-node-card__itemIcon {
+  background: #e8e8e8;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__itemText {
+  color: #262626;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__itemSub {
+  color: #737373;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menu {
+  border-color: #e8e8e8;
+  background: #ffffff;
+  box-shadow: 0 16px 48px rgba(38, 38, 38, 0.14);
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menu .studio-group__menuItem {
+  background: #fafafa;
+  border-color: transparent;
+  color: #262626;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menu .studio-group__menuItem:hover {
+  background: #f0f0f0;
+  border-color: transparent;
+  color: #171717;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menu .studio-group__menuItem.is-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: transparent;
+  color: #b91c1c;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menu .studio-group__menuItem.is-danger:hover {
+  background: rgba(239, 68, 68, 0.18);
+  color: #991b1b;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menuSectionTitle {
+  color: #737373;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menuColorItem {
+  border-color: rgba(0, 0, 0, 0.12);
+  color: rgba(255, 255, 255, 0.96);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menuColorItem:hover {
+  border-color: rgba(0, 0, 0, 0.2);
+  filter: brightness(1.02);
 }
 
 .studio-ghost-node {
@@ -1629,6 +1820,13 @@ body,
   user-select: none;
 }
 
+/** 全屏助手 z-[12000] 会盖住默认 z-62 的虚拟人；打开工作台时抬到助手之上（仍低于个人信息等 12500 层） */
+.studio-ai-avatar-dock--over-agent {
+  z-index: 12150;
+  /** 全屏助手打开时：容器不挡滚轮/下层滚动，仅视频与缩放手柄可交互 */
+  pointer-events: none;
+}
+
 .studio-ai-avatar-dock__video {
   width: 100%;
   height: 100%;
@@ -1639,6 +1837,15 @@ body,
   background: transparent;
   box-shadow: none;
   pointer-events: none;
+}
+
+.studio-ai-avatar-dock--over-agent .studio-ai-avatar-dock__video {
+  pointer-events: auto;
+  cursor: move;
+}
+
+.studio-ai-avatar-dock--over-agent .studio-ai-avatar-dock__resizeHandle {
+  pointer-events: auto;
 }
 
 .studio-ai-avatar-dock__resizeHandle {
@@ -1955,6 +2162,18 @@ body,
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
+.studio-node__headTrail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.studio-node__headTrail .studio-node__status {
+  margin-left: 0;
+}
+
 .studio-node__progress {
   padding: 6px 12px 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -2050,7 +2269,6 @@ body,
 }
 
 .studio-node__status {
-  margin-left: auto;
   font-size: 0;
   border-radius: 999px;
   padding: 0;
@@ -2097,6 +2315,117 @@ body,
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.studio-node-output-strip {
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 0 10px 10px;
+  flex-shrink: 0;
+}
+
+.studio-node-output-strip__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 4px;
+  margin: 0 -2px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.studio-node-output-strip__toggle:hover {
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.studio-node-output-strip__count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.studio-node-output-strip__row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+  padding-top: 4px;
+  max-width: 100%;
+}
+
+.studio-node-output-strip__cell {
+  position: relative;
+  flex: 0 0 auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #06080e;
+}
+
+.studio-node-output-strip__cell--previewable {
+  cursor: pointer;
+}
+
+.studio-node-output-strip__cell--previewable:hover {
+  border-color: rgba(148, 163, 184, 0.45);
+}
+
+.studio-node-output-strip__cell.is-primary-preview {
+  border-color: rgba(52, 211, 153, 0.55);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.2);
+}
+
+.studio-node-output-strip__media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.studio-node-output-strip__audioGlyph {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  color: rgba(251, 191, 36, 0.85);
+  cursor: grab;
+}
+
+.studio-node-output-strip__del {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  line-height: 1;
+  font-size: 11px;
+  font-weight: 700;
+  border: none;
+  border-radius: 4px;
+  background: rgba(30, 32, 38, 0.82);
+  color: rgba(255, 255, 255, 0.38);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.studio-node-output-strip__del:hover {
+  color: rgba(255, 255, 255, 0.65);
+  background: rgba(55, 58, 68, 0.92);
 }
 
 .studio-node__resizerHandle {
@@ -2152,8 +2481,80 @@ body,
   position: relative;
 }
 
+/** 预览区悬停才显示右上角操作条（移开隐藏），与图二交互一致 */
+.studio-thumb__previewHoverZone {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
 .studio-thumb--video {
   min-height: 0;
+}
+
+/* 图片与打点叠层共用同一矩形（均 absolute + inset:0），避免 flex 子项与叠层宽高不一致导致坐标偏移 */
+.studio-thumb__imgMattingStack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  min-height: 180px;
+  line-height: 0;
+}
+
+.studio-thumb__imgMattingStack .studio-thumb__img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: unset;
+  display: block;
+  object-fit: contain;
+  background: #06080e;
+}
+
+.studio-thumb__imgMattingStack .studio-thumb__mattingDots {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.studio-thumb__img--mattingPassthrough {
+  pointer-events: none;
+}
+
+.studio-thumb__mattingDots {
+  pointer-events: none;
+}
+
+.studio-thumb__mattingDots.is-interactive {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.studio-thumb__mattingDot {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.studio-thumb__mattingDot--keep {
+  background: #22c55e;
+}
+
+.studio-thumb__mattingDot--remove {
+  background: #ef4444;
 }
 
 .studio-thumb__img {
@@ -2172,6 +2573,16 @@ body,
   top: 8px;
   display: inline-flex;
   gap: 6px;
+  z-index: 4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.studio-thumb__previewHoverZone:hover .studio-thumb__actions,
+.studio-thumb__previewHoverZone:focus-within .studio-thumb__actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .studio-thumb__action {
@@ -2187,6 +2598,12 @@ body,
 .studio-thumb__action:hover {
   border-color: rgba(172, 190, 225, 0.65);
   background: rgba(20, 30, 50, 0.88);
+}
+
+.studio-thumb__action.is-active {
+  border-color: rgba(52, 211, 153, 0.75);
+  background: rgba(16, 60, 45, 0.55);
+  color: #ecfdf5;
 }
 
 .studio-thumb__video {
@@ -3128,6 +3545,46 @@ select.flowid-dark-select optgroup {
   overflow: hidden;
 }
 
+.auth-modal--ledger {
+  width: min(720px, calc(100vw - 24px));
+  max-height: min(90vh, 860px);
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-modal--ledger .auth-modal__body {
+  overflow: auto;
+  min-height: 0;
+}
+
+.auth-modal__ledger-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  color: #c8d2e8;
+}
+
+.auth-modal__ledger-table th,
+.auth-modal__ledger-table td {
+  border: 1px solid #2a303d;
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.auth-modal__ledger-table th {
+  background: #151b27;
+  color: #9ea9c4;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.auth-modal__ledger-meta {
+  max-width: 200px;
+  word-break: break-all;
+  color: rgba(255, 255, 255, 0.55);
+}
+
 .auth-modal__head {
   height: 48px;
   border-bottom: 1px solid #262c39;
@@ -3176,6 +3633,45 @@ select.flowid-dark-select optgroup {
 }
 
 .auth-modal__tab.is-active {
+  background: #2b3954;
+  border-color: #5b6f94;
+}
+
+.auth-modal__ledger-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.auth-modal__ledger-filter-label {
+  font-size: 13px;
+  color: rgba(200, 210, 232, 0.9);
+  flex-shrink: 0;
+}
+
+.auth-modal__filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.auth-modal__filter-chip {
+  border: 1px solid #36425a;
+  border-radius: 8px;
+  background: #1c2434;
+  color: #e8eefc;
+  padding: 5px 11px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.auth-modal__filter-chip:hover {
+  border-color: #4a5a7a;
+}
+
+.auth-modal__filter-chip.is-active {
   background: #2b3954;
   border-color: #5b6f94;
 }
@@ -3271,7 +3767,8 @@ select.flowid-dark-select optgroup {
 
 .studio-music-prompt-panel-wrap {
   position: fixed;
-  z-index: 58;
+  /** 高于虚拟人 dock(62)，避免叠放区域点击被抢走导致「点不进提示框」 */
+  z-index: 96;
   pointer-events: none;
 }
 
@@ -3417,6 +3914,42 @@ select.flowid-dark-select optgroup {
 .studio-music-prompt-panel__refChipMove:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.studio-music-prompt-panel__videoSlots {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.studio-music-prompt-panel__videoSlotLabel {
+  font-size: 11px;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.42);
+  margin: 0 2px 2px;
+}
+
+.studio-music-prompt-panel__textarea--videoSlot {
+  min-height: 72px;
+}
+
+.studio-music-prompt-panel__addSlotBtn {
+  align-self: flex-start;
+  margin: 2px 0 0 2px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.studio-music-prompt-panel__addSlotBtn:hover {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .studio-music-prompt-panel__textarea {
@@ -3726,10 +4259,39 @@ select.flowid-dark-select optgroup {
 }
 
 .studio-music-prompt-panel__foot {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto auto auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
+}
+
+.studio-music-prompt-panel__foot > .pp-select {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.studio-music-prompt-panel__footEnd {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.studio-music-prompt-panel__footPoints {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: rgba(251, 146, 60, 0.95);
+  white-space: nowrap;
+}
+
+.studio-music-prompt-panel__footPointsIcon {
+  flex-shrink: 0;
+  opacity: 0.92;
 }
 
 .studio-music-prompt-panel__splitBtn {
@@ -3842,12 +4404,6 @@ select.flowid-dark-select optgroup {
   cursor: not-allowed;
 }
 
-.studio-music-prompt-panel__count {
-  font-size: 13px;
-  color: rgba(255, 255, 255, 0.35);
-  letter-spacing: 0.02em;
-}
-
 .studio-music-prompt-panel__submit {
   width: 34px;
   height: 34px;
@@ -3871,6 +4427,198 @@ select.flowid-dark-select optgroup {
 
 .studio-music-prompt-panel__submit:active {
   transform: translateY(1px);
+}
+
+/** 画布日间：底部浮动提示框（与设置/左侧面板同一浅色调） */
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel {
+  border-color: #e8e8e8;
+  background: #ffffff;
+  box-shadow: 0 16px 48px rgba(38, 38, 38, 0.12);
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__head {
+  color: #525252;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__headActions .studio-music-prompt-panel__settingsBtn {
+  border-color: transparent;
+  background: rgba(234, 88, 12, 0.14);
+  color: #9a3412;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__headActions .studio-music-prompt-panel__settingsBtn:hover {
+  background: rgba(234, 88, 12, 0.22);
+  border-color: transparent;
+  color: #7c2d12;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__expandBtn {
+  border-color: #e8e8e8;
+  background: #f5f5f5;
+  color: #525252;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__expandBtn:hover {
+  background: #eeeeee;
+  border-color: #d4d4d4;
+  color: #262626;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__dropPad {
+  border-color: #d4d4d4;
+  background: #fafafa;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__dropPad:hover,
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__dropPad:focus-visible {
+  border-color: #a3a3a3;
+  background: #f5f5f5;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__dropPad.is-active {
+  border-color: rgba(234, 88, 12, 0.5);
+  background: rgba(234, 88, 12, 0.08);
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__dropPadText {
+  color: #404040;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__dropPadHint {
+  color: #737373;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__textarea {
+  background: #f5f5f5;
+  color: #262626;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__textarea::placeholder {
+  color: #737373;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__videoSlotLabel {
+  color: #737373;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__addSlotBtn {
+  border-color: #d4d4d4;
+  background: #fafafa;
+  color: #525252;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__addSlotBtn:hover {
+  border-color: #a3a3a3;
+  color: #171717;
+  background: #f5f5f5;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__mentionMenu {
+  border-color: #e8e8e8;
+  background: #ffffff;
+  box-shadow: 0 8px 24px rgba(38, 38, 38, 0.1);
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__mentionItem {
+  color: #262626;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__mentionItem + .studio-music-prompt-panel__mentionItem {
+  border-top-color: #e8e8e8;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__mentionItem:hover,
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__mentionItem.is-active {
+  background: #f5f5f5;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__mentionWarn {
+  color: #b45309;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__refChip {
+  border-color: #e8e8e8;
+  background: #fafafa;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__mentionChip {
+  border-color: #e8e8e8;
+  background: #fafafa;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__mentionBadge {
+  background: rgba(255, 255, 255, 0.95);
+  color: #262626;
+  border-color: #e8e8e8;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__refChipRemove,
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__refChipMove {
+  background: rgba(38, 38, 38, 0.65);
+  color: #ffffff;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel .pp-select__menu {
+  border-color: #e8e8e8;
+  background: #ffffff;
+  box-shadow: 0 12px 32px rgba(38, 38, 38, 0.12);
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel .pp-select__item {
+  color: #262626;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel .pp-select__item:hover:not(:disabled) {
+  background: #f5f5f5;
+  border-color: transparent;
+  color: #ea580c;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel .pp-select__item.is-selected:not(:disabled) {
+  background: rgba(234, 88, 12, 0.12);
+  border-color: transparent;
+  color: #9a3412;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__select {
+  border-color: transparent;
+  background: #f5f5f5;
+  color: #262626;
+  color-scheme: light;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__splitSelect {
+  border-color: transparent;
+  background: #f5f5f5;
+  color: #262626;
+  color-scheme: light;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__splitSelect:disabled,
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__splitSelect option:disabled {
+  color: #a3a3a3;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__footPoints {
+  color: #ea580c;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__submit {
+  border-color: transparent;
+  background: #404040;
+  color: #ffffff;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel__submit:hover {
+  background: #262626;
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.studio-flow-wrap--canvas-day .studio-music-prompt-panel .btn--chip {
+  border-color: transparent !important;
+  background: #f5f5f5 !important;
+  color: #262626 !important;
 }
 
 .studio-audio-preview {
@@ -4435,7 +5183,7 @@ select.flowid-dark-select optgroup {
 
 /* ---------- 提示框：@ 引用缩略图 + 放大 ---------- */
 .studio-music-prompt-panel-wrap.is-expanded {
-  z-index: 40;
+  z-index: 100;
 }
 
 .studio-music-prompt-panel.is-expanded {
@@ -4586,6 +5334,44 @@ select.flowid-dark-select optgroup {
   overflow: hidden;
   background: #05080d;
   border: 1px solid rgba(34, 211, 238, 0.2);
+}
+
+/** 叠在预览上：悬停预览区才显示（移开隐藏），与图片节点工具条交互一致 */
+.studio-panorama__viewportFloatingUi {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  left: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.studio-panorama__viewportWrap:hover .studio-panorama__viewportFloatingUi,
+.studio-panorama__viewportFloatingUi:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.studio-panorama__viewportFloatingUi .studio-panorama__toolbar--dual {
+  width: max-content;
+  max-width: 100%;
+}
+
+.studio-panorama__viewportFloatingUi .studio-panorama__pseudo3dRow {
+  margin-top: 0;
+  width: max-content;
+  max-width: 100%;
+}
+
+.studio-panorama__viewportFloatingUi .studio-panorama__pseudo3dErr {
+  max-width: min(280px, 100%);
+  text-align: right;
 }
 
 /** 仅承载 WebGL canvas，与 React 占位/报错层分离，避免 removeChild 与协调冲突 */
@@ -4798,6 +5584,34 @@ select.flowid-dark-select optgroup {
   gap: 8px;
 }
 
+.studio-panorama__pseudo3dRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.studio-panorama__btn--pseudo3d {
+  flex: 1 1 auto;
+  min-width: 120px;
+  border-color: rgba(168, 85, 247, 0.5) !important;
+  background: rgba(88, 28, 135, 0.35) !important;
+  color: #f5e9ff !important;
+}
+
+.studio-panorama__btn--pseudo3d:hover:not(:disabled) {
+  border-color: rgba(192, 132, 252, 0.75) !important;
+  background: rgba(107, 33, 168, 0.45) !important;
+}
+
+.studio-panorama__pseudo3dErr {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #fca5a5;
+  word-break: break-word;
+}
+
 /** 全景卡片底部说明：与预览区、按钮行共用父级 8px 纵向间距 */
 .studio-panorama__hint {
   margin: 0;
@@ -4834,6 +5648,23 @@ select.flowid-dark-select optgroup {
   flex-wrap: wrap;
   gap: 8px;
   pointer-events: auto;
+}
+
+.studio-panorama-immersive__keysHint {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: rgba(226, 232, 240, 0.75);
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  pointer-events: none;
+  white-space: nowrap;
 }
 
 .studio-panorama-immersive__stage {
@@ -5162,8 +5993,468 @@ select.flowid-dark-select optgroup {
  * 避免旧工作台 CSS 覆盖 Tailwind 布局。
  * ------------------------------ */
 
-.studio-flow-wrap .react-flow {
-  background: #080809 !important;
+/** 深色画布（勿用近纯黑；:not 避免压盖日间模式） */
+.studio-flow-wrap:not(.studio-flow-wrap--canvas-day) .react-flow {
+  background: linear-gradient(180deg, #1e2636 0%, #181f2e 48%, #161c2a 100%) !important;
+}
+
+/**
+ * 日间画布：与右栏「系统提示词」列表卡片（[data-right-panel-body='day'] .bg-black/20）同色 #f5f5f5，
+ * 并写入 xyflow 变量，避免浅色主题下 pane / 子层仍透出白底显得过亮。
+ */
+.studio-flow-wrap--canvas-day .react-flow {
+  --xy-background-color: #f5f5f5;
+  background: #f5f5f5 !important;
+  background-color: #f5f5f5 !important;
+}
+
+.studio-flow-wrap--canvas-day .react-flow__pane,
+.studio-flow-wrap--canvas-day .react-flow__viewport,
+.studio-flow-wrap--canvas-day .react-flow__renderer,
+.studio-flow-wrap--canvas-day .react-flow__container {
+  background-color: #f5f5f5 !important;
+}
+
+/**
+ * 日间 · 工作流设置（深色 Tailwind 类批量覆写）
+ * 依赖根节点 `data-canvas-day="1"`（WorkflowSettingsPanel）
+ */
+section[data-studio-settings-modal='1'][data-canvas-day='1'] {
+  background-color: #ffffff !important;
+  border-color: #e8e8e8 !important;
+  color: #262626;
+  box-shadow: 0 24px 80px rgba(38, 38, 38, 0.12) !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div {
+  background-color: #ffffff !important;
+  color: #262626;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-\[\#0c0c0e\],
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-\[\#111114\],
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-\[\#080809\] {
+  background-color: #ffffff !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-white\/5 {
+  background-color: #f5f5f5 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-white\/10,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .hover\:bg-white\/10:hover {
+  background-color: #f0f0f0 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .border-white\/5,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .border-white\/10 {
+  border-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/90,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/85 {
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/60,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/50 {
+  color: #525252 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/40,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/35,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/30 {
+  color: #737373 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/20 {
+  color: #525252 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/25 {
+  color: #6b7280 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/45 {
+  color: #5c5c5c !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/55 {
+  color: #737373 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/95,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/75 {
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .hover\:text-white:hover {
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white {
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .placeholder\:text-white\/30::placeholder {
+  color: #737373 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] input,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] textarea,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] select {
+  background-color: #ffffff !important;
+  color: #262626 !important;
+  border-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-black\/20,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-black\/50,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-black\/70 {
+  background-color: #f5f5f5 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-black\/40,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-black\/60 {
+  background-color: #f5f5f5 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-\[\#0c0c0e\]\/50 {
+  background-color: #f5f5f5 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 > header {
+  background-color: #f5f5f5 !important;
+  border-bottom-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 > header h2 {
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/70 {
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .group:hover .group-hover\:text-white {
+  color: #171717 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .text-white\/80 {
+  color: #404040 !important;
+}
+
+/**
+ * 日间主操作按钮：与右栏系统提示词选中态一致的浅橙底 + 深橙字（替代炭灰白字）
+ */
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-\[\#1e1e22\] {
+  background-color: rgba(234, 88, 12, 0.16) !important;
+  color: #9a3412 !important;
+  border-color: transparent !important;
+  border-width: 0 !important;
+  box-shadow: none !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-\[\#1e1e22\].hover\:bg-white\/5:hover {
+  background-color: rgba(234, 88, 12, 0.24) !important;
+  color: #7c2d12 !important;
+}
+
+/** 胶囊主按钮 hover 原为 white/10：日间改为略深的橙 tint，保持字色可读 */
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-\[\#1e1e22\].hover\:bg-white\/10:hover {
+  background-color: rgba(234, 88, 12, 0.26) !important;
+  color: #7c2d12 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-\[\#1e1e22\].hover\:text-white\/80:hover {
+  color: #7c2d12 !important;
+}
+
+/** 宽条「同步 / 清空列表」等：hover 到实橙时仍用深字，避免再压成黑白 */
+section[data-studio-settings-modal='1'][data-canvas-day='1'] button.hover\:bg-orange-600:hover {
+  background-color: rgba(220, 80, 10, 0.34) !important;
+  color: #7c2d12 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] button.hover\:bg-orange-600:hover.hover\:text-white:hover {
+  color: #7c2d12 !important;
+}
+
+/** 云端：顶部分段条与「可用模型」表头同一中灰，减少色块跳变 */
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .rounded-full.border.border-white\/5.bg-black\/30 {
+  background-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .wf-cloud-models-shell > .grid.border-b.border-white\/5.bg-black\/40 {
+  background-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .grid.hover\:bg-white\/5:hover {
+  background-color: #f5f5f5 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] nav button:hover {
+  background-color: #f5f5f5 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] nav button.bg-orange-600\/10,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] nav button.bg-orange-600\/10:hover {
+  background-color: rgba(234, 88, 12, 0.12) !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] button[type='button'] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 > header button[type='button'] {
+  background-color: #f5f5f5 !important;
+  color: #525252 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 > header button[type='button']:hover {
+  background-color: #eeeeee !important;
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-settings-panel--flowid .rounded-2xl.border {
+  border-color: transparent !important;
+  box-shadow: 0 1px 3px rgba(38, 38, 38, 0.06) !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .border-white\/20,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .group-hover\:border-white\/40 {
+  border-color: #c4c4c4 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .border-2.border-dashed.border-white\/5,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .hover\:border-white\/10:hover {
+  border-color: #d4d4d4 !important;
+}
+
+/** 主内容区：弱化列表「橙底大色块」，与快捷键表同为浅底 + 细线 */
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .bg-orange-500\/5,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .bg-orange-600\/10 {
+  background-color: #fafafa !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .border-orange-500\/30,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .border-orange-600\/20 {
+  border-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .text-orange-500 {
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 kbd {
+  background-color: #f5f5f5 !important;
+  color: #262626 !important;
+  border-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .rounded-2xl.border.border-white\/10.bg-black\/30,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .rounded-2xl.border.border-white\/5.bg-black\/25,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .space-y-2.rounded-2xl.border.border-white\/10.bg-black\/30 {
+  background-color: #fafafa !important;
+  border-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .rounded-2xl.border.border-white\/5.bg-black\/20,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .overflow-hidden.rounded-2xl.border.border-white\/5.bg-black\/20 {
+  background-color: #ffffff !important;
+  border-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] > div.flex-1 .grid.border-b.border-white\/5.bg-black\/40 {
+  background-color: #f5f5f5 !important;
+  border-bottom-color: #e8e8e8 !important;
+}
+
+/** 日间 · 设置内嵌「工作流参数编辑」：白底深字，与快捷键页一致 */
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin {
+  background: #ffffff !important;
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-page__title {
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-page__hint {
+  color: #525252 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-group {
+  background: #ffffff !important;
+  border: 1px solid #e8e8e8 !important;
+  box-shadow: none !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-group__title {
+  color: #525252 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-field > span {
+  color: #737373 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-field input,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-field textarea,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-field select {
+  background: #f5f5f5 !important;
+  color: #262626 !important;
+  border: 1px solid #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-field input:focus,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-field textarea:focus,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-field select:focus {
+  border-color: #bdbdbd !important;
+  box-shadow: none !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .workflow-visual-page__empty {
+  background: #fafafa !important;
+  color: #525252 !important;
+  border: 1px solid #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .wf-editor-btn--capsule {
+  border: none !important;
+  background: #f0f0f0 !important;
+  color: #262626 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .wf-editor-btn--capsule:hover {
+  background: #e5e5e5 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .wf-editor-btn--sync {
+  border: none !important;
+  background: #404040 !important;
+  color: #ffffff !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] .workflow-visual-page--settings-skin .wf-editor-btn--sync:hover {
+  background: #262626 !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+
+/** 日间 · 右侧面板嵌入区（素材 / 历史 / 系统提示词） */
+[data-right-panel-body='day'] .border-white\/5,
+[data-right-panel-body='day'] .border-white\/10 {
+  border-color: #e8e8e8 !important;
+}
+
+[data-right-panel-body='day'] .text-white\/90,
+[data-right-panel-body='day'] .text-white\/85,
+[data-right-panel-body='day'] .text-white\/95,
+[data-right-panel-body='day'] .text-white\/75 {
+  color: #262626 !important;
+}
+
+[data-right-panel-body='day'] .text-white\/60,
+[data-right-panel-body='day'] .text-white\/50,
+[data-right-panel-body='day'] .text-white\/55 {
+  color: #525252 !important;
+}
+
+[data-right-panel-body='day'] .text-white\/40,
+[data-right-panel-body='day'] .text-white\/35,
+[data-right-panel-body='day'] .text-white\/30 {
+  color: #737373 !important;
+}
+
+[data-right-panel-body='day'] .text-white\/25,
+[data-right-panel-body='day'] .text-white\/20 {
+  color: #8a8a8a !important;
+}
+
+[data-right-panel-body='day'] .hover\:text-white:hover {
+  color: #262626 !important;
+}
+
+[data-right-panel-body='day'] .text-white {
+  color: #262626 !important;
+}
+
+[data-right-panel-body='day'] .bg-white\/5 {
+  background-color: #f5f5f5 !important;
+}
+
+[data-right-panel-body='day'] .hover\:bg-white\/5:hover,
+[data-right-panel-body='day'] .hover\:bg-white\/10:hover {
+  background-color: #eeeeee !important;
+}
+
+[data-right-panel-body='day'] .bg-black\/20,
+[data-right-panel-body='day'] .bg-black\/50,
+[data-right-panel-body='day'] .bg-black\/70 {
+  background-color: #f5f5f5 !important;
+}
+
+[data-right-panel-body='day'] .hover\:bg-black\/10:hover {
+  background-color: #f5f5f5 !important;
+}
+
+[data-right-panel-body='day'] .text-white\/70 {
+  color: #262626 !important;
+}
+
+[data-right-panel-body='day'] .bg-black\/30,
+[data-right-panel-body='day'] .bg-black\/40 {
+  background-color: #f5f5f5 !important;
+}
+
+[data-right-panel-body='day'] button[type='button'] {
+  border-width: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+[data-right-panel-body='day'] .rounded-xl.border.border-white\/10.bg-white\/5 {
+  background-color: #404040 !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+
+[data-right-panel-body='day'] .border-orange-500\/20,
+[data-right-panel-body='day'] .border-orange-500\/30,
+[data-right-panel-body='day'] .border-orange-500\/50 {
+  border-color: #e8e8e8 !important;
+}
+
+[data-right-panel-body='day'] .bg-orange-500\/10 {
+  background-color: #f5f5f5 !important;
+}
+
+[data-right-panel-body='day'] .text-orange-500 {
+  color: #262626 !important;
+}
+
+[data-right-panel-body='day'] .hover\:text-orange-400:hover {
+  color: #262626 !important;
+}
+
+[data-right-panel-body='day'] .hover\:border-orange-500\/30:hover,
+[data-right-panel-body='day'] .hover\:border-orange-500\/50:hover {
+  border-color: #d4d4d4 !important;
+}
+
+[data-right-panel-body='day'] .group.rounded-xl.border.border-white\/5.bg-black\/30 {
+  border-color: #e8e8e8 !important;
+  box-shadow: 0 1px 2px rgba(38, 38, 38, 0.05);
+}
+
+/** 系统提示词分类：日间全局把橙底/橙字压平后选中态消失，用 data-active 恢复可辨 */
+[data-right-panel-body='day'] .system-prompts-category-tabs button[data-active='true'] {
+  background-color: rgba(234, 88, 12, 0.18) !important;
+  color: #9a3412 !important;
+  border-color: rgba(234, 88, 12, 0.38) !important;
+  box-shadow: inset 0 0 0 1px rgba(234, 88, 12, 0.22);
 }
 
 .studio-canvas-topbar {

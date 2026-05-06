@@ -34,10 +34,11 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { Box, Map as MapIcon, Plus, Settings } from 'lucide-react'
+import { Box, Map as MapIcon, Moon, Plus, Settings, Sun, Zap } from 'lucide-react'
 import type {
   AudioNodeData,
   ImageNodeData,
+  NodeResultThumbnail,
   PanoramaNodeData,
   ProjectSnapshot,
   ScriptNodeData,
@@ -46,6 +47,15 @@ import type {
   TextNodeData,
   VideoNodeData,
 } from '../types'
+import {
+  applySensitiveFilterToNodeDataPatch,
+  awaitSensitiveLexiconSettled,
+  canSend,
+  collectUserFacingTextFromNodeData,
+  ensureLexiconLoading,
+  replaceSensitiveWords,
+} from '../lib/sensitiveWords'
+import { alertSensitiveWordBlocked } from '../lib/sensitiveWordUi'
 import { loadCloudSelfPresets } from '../lib/cloudSelfPresets'
 import { CanvasProvider } from '../context/CanvasContext'
 import { AudioNode } from './nodes/AudioNode'
@@ -61,7 +71,30 @@ import { DownloadPanel } from './panels/DownloadPanel'
 import { FlowidMark } from './FlowidMark'
 import { RightPanel, type RightPanelTab } from './panels/RightPanel'
 import { AiAssistantPanel, type AiAssistantMessage } from './panels/AiAssistantPanel'
-import { WorkflowSettingsPanel } from './panels/WorkflowSettingsPanel'
+import { AgentFloatingChatWindow } from './agent/AgentFloatingChatWindow'
+import { PointsTaskFailureToast, type PointsTaskFailureToastState } from './PointsTaskFailureToast'
+import { estimateSceneBatchFromText } from '../lib/agentPointsExample'
+import { subscribePointsTaskFailure } from '../lib/pointsService'
+import { apiPointsQuote } from '../lib/licensePointsApi'
+import { buildPointsReserveParams } from '../lib/pointsReserveMetadata'
+import { fetchCloudWorkflowsMeta, type CloudWorkflowMeta } from '../lib/cloudWorkflowsApi'
+import {
+  registerAgentCanvasTasksProvider,
+  registerAgentNavigateToNode,
+} from '../lib/agentCanvasBridge'
+import { registerAgentProjectContextProvider } from '../lib/agentProjectContextBridge'
+import { registerAgentOpenCanvasSettings } from '../lib/agentStudioUiBridge'
+import { callLLM } from '../lib/agentLlmStub'
+import type { AgentParseMode } from '../lib/agentParseMode'
+import {
+  invokeStudioAgentExecution,
+  registerStudioAgentChatHandler,
+  registerStudioAgentExecutor,
+  type AgentSceneBatchPayload,
+  type StudioAgentChatHandler,
+} from '../lib/studioAgentBridge'
+import { WorkflowSettingsPanel, type SettingsTab } from './panels/WorkflowSettingsPanel'
+import { registerStudioDeviceActivationOpener } from '../lib/studioSettingsOpen'
 import { useAssetsHistory } from '../hooks/useAssetsHistory'
 import { useWorkflowRunner } from '../hooks/useWorkflowRunner'
 import { useWorkflowIntegration } from '../hooks/useWorkflowIntegration'
@@ -82,7 +115,7 @@ import type {
   AssetItem,
   LeftPanelType,
 } from './panels/types'
-import { createGroupNode, createStudioNode } from '../lib/nodeFactory'
+import { createGroupNode, createStudioNode, defaultStudioNodeTitle } from '../lib/nodeFactory'
 import {
   findWorkflowEntryByPreferredName,
   matchStudioNodeWorkflow,
@@ -93,7 +126,19 @@ import {
   saveStoredProject,
   serializeProject,
 } from '../lib/persistence'
+import {
+  attachVideoTargetHandleForEdge,
+  computeVideoTextPromptSlot,
+  migrateVideoTargetEdges,
+  shouldInheritIntoVideoOnConnect,
+  videoTargetHandleForPendingConnectReplace,
+  VIDEO_IN_UNIFIED,
+} from '../lib/videoNodeInports'
 import { persistProjectSnapshotToExternalStores, tryLoadExternalProjectSnapshot } from '../lib/projectDiskMirror'
+import {
+  FLOWID_MATERIAL_DRAG_MIME,
+  parseFlowidMaterialDragPayload,
+} from '../lib/materialLibrary'
 import {
   FLOWID_PRESET_TEMPLATE_DRAG_MIME,
   loadPresetTemplateSnapshot,
@@ -113,6 +158,7 @@ import {
   type AiAssistantAction,
   type AiAssistantConfig,
 } from '../lib/aiAssistantAgent'
+import { augmentPromptWithMentionResolution } from '../lib/agentMentionResolution'
 import { dashScopeCompatibleModeTts404Hint, normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
 import {
   isDashScopeCompatibleModeMisusedForTts,
@@ -135,6 +181,7 @@ import {
 import { DEFAULT_WORKSPACE_LIBRARY_ID, writeLibraryProject } from '../lib/localProjectLibrary'
 import {
   getLocalImageAssetObjectUrl,
+  getDesktopMirroredOutputObjectUrlByStem,
   saveLocalImageAsset,
 } from '../lib/localImageAssetStore'
 import { mirrorComfyOutputToDisk } from '../lib/localAssetDiskMirror'
@@ -681,10 +728,100 @@ function splitTextByFixedDelimiters(raw: string): Array<{ title: string; body: s
 /**
  * 按目标节点类型构造“引用继承”补丁：写入 `@[标题](上游节点id)`，绑定具体节点而非标题猜测。
  */
+/** 解析旧版「单框 + ---PROMPT2---」存盘，仅用于一次性迁移到四路字段。 */
+function splitVideoRawPromptText(raw: string): {
+  prompt: string
+  prompt2: string
+  prompt3: string
+  prompt4: string
+} {
+  const MARK2 = '\n---PROMPT2---\n'
+  const MARK3 = '\n---PROMPT3---\n'
+  const MARK4 = '\n---PROMPT4---\n'
+  const t = String(raw ?? '').replace(/\r\n?/g, '\n')
+  if (!t.includes('---PROMPT2---')) {
+    return { prompt: t, prompt2: '', prompt3: '', prompt4: '' }
+  }
+  const i2 = t.indexOf(MARK2)
+  if (i2 < 0) return { prompt: t, prompt2: '', prompt3: '', prompt4: '' }
+  const p1 = t.slice(0, i2)
+  let rest = t.slice(i2 + MARK2.length)
+  const i3 = rest.indexOf(MARK3)
+  if (i3 < 0) {
+    return { prompt: p1, prompt2: rest, prompt3: '', prompt4: '' }
+  }
+  const p2 = rest.slice(0, i3)
+  rest = rest.slice(i3 + MARK3.length)
+  const i4 = rest.indexOf(MARK4)
+  if (i4 < 0) {
+    return { prompt: p1, prompt2: p2, prompt3: rest, prompt4: '' }
+  }
+  const p3 = rest.slice(0, i4)
+  const p4 = rest.slice(i4 + MARK4.length)
+  return { prompt: p1, prompt2: p2, prompt3: p3, prompt4: p4 }
+}
+
+/** 底部单框内拼接多段（PUA）；执行仍按字段映射到 `__PROMPT__` / `__PROMPTn__`。 */
+const VIDEO_PROMPT_PANEL_SEP = '\uE000'
+
+function getVideoPromptSlotsFromData(vd: VideoNodeData): string[] {
+  return [
+    String(vd.prompt ?? ''),
+    String(vd.prompt2 ?? ''),
+    String(vd.prompt3 ?? ''),
+    String(vd.prompt4 ?? ''),
+    ...(Array.isArray(vd.extraPrompts) ? vd.extraPrompts.map((s) => String(s ?? '')) : []),
+  ]
+}
+
+function packVideoPromptPanelValue(vd: VideoNodeData): string {
+  const slots = getVideoPromptSlotsFromData(vd)
+  let last = -1
+  for (let i = slots.length - 1; i >= 0; i -= 1) {
+    if (String(slots[i] ?? '').trim()) {
+      last = i
+      break
+    }
+  }
+  if (last < 0) return ''
+  return slots.slice(0, last + 1).join(VIDEO_PROMPT_PANEL_SEP)
+}
+
+function unpackVideoPromptPanelValue(raw: string): {
+  prompt: string
+  prompt2: string
+  prompt3: string
+  prompt4: string
+  extraPrompts: string[] | undefined
+} {
+  if (!raw.includes(VIDEO_PROMPT_PANEL_SEP)) {
+    return { prompt: raw, prompt2: '', prompt3: '', prompt4: '', extraPrompts: undefined }
+  }
+  const parts = raw.split(VIDEO_PROMPT_PANEL_SEP)
+  const tail = parts.slice(4)
+  const extraPrompts = tail.some((t) => String(t).trim()) ? tail : undefined
+  return {
+    prompt: parts[0] ?? '',
+    prompt2: parts[1] ?? '',
+    prompt3: parts[2] ?? '',
+    prompt4: parts[3] ?? '',
+    extraPrompts,
+  }
+}
+
+/** 执行诊断等：各槽非空提示词拼接（不含面板专用分隔符）。 */
+function joinVideoRawPromptText(vd: VideoNodeData): string {
+  return getVideoPromptSlotsFromData(vd)
+    .map((s) => String(s ?? '').trim())
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 function buildInheritedPatchForTarget(
   target: StudioNodeData,
   sourceTitle: string,
   sourceNodeId: string,
+  options?: { videoTextSlot?: number; sourceKind?: StudioNodeKind | string },
 ): Partial<StudioNodeData> | null {
   const cleanTitle = sourceTitle.trim()
   if (!cleanTitle || !sourceNodeId) return null
@@ -697,7 +834,24 @@ function buildInheritedPatchForTarget(
   if (target.kind === 'text') return { kind: 'text', body: injectMention(target.body) }
   if (target.kind === 'script') return { kind: 'script', body: injectMention(target.body) }
   if (target.kind === 'image') return { kind: 'image', prompt: injectMention(target.prompt) }
-  if (target.kind === 'video') return { kind: 'video', prompt: injectMention(target.prompt) }
+  if (target.kind === 'video') {
+    const vd = target as VideoNodeData
+    const sk = options?.sourceKind
+    if (sk === 'text' || sk === 'script') {
+      const slot = options?.videoTextSlot ?? 1
+      if (slot >= 5) {
+        const ei = slot - 5
+        const extras = [...(vd.extraPrompts ?? [])]
+        while (extras.length <= ei) extras.push('')
+        extras[ei] = injectMention(extras[ei])
+        return { kind: 'video', extraPrompts: extras }
+      }
+      if (slot === 2) return { kind: 'video', prompt2: injectMention(vd.prompt2) }
+      if (slot === 3) return { kind: 'video', prompt3: injectMention(vd.prompt3) }
+      if (slot === 4) return { kind: 'video', prompt4: injectMention(vd.prompt4) }
+    }
+    return { kind: 'video', prompt: injectMention(vd.prompt) }
+  }
   if (target.kind === 'audio') return { kind: 'audio', note: injectMention(target.note) }
   if (target.kind === 'music') return { kind: 'music', note: injectMention(target.note) }
   return null
@@ -870,7 +1024,7 @@ function withResolvedNodeMentions(
       data: { ...data, body: nextBody } as StudioNodeData,
     }
   }
-  if (data.kind === 'image' || data.kind === 'video') {
+  if (data.kind === 'image') {
     const referencedImages = collectMentionImageSources(data.prompt || '', allNodes, node.id)
     const nextPrompt = resolveNodeMentionsInText(data.prompt || '', allNodes, node.id)
     const prevRefs = data.referenceImageSources?.filter(Boolean) ?? []
@@ -884,6 +1038,42 @@ function withResolvedNodeMentions(
       data: {
         ...data,
         prompt: nextPrompt,
+        src: nextSrc,
+        referenceImageSources: mergedRefs,
+      } as StudioNodeData,
+    }
+  }
+  if (data.kind === 'video') {
+    const vd = data as VideoNodeData
+    const raw2 = String(vd.prompt2 || '')
+    const raw3 = String(vd.prompt3 || '')
+    const raw4 = String(vd.prompt4 || '')
+    const rawExtras = Array.isArray(vd.extraPrompts) ? vd.extraPrompts.map((s) => String(s ?? '')) : []
+    const combinedForRefs = [String(vd.prompt || ''), raw2, raw3, raw4, ...rawExtras]
+      .filter(Boolean)
+      .join('\n')
+    const referencedImages = collectMentionImageSources(combinedForRefs, allNodes, node.id)
+    const nextPrompt = resolveNodeMentionsInText(String(vd.prompt || ''), allNodes, node.id)
+    const nextPrompt2 = resolveNodeMentionsInText(raw2, allNodes, node.id)
+    const nextPrompt3 = resolveNodeMentionsInText(raw3, allNodes, node.id)
+    const nextPrompt4 = resolveNodeMentionsInText(raw4, allNodes, node.id)
+    const nextExtras = rawExtras.length
+      ? rawExtras.map((s) => resolveNodeMentionsInText(s, allNodes, node.id))
+      : undefined
+    const prevRefs = vd.referenceImageSources?.filter(Boolean) ?? []
+    const mergedRefs = Array.from(new Set([...prevRefs, ...referencedImages]))
+    const nextSrc =
+      String(vd.src || '').trim() ||
+      (referencedImages.length > 0 ? referencedImages[0] : '')
+    return {
+      ...node,
+      data: {
+        ...vd,
+        prompt: nextPrompt,
+        prompt2: nextPrompt2,
+        prompt3: nextPrompt3,
+        prompt4: nextPrompt4,
+        ...(nextExtras ? { extraPrompts: nextExtras } : {}),
         src: nextSrc,
         referenceImageSources: mergedRefs,
       } as StudioNodeData,
@@ -983,15 +1173,7 @@ type PendingConnectPreview = {
   edgeId: string
 }
 
-/**
- * 根据节点类型返回小地图配色。
- */
-function minimapColor(node: Node<StudioNodeData>): string {
-  if (node.selected) {
-    return '#b6becd'
-  }
-  return '#6f7786'
-}
+const CANVAS_DAY_MODE_STORAGE_KEY = 'flowid.canvasDayMode'
 
 /**
  * 创建一个全新的空白画布快照。
@@ -1055,6 +1237,7 @@ async function hydrateNodesLocalImageAssets(
       const srcAssetId = String(normalizedData.srcAssetId || '').trim()
       const persistedSrc = String(normalizedData.src || '').trim()
       let nextSrc = persistedSrc
+      console.log('[Flowid] hydrateNodesLocalImageAssets: processing node', { nodeId: node.id, title: data.title, kind: data.kind, srcAssetId, persistedSrc, nextSrc })
       /** Comfy 回写后的远端 URL 若仍挂着旧的 srcAssetId，hydrate 时不得用本地图盖掉 */
       if (srcAssetId && !isRemoteOrComfyViewSrc(nextSrc)) {
         const restored = await getLocalImageAssetObjectUrl(srcAssetId)
@@ -1063,13 +1246,35 @@ async function hydrateNodesLocalImageAssets(
         }
       }
       const shouldClearStaleMainAssetId = Boolean(srcAssetId) && isRemoteOrComfyViewSrc(persistedSrc)
+
+      /**
+       * 视频/音频节点：若未从 IndexedDB 恢复到源，尝试从 output 目录读取对应生成内容。
+       * 同时处理 Comfy URL 失效的情况。
+       */
+      if ((!nextSrc || nextSrc.startsWith('/_comfy_local_')) && (data.kind === 'video' || data.kind === 'audio' || data.kind === 'music')) {
+        const mediaKind = data.kind === 'video' ? 'video' : 'audio'
+        const title = String(data.title || '').trim() || String(node.id || '').trim()
+        console.log('[Flowid] Trying to restore from output:', { nodeId: node.id, title, mediaKind, hasComfyUrl: nextSrc.startsWith('/_comfy_local_') })
+        if (title) {
+          const restoredFromOutput = await getDesktopMirroredOutputObjectUrlByStem(title, mediaKind)
+          console.log('[Flowid] Restore result:', { nodeId: node.id, title, restoredFromOutput: !!restoredFromOutput })
+          if (restoredFromOutput) {
+            nextSrc = restoredFromOutput
+          }
+        }
+      }
+
       const refIds = normalizedData.referenceImageAssetIds ?? []
       const oldRefs = normalizedData.referenceImageSources ?? []
+      console.log('[Flowid] Reference images status:', { nodeId: node.id, title: data.title, refIdsLength: refIds.length, oldRefsLength: oldRefs.length, refIds, oldRefs })
       const nextRefs = [...oldRefs]
+      const hasStaleBlobUrls = oldRefs.some((ref) => String(ref || '').startsWith('blob:'))
+      console.log('[Flowid] Has stale blob URLs:', hasStaleBlobUrls)
       for (let i = 0; i < refIds.length; i += 1) {
         const aid = String(refIds[i] || '').trim()
         if (!aid) continue
         const restored = await getLocalImageAssetObjectUrl(aid)
+        console.log('[Flowid] Restoring ref image:', { index: i, assetId: aid, restored: !!restored })
         if (!restored) continue
         nextRefs[i] = restored
       }
@@ -1092,34 +1297,23 @@ async function hydrateNodesLocalImageAssets(
       continue
     }
     if (data.kind === 'panorama') {
-      const aid = String(normalizedData.srcAssetId || '').trim()
-      if (!aid) {
-        if (runtimeChanged) {
-          mutated = true
-          nextNodes.push({
-            ...node,
-            data: normalizedData,
-          })
-        } else {
-          nextNodes.push(node)
-        }
-        continue
+      const p = normalizedData as PanoramaNodeData
+      const srcAid = String(p.srcAssetId || '').trim()
+      const persistedSrc = String(p.src || '').trim()
+      let nextSrc = persistedSrc
+      if (srcAid && !isRemoteOrComfyViewSrc(persistedSrc)) {
+        const restored = await getLocalImageAssetObjectUrl(srcAid)
+        if (restored) nextSrc = restored
       }
-      const restored = await getLocalImageAssetObjectUrl(aid)
-      if (restored && restored !== String(normalizedData.src || '').trim()) {
+      const srcChanged = nextSrc !== persistedSrc
+      if (srcChanged || runtimeChanged) {
         mutated = true
         nextNodes.push({
           ...node,
           data: {
             ...normalizedData,
-            src: restored,
+            ...(srcChanged ? { src: nextSrc } : {}),
           } as StudioNodeData,
-        })
-      } else if (runtimeChanged) {
-        mutated = true
-        nextNodes.push({
-          ...node,
-          data: normalizedData,
         })
       } else {
         nextNodes.push(node)
@@ -1381,6 +1575,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     },
   ])
   const [activeProjectId, setActiveProjectId] = useState<string>(initialProjectId)
+  const projectTabsRef = useRef(projectTabs)
+  const activeProjectIdRef = useRef(activeProjectId)
+  useEffect(() => {
+    projectTabsRef.current = projectTabs
+  }, [projectTabs])
+  useEffect(() => {
+    activeProjectIdRef.current = activeProjectId
+  }, [activeProjectId])
   const [editingTabId, setEditingTabId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [nodes, setNodes] = useNodesState(loaded.nodes)
@@ -1389,6 +1591,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   useEffect(() => {
     nodesRef.current = nodes
   }, [nodes])
+
+  /** 尽早拉取主敏感词库，缩短仅用内置小表的窗口（与异步发送处的 await 配合）。 */
+  useEffect(() => {
+    ensureLexiconLoading()
+  }, [])
 
   /**
    * 当任意节点标题变更时，刷新画布中所有 `@[标题](节点id)` 的标题部分：
@@ -1450,10 +1657,22 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         }
         if (kind === 'video') {
           const d = node.data as VideoNodeData
-          const r = rewrite(d.prompt)
-          if (!r.changed) return node
+          const r1 = rewrite(d.prompt)
+          const r2 = rewrite(String(d.prompt2 || ''))
+          const r3 = rewrite(String(d.prompt3 || ''))
+          const r4 = rewrite(String(d.prompt4 || ''))
+          if (!r1.changed && !r2.changed && !r3.changed && !r4.changed) return node
           changed = true
-          return { ...node, data: { ...d, prompt: r.text } as any }
+          return {
+            ...node,
+            data: {
+              ...d,
+              prompt: r1.text,
+              prompt2: r2.text,
+              prompt3: r3.text,
+              prompt4: r4.text,
+            } as any,
+          }
         }
         if (kind === 'audio') {
           const d = node.data as AudioNodeData
@@ -1510,6 +1729,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     sourceNodesAtDragStart: [],
   })
   const [edges, setEdges, onEdgesChange] = useEdgesState(loaded.edges)
+  const edgesRef = useRef(edges)
+  useEffect(() => {
+    edgesRef.current = edges
+  }, [edges])
 
   /**
    * 占位图/视频标题随上游「可派生标题」对齐：在打开工程、改上游标题、改连线后都能收敛，
@@ -1587,9 +1810,18 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   /** 节点拖动结束后递增，配合 `nodeCanvasDragActiveRef` 在撤销栈中合并为一步 */
   const [postDragUndoTick, setPostDragUndoTick] = useState(0)
   const [leftPanel, setLeftPanel] = useState<LeftPanelType>(null)
+  /** 由首页顶栏等调用 openStudioSettingsDeviceActivation 时切到侧栏「授权码」 */
+  const [settingsFocusTab, setSettingsFocusTab] = useState<SettingsTab | null>(null)
+  const clearSettingsFocusTab = useCallback(() => {
+    setSettingsFocusTab(null)
+  }, [])
   const [rightPanelOpen, setRightPanelOpen] = useState(false)
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('system-prompts')
   const [aiAssistantDialogOpen, setAiAssistantDialogOpen] = useState(false)
+  /** 全屏 AI 工作台（与旧版浮动 AiAssistantPanel 并存；双击虚拟人打开） */
+  const [agentFloatingOpen, setAgentFloatingOpen] = useState(false)
+  /** 全屏工作台内 invoke 聊天进行中，用于虚拟人「思考」态 */
+  const [agentWorkspaceSending, setAgentWorkspaceSending] = useState(false)
   const [aiMessages, setAiMessages] = useState<AiAssistantMessage[]>([])
   const [aiBusy, setAiBusy] = useState(false)
   const [chatModelTestStatus, setChatModelTestStatus] = useState('')
@@ -1784,6 +2016,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     refreshOfficialTemplates,
     testProviderConnection,
     runNodeWorkflow,
+    workflowSnapshot,
   } = useWorkflowIntegration()
   const {
     assets,
@@ -1819,14 +2052,158 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     [historyItems, removeHistoryItems],
   )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  /** 积分预扣任务失败且已自动退还时的全局提示（仅保留最新一条） */
+  const [pointsTaskFailToast, setPointsTaskFailToast] = useState<PointsTaskFailureToastState | null>(null)
+  const pointsTaskFailToastSeqRef = useRef(0)
+  const pointsTaskFailToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
-  const { screenToFlowPosition, fitView, getViewport, setViewport, zoomIn, zoomOut, getZoom } =
+  const { screenToFlowPosition, fitView, getViewport, setViewport, zoomIn, zoomOut, getZoom, getNodes } =
     useReactFlow()
   const rfStore = useStoreApi()
   const reactFlowRootRef = useRef<HTMLDivElement | null>(null)
   const viewport = useViewport()
   /** 覆盖框选命中后，避免 setNodes 触发 selectionChange 递归循环 */
   const selectionOverrideInFlightRef = useRef(false)
+
+  useEffect(() => {
+    return subscribePointsTaskFailure((detail) => {
+      pointsTaskFailToastSeqRef.current += 1
+      const seq = pointsTaskFailToastSeqRef.current
+      if (pointsTaskFailToastTimerRef.current) {
+        clearTimeout(pointsTaskFailToastTimerRef.current)
+        pointsTaskFailToastTimerRef.current = null
+      }
+      setPointsTaskFailToast({
+        id: seq,
+        message: detail.message,
+        errorFull: detail.errorFull,
+      })
+      pointsTaskFailToastTimerRef.current = setTimeout(() => {
+        setPointsTaskFailToast((cur) => (cur && cur.id === seq ? null : cur))
+        pointsTaskFailToastTimerRef.current = null
+      }, 10000)
+    })
+  }, [])
+
+  const selectedNodeQuoteSourceKey = useMemo(() => {
+    const n = nodes.find((x) => x.id === selectedNodeId)
+    if (!n) return ''
+    const d = n.data as StudioNodeData
+    const k = d.kind
+    const cfg = nodeConfigs[k]
+    return JSON.stringify({
+      kind: k,
+      wf: d.workflowEntryId,
+      ppm: d.promptPickerMode,
+      cm: d.cloudModelName,
+      cu: d.cloudModelUrl,
+      mdl: 'model' in d ? (d as { model?: string }).model : undefined,
+      cfgSwf: cfg?.selectedWorkflowId,
+      cfgWfs: (cfg?.workflows ?? []).map((w) => `${w.id}\t${w.name}`).join('|'),
+      cfgCloud: `${String(cfg?.cloudModelName || '')}\t${String(cfg?.cloudModelUrl || '')}`,
+      sv: {
+        em: workflowSnapshot.executionMode,
+        ep: workflowSnapshot.executionProvider,
+        le: workflowSnapshot.local.enabled,
+        ce: workflowSnapshot.cloud.enabled,
+        rr: workflowSnapshot.randomizeKsamplerSeedsOnRun,
+      },
+    })
+  }, [nodes, selectedNodeId, nodeConfigs, workflowSnapshot])
+
+  /** 选中节点变化或工作流/模型变化时，拉取与预扣一致的积分预估，写入节点 `pointsReserveHint`（底部提示框等使用，不在节点角标展示） */
+  useEffect(() => {
+    const clearAllHints = () => {
+      setNodes((nds) => {
+        let changed = false
+        const next = nds.map((n) => {
+          if ((n.data as { pointsReserveHint?: number }).pointsReserveHint != null) {
+            changed = true
+            return { ...n, data: { ...n.data, pointsReserveHint: undefined } }
+          }
+          return n
+        })
+        return changed ? next : nds
+      })
+    }
+
+    if (!selectedNodeId) {
+      clearAllHints()
+      return
+    }
+
+    const lic = loadLicenseSnapshotV2()
+    const lc = String(lic?.licenseCode || '').trim()
+    const mc = String(lic?.machineId || '').trim()
+    if (!lc || !mc) {
+      clearAllHints()
+      return
+    }
+
+    const node = getNodes().find((x) => x.id === selectedNodeId) as Node<StudioNodeData> | undefined
+    const kind = node?.data?.kind
+    if (!node || kind === 'group' || kind === 'panorama') {
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== selectedNodeId) return n
+          if ((n.data as { pointsReserveHint?: number }).pointsReserveHint == null) return n
+          return { ...n, data: { ...n.data, pointsReserveHint: undefined } }
+        }),
+      )
+      return
+    }
+
+    setNodes((nds) => {
+      let changed = false
+      const next = nds.map((n) => {
+        if (n.id === selectedNodeId) return n
+        if ((n.data as { pointsReserveHint?: number }).pointsReserveHint != null) {
+          changed = true
+          return { ...n, data: { ...n.data, pointsReserveHint: undefined } }
+        }
+        return n
+      })
+      return changed ? next : nds
+    })
+
+    let params: ReturnType<typeof buildPointsReserveParams>
+    try {
+      params = buildPointsReserveParams(node, workflowSnapshot, {})
+    } catch {
+      return
+    }
+
+    let cancelled = false
+    void apiPointsQuote({
+      licenseCode: lc,
+      machineCode: mc,
+      nodeKind: params.nodeKind,
+      executionTarget: params.executionTarget,
+      metadata: params.metadata,
+    }).then((r) => {
+      if (cancelled) return
+      if (!r.success || typeof r.points !== 'number') {
+        setNodes((nds) =>
+          nds.map((n) => {
+            if (n.id !== selectedNodeId) return n
+            if ((n.data as { pointsReserveHint?: number }).pointsReserveHint == null) return n
+            return { ...n, data: { ...n.data, pointsReserveHint: undefined } }
+          }),
+        )
+        return
+      }
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== selectedNodeId) return n
+          if ((n.data as { pointsReserveHint?: number }).pointsReserveHint === r.points) return n
+          return { ...n, data: { ...n.data, pointsReserveHint: r.points } }
+        }),
+      )
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedNodeId, selectedNodeQuoteSourceKey, workflowSnapshot, getNodes, setNodes])
 
   /**
    * 启动顺序：若存在「桌面 JSON 路径 / 浏览器绑定工程文件」则优先加载并写回默认槽；
@@ -1896,6 +2273,53 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   const [zoomPercent, setZoomPercent] = useState(100)
   const [showMiniPreview, setShowMiniPreview] = useState(false)
+  const [canvasDayMode, setCanvasDayMode] = useState(() => {
+    try {
+      return typeof localStorage !== 'undefined' && localStorage.getItem(CANVAS_DAY_MODE_STORAGE_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(CANVAS_DAY_MODE_STORAGE_KEY, canvasDayMode ? '1' : '0')
+    } catch {
+      /* ignore */
+    }
+  }, [canvasDayMode])
+
+  /** 右键/分组菜单通过 portal 挂到 body，用 html 标记供全局 CSS 命中日间样式 */
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const root = document.documentElement
+    if (canvasDayMode) {
+      root.setAttribute('data-flowid-canvas-day', '1')
+    } else {
+      root.removeAttribute('data-flowid-canvas-day')
+    }
+    return () => {
+      root.removeAttribute('data-flowid-canvas-day')
+    }
+  }, [canvasDayMode])
+
+  const flowDefaultEdgeOptions = useMemo(
+    () => ({
+      animated: true as const,
+      style: { stroke: canvasDayMode ? '#737373' : '#94a3b8', strokeWidth: 2 },
+    }),
+    [canvasDayMode],
+  )
+
+  const minimapNodeColor = useCallback(
+    (node: Node<StudioNodeData>) => {
+      if (node.selected) {
+        return canvasDayMode ? '#262626' : '#b6becd'
+      }
+      return canvasDayMode ? '#525252' : '#6f7786'
+    },
+    [canvasDayMode],
+  )
+
   /** 底部提示框是否放大布局（参考外部产品的大输入区）。 */
   const [promptPanelExpanded, setPromptPanelExpanded] = useState(false)
   /** 文本节点「自动拆分」下拉：选完后重置 key，便于再次选择同一项。 */
@@ -2010,6 +2434,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const visiblePromptPanel = shouldShowPromptPanel ? promptPanel : null
   const visiblePromptPanelLayout = shouldShowPromptPanel ? promptPanelLayout : null
 
+  /** 与节点角标同源：来自 apiPointsQuote，展示在提示框执行按钮左侧 */
+  const promptPanelFootPointsHint = useMemo(() => {
+    if (!visiblePromptPanel) return null
+    const fresh = nodes.find((n) => n.id === visiblePromptPanel.node.id)
+    const h = fresh ? (fresh.data as { pointsReserveHint?: number }).pointsReserveHint : undefined
+    return typeof h === 'number' && Number.isFinite(h) ? h : null
+  }, [nodes, visiblePromptPanel])
+
   const promptPanelMentionImages = useMemo(() => {
     if (!visiblePromptPanel) return []
     const { node, kind } = visiblePromptPanel
@@ -2038,14 +2470,22 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         return 0
       })
     }
-    if (kind === 'image' || kind === 'video') {
+    if (kind === 'image') {
       return sortByRefOrder(
         listMentionImageAttachments(
-        (node.data as ImageNodeData | VideoNodeData).prompt || '',
-        nodes,
-        node.id,
+          (node.data as ImageNodeData).prompt || '',
+          nodes,
+          node.id,
         ),
       )
+    }
+    if (kind === 'video') {
+      const vd = node.data as VideoNodeData
+      const combined = getVideoPromptSlotsFromData(vd)
+        .map((s) => String(s ?? '').trim())
+        .filter(Boolean)
+        .join('\n')
+      return sortByRefOrder(listMentionImageAttachments(combined, nodes, node.id))
     }
     if (kind === 'audio' || kind === 'music') {
       return sortByRefOrder(
@@ -2073,17 +2513,47 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (!promptPanel) setPromptPanelExpanded(false)
   }, [promptPanel])
 
-  const promptPanelWorkflowOptions = useMemo(() => {
-    if (!promptPanel) return [] as string[]
+  const [cloudWorkflowMetaList, setCloudWorkflowMetaList] = useState<CloudWorkflowMeta[]>([])
+
+  useEffect(() => {
+    if (executionProvider !== 'cloud') {
+      setCloudWorkflowMetaList([])
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      const list = await fetchCloudWorkflowsMeta()
+      if (!cancelled) setCloudWorkflowMetaList(list)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [executionProvider])
+
+  /** 底部提示框工作流下拉：云端 Comfy 仅展示授权服务维护的云端工作流；本地仍用设置里的列表 */
+  const promptPanelWorkflowDropdownOptions = useMemo((): PromptPanelDropdownOption[] => {
+    if (!promptPanel) return []
     const kind = promptPanel.kind
+    if (executionProvider === 'cloud') {
+      return cloudWorkflowMetaList
+        .filter((w) => !w.nodeKind || w.nodeKind === kind)
+        .map((w) => ({ value: w.id, label: w.name }))
+    }
     const names = nodeConfigs[kind].workflows.map((item) => item.name).filter(Boolean)
-    if (names.length) return names
-    if (kind === 'music') return ['Comfy Music Flow A']
-    if (kind === 'text') return ['默认文本工作流']
-    if (kind === 'image') return ['默认图片工作流']
-    if (kind === 'video') return ['默认视频工作流']
-    return ['默认配音工作流']
-  }, [nodeConfigs, promptPanel])
+    const fallback =
+      names.length > 0
+        ? names
+        : kind === 'music'
+          ? ['Comfy Music Flow A']
+          : kind === 'text'
+            ? ['默认文本工作流']
+            : kind === 'image'
+              ? ['默认图片工作流']
+              : kind === 'video'
+                ? ['默认视频工作流']
+                : ['默认配音工作流']
+    return fallback.map((name) => ({ value: name, label: name }))
+  }, [cloudWorkflowMetaList, executionProvider, nodeConfigs, promptPanel])
 
   const promptPanelModelOptions = useMemo(() => {
     if (!promptPanel) return [] as PromptPanelDropdownOption[]
@@ -2125,15 +2595,34 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     return mode === 'model' ? 'model' : 'workflow'
   }, [promptPanel])
 
-  /** 与 `matchStudioNodeWorkflow` / 执行逻辑一致的下拉展示值，避免 model 为空时显示第一项却跑全局选中 */
+  /** 与执行逻辑一致：云端用 workflowEntryId（与选项 value 对齐）；本地用名称 */
   const promptPanelWorkflowSelectValue = useMemo(() => {
     if (!promptPanel) return ''
-    const picked = matchStudioNodeWorkflow(
-      promptPanel.node.data as { model?: string; workflowEntryId?: string },
-      nodeConfigs[promptPanel.kind],
-    ).picked
-    return picked?.name ?? promptPanelWorkflowOptions[0] ?? ''
-  }, [nodeConfigs, promptPanel, promptPanelWorkflowOptions])
+    const kind = promptPanel.kind
+    const data = promptPanel.node.data as { model?: string; workflowEntryId?: string }
+    if (executionProvider === 'cloud') {
+      const filtered = cloudWorkflowMetaList.filter((w) => !w.nodeKind || w.nodeKind === kind)
+      const eid = String(data.workflowEntryId || '').trim()
+      if (eid && filtered.some((w) => w.id === eid)) return eid
+      const modelTrim = String(data.model || '').trim()
+      if (modelTrim) {
+        const byName =
+          filtered.find((w) => w.name === modelTrim) ??
+          filtered.find((w) => w.name.trim() === modelTrim)
+        if (byName) return byName.id
+      }
+      return filtered[0]?.id ?? ''
+    }
+    const picked = matchStudioNodeWorkflow(data, nodeConfigs[kind]).picked
+    const first = promptPanelWorkflowDropdownOptions[0]?.value ?? ''
+    return picked?.name ?? first
+  }, [
+    cloudWorkflowMetaList,
+    executionProvider,
+    nodeConfigs,
+    promptPanel,
+    promptPanelWorkflowDropdownOptions,
+  ])
 
   const promptPanelText = useMemo(() => {
     if (!promptPanel) return ''
@@ -2146,12 +2635,22 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (promptPanel.kind === 'image') {
       return (promptPanel.node.data as ImageNodeData).prompt || ''
     }
-    return (promptPanel.node.data as VideoNodeData).prompt || ''
+    if (promptPanel.kind === 'video') {
+      return packVideoPromptPanelValue(promptPanel.node.data as VideoNodeData)
+    }
+    return ''
   }, [promptPanel])
 
   const unresolvedMentions = useMemo(() => {
     if (!promptPanel) return [] as string[]
-    return parseMentionRefs(promptPanelText)
+    const scanText =
+      promptPanel.kind === 'video'
+        ? getVideoPromptSlotsFromData(promptPanel.node.data as VideoNodeData)
+            .map((s) => String(s || '').trim())
+            .filter(Boolean)
+            .join('\n')
+        : promptPanelText
+    return parseMentionRefs(scanText)
       .filter((ref) => {
         const label = String(ref.label || '').trim()
         // `@系统提示词(标题)` 不是节点引用，不应触发“未匹配到节点”的提示。
@@ -2309,34 +2808,64 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     appendHistory(`创建分组：${groupNode.data.title}`)
   }, [appendHistory, nodes, setNodes])
 
+  const USER_TEXT_PATCH_KEYS = [
+    'body',
+    'prompt',
+    'prompt2',
+    'prompt3',
+    'prompt4',
+    'note',
+    'title',
+  ] as const satisfies readonly (keyof StudioNodeData | string)[]
+
   const updateNodeData = useCallback(
     (nodeId: string, patch: Partial<StudioNodeData>) => {
+      for (const k of USER_TEXT_PATCH_KEYS) {
+        if (!(k in patch)) continue
+        const v = (patch as Record<string, unknown>)[k]
+        if (typeof v !== 'string') continue
+        const gate = canSend(v)
+        if (!gate.allowed) {
+          alertSensitiveWordBlocked(gate.reason)
+          return
+        }
+      }
+      const ex = (patch as { extraPrompts?: unknown }).extraPrompts
+      if (Array.isArray(ex)) {
+        for (const s of ex) {
+          const gate = canSend(String(s ?? ''))
+          if (!gate.allowed) {
+            alertSensitiveWordBlocked(gate.reason)
+            return
+          }
+        }
+      }
+
+      const safePatch = applySensitiveFilterToNodeDataPatch(patch)
       setNodes((nds) => {
         const prevNode = nds.find((n) => n.id === nodeId)
         if (!prevNode) return nds
 
         const prevTitle = String(prevNode.data.title ?? '').trim()
         const nextTitle =
-          typeof patch.title === 'string'
-            ? String(patch.title).trim()
-            : prevTitle
+          typeof safePatch.title === 'string' ? String(safePatch.title).trim() : prevTitle
 
         let next = nds.map((n) =>
           n.id === nodeId
             ? {
                 ...n,
-                data: { ...n.data, ...patch } as StudioNodeData,
+                data: { ...n.data, ...safePatch } as StudioNodeData,
               }
             : n,
         )
 
         const sk = prevNode.data.kind
         const titleChanged =
-          typeof patch.title === 'string' && nextTitle !== prevTitle
+          typeof safePatch.title === 'string' && nextTitle !== prevTitle
         if (titleChanged && (sk === 'text' || sk === 'script')) {
           const mergedData = {
             ...prevNode.data,
-            ...patch,
+            ...safePatch,
             title: nextTitle,
           } as StudioNodeData
           const anchorNext = {
@@ -2376,6 +2905,29 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     },
     [setNodes, edges],
   )
+
+  /**
+   * 迁移旧版「第一路里含 ---PROMPT2---」的存盘到四路字段（仅在 2～4 路仍为空时执行，避免误拆）。
+   */
+  useEffect(() => {
+    if (promptPanel?.kind !== 'video') return
+    const id = promptPanel.node.id
+    const live = nodes.find((n) => n.id === id)?.data as VideoNodeData | undefined
+    if (!live) return
+    if (String(live.prompt2 || '').trim() || String(live.prompt3 || '').trim() || String(live.prompt4 || '').trim()) {
+      return
+    }
+    const p1 = String(live.prompt || '')
+    if (!p1.includes('---PROMPT2---')) return
+    const slots = splitVideoRawPromptText(p1)
+    updateNodeData(id, {
+      kind: 'video',
+      prompt: slots.prompt,
+      prompt2: slots.prompt2,
+      prompt3: slots.prompt3,
+      prompt4: slots.prompt4,
+    } as Partial<StudioNodeData>)
+  }, [nodes, promptPanel?.kind, promptPanel?.node?.id, updateNodeData])
 
   /**
    * 全景沉浸导出：更新 `rectilinearSrc`，并在画布新建图片节点（与全景横向间距 `gapFlow`）。
@@ -2482,11 +3034,53 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           return node
         }
         const kind = nk
-        const list = nodeConfigs[kind].workflows
         const data = node.data as { model?: string; workflowEntryId?: string }
-        const idSet = new Set(list.map((w) => w.id))
         let nextModel: string | undefined = data.model
         let nextWid: string | undefined = data.workflowEntryId
+
+        if (executionProvider === 'cloud') {
+          const cloudList = cloudWorkflowMetaList.filter((w) => !w.nodeKind || w.nodeKind === kind)
+          const idSet = new Set(cloudList.map((w) => w.id))
+          const entryIdTrim = normId(nextWid)
+          const modelTrim = normModel(nextModel)
+          if (entryIdTrim && !idSet.has(entryIdTrim)) {
+            nextModel = undefined
+            nextWid = undefined
+          } else if (entryIdTrim && idSet.has(entryIdTrim)) {
+            const entry = cloudList.find((w) => w.id === entryIdTrim)
+            if (entry && entry.name.trim() !== modelTrim) {
+              nextModel = entry.name
+            }
+          }
+          const eid2 = normId(nextWid)
+          const mid2 = normModel(nextModel)
+          if (!eid2 && mid2) {
+            const hit =
+              cloudList.find((w) => w.name === mid2) ?? cloudList.find((w) => w.name.trim() === mid2)
+            if (!hit) {
+              nextModel = undefined
+              nextWid = undefined
+            } else {
+              nextModel = hit.name
+              nextWid = hit.id
+            }
+          }
+          const modelSame = normModel(data.model) === normModel(nextModel)
+          const widSame = normId(data.workflowEntryId) === normId(nextWid)
+          if (modelSame && widSame) return node
+          changed = true
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              model: nextModel,
+              workflowEntryId: nextWid,
+            } as StudioNodeData,
+          }
+        }
+
+        const list = nodeConfigs[kind].workflows
+        const idSet = new Set(list.map((w) => w.id))
 
         const entryIdTrim = normId(nextWid)
         const modelTrim = normModel(nextModel)
@@ -2529,7 +3123,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       })
       return changed ? next : prev
     })
-  }, [nodeConfigs, setNodes])
+  }, [cloudWorkflowMetaList, executionProvider, nodeConfigs, setNodes])
 
   /**
    * 底部面板打开时：若节点尚未写入 `model`，则把当前解析到的工作流写回节点，与下拉展示/执行一致。
@@ -2538,6 +3132,44 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (!promptPanel) return
     const { node, kind } = promptPanel
     const data = node.data as { model?: string; workflowEntryId?: string }
+    if (executionProvider === 'cloud') {
+      const cloudList = cloudWorkflowMetaList.filter((w) => !w.nodeKind || w.nodeKind === kind)
+      const modelTrim = (data.model ?? '').trim()
+      const eidTrim = String(data.workflowEntryId || '').trim()
+      if (!modelTrim && !eidTrim && cloudList[0]) {
+        updateNodeData(node.id, {
+          kind,
+          model: cloudList[0].name,
+          workflowEntryId: cloudList[0].id,
+        } as Partial<StudioNodeData>)
+        return
+      }
+      if (eidTrim) {
+        const cw = cloudList.find((w) => w.id === eidTrim)
+        if (cw && cw.name !== modelTrim) {
+          updateNodeData(node.id, {
+            kind,
+            model: cw.name,
+            workflowEntryId: cw.id,
+          } as Partial<StudioNodeData>)
+        }
+        return
+      }
+      if (modelTrim) {
+        const hit =
+          cloudList.find((w) => w.name === modelTrim) ??
+          cloudList.find((w) => w.name.trim() === modelTrim)
+        if (hit && hit.id !== eidTrim) {
+          updateNodeData(node.id, {
+            kind,
+            model: hit.name,
+            workflowEntryId: hit.id,
+          } as Partial<StudioNodeData>)
+        }
+      }
+      return
+    }
+
     const list = nodeConfigs[kind].workflows
     const modelTrim = (data.model ?? '').trim()
     if (!modelTrim) {
@@ -2559,7 +3191,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         workflowEntryId: entry.id,
       } as Partial<StudioNodeData>)
     }
-  }, [nodeConfigs, promptPanel, updateNodeData])
+  }, [cloudWorkflowMetaList, executionProvider, nodeConfigs, promptPanel, updateNodeData])
 
   const updateNodeMeta = useCallback(
     (nodeId: string, patch: Partial<Node<StudioNodeData>>) => {
@@ -2593,8 +3225,23 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         updateNodeData(nid, { kind: 'text', body: nextText })
       } else if (promptPanel.kind === 'image') {
         updateNodeData(nid, { kind: 'image', prompt: nextText })
-      } else {
-        updateNodeData(nid, { kind: 'video', prompt: nextText })
+      } else if (promptPanel.kind === 'video') {
+        const u = unpackVideoPromptPanelValue(nextText)
+        let extras = u.extraPrompts
+        if (extras?.length) {
+          while (extras.length && !String(extras[extras.length - 1] ?? '').trim()) {
+            extras = extras.slice(0, -1)
+          }
+          if (!extras.length) extras = undefined
+        }
+        updateNodeData(nid, {
+          kind: 'video',
+          prompt: u.prompt,
+          prompt2: u.prompt2,
+          prompt3: u.prompt3,
+          prompt4: u.prompt4,
+          extraPrompts: extras,
+        } as Partial<StudioNodeData>)
       }
     },
     [promptPanel, updateNodeData],
@@ -2957,15 +3604,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           },
         }
       })
-      const pastedEdges = edgesToMerge
-        .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
-        .map((edge) => ({
-          ...structuredClone(edge),
-          id: crypto.randomUUID(),
-          source: idMap.get(edge.source) as string,
-          target: idMap.get(edge.target) as string,
-          selected: false,
-        }))
       const pastedNodeTitleById = new Map<string, string>(
         pastedNodes.map((n) => [n.id, String(n.data.title || '').trim()]),
       )
@@ -2976,7 +3614,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           if (nextBody === String(data.body || '')) return node
           return { ...node, data: { ...data, body: nextBody } as StudioNodeData }
         }
-        if (data.kind === 'image' || data.kind === 'video') {
+        if (data.kind === 'image') {
           const nextPrompt = remapMentionIdsInTextForPaste(
             String(data.prompt || ''),
             idMap,
@@ -2985,6 +3623,56 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           if (nextPrompt === String(data.prompt || '')) return node
           return { ...node, data: { ...data, prompt: nextPrompt } as StudioNodeData }
         }
+        if (data.kind === 'video') {
+          const vd = data as VideoNodeData
+          const nextPrompt = remapMentionIdsInTextForPaste(
+            String(vd.prompt || ''),
+            idMap,
+            pastedNodeTitleById,
+          )
+          const nextPrompt2 = remapMentionIdsInTextForPaste(
+            String(vd.prompt2 || ''),
+            idMap,
+            pastedNodeTitleById,
+          )
+          const nextPrompt3 = remapMentionIdsInTextForPaste(
+            String(vd.prompt3 || ''),
+            idMap,
+            pastedNodeTitleById,
+          )
+          const nextPrompt4 = remapMentionIdsInTextForPaste(
+            String(vd.prompt4 || ''),
+            idMap,
+            pastedNodeTitleById,
+          )
+          const prevExtras = Array.isArray(vd.extraPrompts) ? vd.extraPrompts : []
+          const nextExtras = prevExtras.map((s) =>
+            remapMentionIdsInTextForPaste(String(s || ''), idMap, pastedNodeTitleById),
+          )
+          const extrasUnchanged =
+            nextExtras.length === prevExtras.length &&
+            nextExtras.every((s, i) => s === String(prevExtras[i] || ''))
+          if (
+            nextPrompt === String(vd.prompt || '') &&
+            nextPrompt2 === String(vd.prompt2 || '') &&
+            nextPrompt3 === String(vd.prompt3 || '') &&
+            nextPrompt4 === String(vd.prompt4 || '') &&
+            extrasUnchanged
+          ) {
+            return node
+          }
+          return {
+            ...node,
+            data: {
+              ...vd,
+              prompt: nextPrompt,
+              prompt2: nextPrompt2,
+              prompt3: nextPrompt3,
+              prompt4: nextPrompt4,
+              ...(nextExtras.length ? { extraPrompts: nextExtras } : { extraPrompts: undefined }),
+            } as StudioNodeData,
+          }
+        }
         if (data.kind === 'audio' || data.kind === 'music') {
           const nextNote = remapMentionIdsInTextForPaste(String(data.note || ''), idMap, pastedNodeTitleById)
           if (nextNote === String(data.note || '')) return node
@@ -2992,6 +3680,19 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         }
         return node
       })
+      const pastedEdgesRemapped = edgesToMerge
+        .filter((edge) => idMap.has(edge.source) && idMap.has(edge.target))
+        .map((edge) => ({
+          ...structuredClone(edge),
+          id: crypto.randomUUID(),
+          source: idMap.get(edge.source) as string,
+          target: idMap.get(edge.target) as string,
+          selected: false,
+        }))
+      const pastedEdges = migrateVideoTargetEdges(
+        pastedNodesWithRemappedMentions,
+        pastedEdgesRemapped,
+      )
       setNodes((prev) =>
         prev.map((node) => ({ ...node, selected: false })).concat(pastedNodesWithRemappedMentions),
       )
@@ -3006,10 +3707,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   const mergePresetTemplateFromLibrary = useCallback(
     async (payload: PresetTemplateDragPayload, flowAnchor: XYPosition) => {
-      if (payload.tier === 'pro' && computeAccessState(loadLicenseSnapshotV2()) !== 'valid') {
-        window.alert('该模板为会员内容，请先激活授权。')
-        return
-      }
       try {
         const snap = await loadPresetTemplateSnapshot(payload.id)
         if (!snap.nodes?.length) {
@@ -3022,10 +3719,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         })
       } catch (e) {
         const msg = String((e as Error)?.message || e)
-        if (msg === 'MEMBER_ONLY') {
-          window.alert('该模板为会员内容，请先激活授权。')
-          return
-        }
         window.alert(msg)
       }
     },
@@ -3038,6 +3731,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const onCanvasDragOver = useCallback((event: React.DragEvent) => {
     if (!event.dataTransfer?.types?.length) return
     const types = Array.from(event.dataTransfer.types)
+    if (types.includes(FLOWID_MATERIAL_DRAG_MIME)) {
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'copy'
+      return
+    }
     if (types.includes(FLOWID_PRESET_TEMPLATE_DRAG_MIME)) {
       event.preventDefault()
       event.dataTransfer.dropEffect = 'copy'
@@ -3056,6 +3754,46 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY })
         void mergePresetTemplateFromLibrary(presetPayload, pos)
         return
+      }
+      const material = parseFlowidMaterialDragPayload(event.dataTransfer)
+      if (material?.src) {
+        const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY })
+        const newId = crypto.randomUUID()
+        const rawTitle = String(material.title || '').trim().slice(0, 80)
+        if (material.kind === 'image') {
+          const base = createStudioNode('image', newId, pos, rawTitle || undefined)
+          setNodes((nds) => [
+            ...nds,
+            { ...base, data: { ...(base.data as ImageNodeData), src: material.src } },
+          ])
+          appendHistory(`已从输出条/素材拖入画布：新建图片节点`)
+          return
+        }
+        if (material.kind === 'video') {
+          const base = createStudioNode('video', newId, pos, rawTitle || undefined)
+          setNodes((nds) => [
+            ...nds,
+            { ...base, data: { ...(base.data as VideoNodeData), src: material.src } },
+          ])
+          appendHistory(`已从输出条/素材拖入画布：新建视频节点`)
+          return
+        }
+        if (material.kind === 'audio') {
+          const base = createStudioNode('audio', newId, pos, rawTitle || undefined)
+          setNodes((nds) => [
+            ...nds,
+            {
+              ...base,
+              data: {
+                ...(base.data as AudioNodeData),
+                src: material.src,
+                resultSources: [material.src],
+              },
+            },
+          ])
+          appendHistory(`已从输出条/素材拖入画布：新建配音节点`)
+          return
+        }
       }
       const list = event.dataTransfer?.files
       if (!list?.length) return
@@ -3141,11 +3879,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       applyImageFileToNode,
       applyImageFilesToNodes,
       appendHistory,
+      createStudioNode,
       mergePresetTemplateFromLibrary,
       nodes,
       openImportedProjectInNewTab,
       parseProjectFile,
       screenToFlowPosition,
+      setNodes,
     ],
   )
 
@@ -3704,6 +4444,53 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     setActiveProjectId(nextId)
   }, [activeProjectId, getCanvasSnapshot, makeUniqueProjectName, setEdges, setNodes, setViewport])
 
+  useEffect(() => {
+    const handler = async (payload: AgentSceneBatchPayload) => {
+      try {
+        createProjectLabel()
+        await new Promise<void>((r) => {
+          setTimeout(r, 50)
+        })
+        const scriptId = crypto.randomUUID()
+        const imageId = crypto.randomUUID()
+        const scriptTitle = '自动剧本（任务）'
+        const imageTitle = `场景图×${payload.sceneCount}`
+        setNodes(() => [
+          createStudioNode('script', scriptId, { x: 140, y: 180 }, scriptTitle),
+          createStudioNode('image', imageId, { x: 600, y: 180 }, imageTitle),
+        ])
+        setEdges(() =>
+          addEdge(
+            {
+              id: crypto.randomUUID(),
+              source: scriptId,
+              target: imageId,
+              animated: true,
+              style: { strokeWidth: 2 },
+            },
+            [],
+          ),
+        )
+        await awaitSensitiveLexiconSettled()
+        const spGate = canSend(payload.userPrompt)
+        if (!spGate.allowed) {
+          alertSensitiveWordBlocked(spGate.reason ?? '指令包含敏感内容')
+          return { ok: false, summary: spGate.reason ?? '指令包含敏感内容' }
+        }
+        updateNodeData(scriptId, { kind: 'script', body: replaceSensitiveWords(payload.userPrompt) })
+        appendHistory(`智能体：已创建「${scriptTitle}」→「${imageTitle}」连线（示例）`)
+        return {
+          ok: true,
+          summary: `已完成。请在**当前新建的项目标签**画布查看「${scriptTitle}」与「${imageTitle}」及连线；剧本节点已写入你的指令。选中「${imageTitle}」后可在右侧执行出图（需已配置工作流）。`,
+        }
+      } catch (e) {
+        return { ok: false, summary: (e as Error)?.message || '执行异常' }
+      }
+    }
+    registerStudioAgentExecutor(handler)
+    return () => registerStudioAgentExecutor(null)
+  }, [appendHistory, createProjectLabel, setNodes, setEdges, updateNodeData])
+
   /**
    * 双击标签进入原位重命名。
    */
@@ -4244,33 +5031,58 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     return () => window.clearTimeout(timer)
   }, [persist, viewportVersion])
 
+  const isValidConnection = useCallback((connection: Connection | Edge) => {
+    const tid = connection.target
+    const sid = connection.source
+    if (!tid || !sid) return false
+    const t = nodesRef.current.find((n) => n.id === tid)
+    const s = nodesRef.current.find((n) => n.id === sid)
+    if (!t || !s) return true
+    if (t.data.kind !== 'video') return true
+    const th = connection.targetHandle ?? ''
+    const sk = s.data.kind
+    if (!shouldInheritIntoVideoOnConnect(sk, th || VIDEO_IN_UNIFIED)) {
+      return false
+    }
+    const dupSamePair = edgesRef.current.some((e) => e.source === sid && e.target === tid)
+    return !dupSamePair
+  }, [])
+
   const onConnect = useCallback(
     (connection: Connection) => {
       const sourceId = connection.source
       const targetId = connection.target
-      setEdges((eds) =>
-        addEdge(
-          {
-            ...connection,
-            animated: true,
-            style: { strokeWidth: 2 },
-          },
-          eds,
-        ),
-      )
+      const targetPre = targetId
+        ? nodesRef.current.find((n) => n.id === targetId)?.data.kind
+        : undefined
+      const connPayload = {
+        ...connection,
+        ...(targetPre === 'video' ? { targetHandle: VIDEO_IN_UNIFIED } : {}),
+        animated: true,
+        style: { strokeWidth: 2 },
+      }
+      setEdges((eds) => addEdge(connPayload, eds))
       if (!sourceId || !targetId) return
+      const previewEdges = addEdge(connPayload, edgesRef.current)
       setNodes((prev) => {
         const source = prev.find((n) => n.id === sourceId)
         const target = prev.find((n) => n.id === targetId)
         if (!source || !target) return prev
         const sourceTitle = String(source.data.title || '').trim()
-        const patch = buildInheritedPatchForTarget(
-          target.data,
-          sourceTitle,
-          source.id,
-        )
         const sk = source.data.kind
         const tk = target.data.kind
+        const videoTextSlot =
+          tk === 'video' && (sk === 'text' || sk === 'script')
+            ? computeVideoTextPromptSlot(previewEdges, prev, targetId, sourceId)
+            : undefined
+        const rawPatch = buildInheritedPatchForTarget(target.data, sourceTitle, source.id, {
+          sourceKind: sk,
+          videoTextSlot,
+        })
+        const patch =
+          tk === 'video' && rawPatch && !shouldInheritIntoVideoOnConnect(sk, VIDEO_IN_UNIFIED)
+            ? null
+            : rawPatch
 
         /**
          * 图片节点 <-> VR 全景节点：直接把图片资源覆盖到 panorama 的纹理上。
@@ -4315,7 +5127,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         }
         if (sk === 'text' || sk === 'script') {
           if (tk === 'image' || tk === 'video') {
-            tryAlignVisualToAnchor(source as Node<StudioNodeData>, target as Node<StudioNodeData>)
+            const alignVisualToUpstream =
+              tk !== 'video' ||
+              !((sk === 'text' || sk === 'script') && videoTextSlot !== 1)
+            if (alignVisualToUpstream) {
+              tryAlignVisualToAnchor(source as Node<StudioNodeData>, target as Node<StudioNodeData>)
+            }
           }
         }
         if (tk === 'text' || tk === 'script') {
@@ -4422,7 +5239,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             if (nextBody === String(data.body || '')) return node
             return { ...node, data: { ...data, body: nextBody } as StudioNodeData }
           }
-          if (data.kind === 'image' || data.kind === 'video') {
+          if (data.kind === 'image') {
             const nextPrompt = remapMentionIdsInTextForPaste(
               String(data.prompt || ''),
               idMap,
@@ -4430,6 +5247,47 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             )
             if (nextPrompt === String(data.prompt || '')) return node
             return { ...node, data: { ...data, prompt: nextPrompt } as StudioNodeData }
+          }
+          if (data.kind === 'video') {
+            const vd = data as VideoNodeData
+            const nextPrompt = remapMentionIdsInTextForPaste(
+              String(vd.prompt || ''),
+              idMap,
+              duplicatedNodeTitleById,
+            )
+            const nextPrompt2 = remapMentionIdsInTextForPaste(
+              String(vd.prompt2 || ''),
+              idMap,
+              duplicatedNodeTitleById,
+            )
+            const nextPrompt3 = remapMentionIdsInTextForPaste(
+              String(vd.prompt3 || ''),
+              idMap,
+              duplicatedNodeTitleById,
+            )
+            const nextPrompt4 = remapMentionIdsInTextForPaste(
+              String(vd.prompt4 || ''),
+              idMap,
+              duplicatedNodeTitleById,
+            )
+            if (
+              nextPrompt === String(vd.prompt || '') &&
+              nextPrompt2 === String(vd.prompt2 || '') &&
+              nextPrompt3 === String(vd.prompt3 || '') &&
+              nextPrompt4 === String(vd.prompt4 || '')
+            ) {
+              return node
+            }
+            return {
+              ...node,
+              data: {
+                ...vd,
+                prompt: nextPrompt,
+                prompt2: nextPrompt2,
+                prompt3: nextPrompt3,
+                prompt4: nextPrompt4,
+              } as StudioNodeData,
+            }
           }
           if (data.kind === 'audio' || data.kind === 'music') {
             const nextNote = remapMentionIdsInTextForPaste(
@@ -4826,14 +5684,31 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const title = allocateUniqueNodeTitle(allocatedTitles, baseTitle)
       setNodes((nds) => [...nds, createStudioNode(kind, id, position, title)])
       const preview = pendingConnectPreviewRef.current
+      const connectSrcId = pending.handleType === 'source' ? pending.nodeId : id
+      const connectTgtId = pending.handleType === 'source' ? id : pending.nodeId
+      const connectSrcKind: StudioNodeKind | undefined =
+        connectSrcId === id ? kind : (nodes.find((n) => n.id === connectSrcId)?.data.kind as StudioNodeKind)
+      const connectTgtKind: StudioNodeKind | undefined =
+        connectTgtId === id ? kind : (nodes.find((n) => n.id === connectTgtId)?.data.kind as StudioNodeKind)
+      const anchorKindForPreview = nodes.find((n) => n.id === pending.nodeId)?.data.kind as
+        | StudioNodeKind
+        | undefined
+      const previewVideoHandle = videoTargetHandleForPendingConnectReplace({
+        handleType: pending.handleType,
+        anchorNodeId: pending.nodeId,
+        newNodeId: id,
+        newNodeKind: kind,
+        anchorKind: anchorKindForPreview,
+      })
       if (preview) {
         setEdges((eds) =>
           eds.map((edge) =>
             edge.id === preview.edgeId
               ? {
                   ...edge,
-                  source: pending.handleType === 'source' ? pending.nodeId : id,
-                  target: pending.handleType === 'source' ? id : pending.nodeId,
+                  source: connectSrcId,
+                  target: connectTgtId,
+                  ...(previewVideoHandle ? { targetHandle: previewVideoHandle } : {}),
                 }
               : edge,
           ),
@@ -4843,13 +5718,17 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       } else {
         setEdges((eds) =>
           addEdge(
-            {
-              id: crypto.randomUUID(),
-              source: pending.handleType === 'source' ? pending.nodeId : id,
-              target: pending.handleType === 'source' ? id : pending.nodeId,
-              animated: true,
-              style: { strokeWidth: 2 },
-            },
+            attachVideoTargetHandleForEdge(
+              {
+                id: crypto.randomUUID(),
+                source: connectSrcId,
+                target: connectTgtId,
+                animated: true,
+                style: { strokeWidth: 2 },
+              },
+              connectSrcKind,
+              connectTgtKind,
+            ) as Edge,
             eds,
           ),
         )
@@ -4859,8 +5738,34 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           const source = prev.find((node) => node.id === pending.nodeId)
           const target = prev.find((node) => node.id === id)
           if (!source || !target) return prev
+          if (
+            target.data.kind === 'video' &&
+            !shouldInheritIntoVideoOnConnect(source.data.kind, VIDEO_IN_UNIFIED)
+          ) {
+            return prev
+          }
           const sourceTitle = String(source.data.title || '').trim()
-          const patch = buildInheritedPatchForTarget(target.data, sourceTitle, source.id)
+          const attached = attachVideoTargetHandleForEdge(
+            {
+              id: crypto.randomUUID(),
+              source: connectSrcId,
+              target: connectTgtId,
+              animated: true,
+              style: { strokeWidth: 2 },
+            },
+            connectSrcKind,
+            connectTgtKind,
+          ) as Edge
+          const previewEdges = addEdge(attached, edgesRef.current)
+          const videoTextSlot =
+            target.data.kind === 'video' &&
+            (source.data.kind === 'text' || source.data.kind === 'script')
+              ? computeVideoTextPromptSlot(previewEdges, prev, target.id, source.id)
+              : undefined
+          const patch = buildInheritedPatchForTarget(target.data, sourceTitle, source.id, {
+            sourceKind: source.data.kind,
+            videoTextSlot,
+          })
           if (!patch) return prev
           return prev.map((node) =>
             node.id === id
@@ -4926,15 +5831,23 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         y: anchor.position.y,
       }
       setNodes((nds) => [...nds, createStudioNode(baseKind, id, position, title)])
+      const linkSrcId = side === 'right' ? nodeId : id
+      const linkTgtId = side === 'right' ? id : nodeId
+      const linkSrcKind = side === 'right' ? anchor.data.kind : baseKind
+      const linkTgtKind = side === 'right' ? baseKind : anchor.data.kind
       setEdges((eds) =>
         addEdge(
-          {
-            id: crypto.randomUUID(),
-            source: side === 'right' ? nodeId : id,
-            target: side === 'right' ? id : nodeId,
-            animated: true,
-            style: { strokeWidth: 2 },
-          },
+          attachVideoTargetHandleForEdge(
+            {
+              id: crypto.randomUUID(),
+              source: linkSrcId,
+              target: linkTgtId,
+              animated: true,
+              style: { strokeWidth: 2 },
+            },
+            linkSrcKind,
+            linkTgtKind,
+          ) as Edge,
           eds,
         ),
       )
@@ -4943,8 +5856,34 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           const source = prev.find((node) => node.id === nodeId)
           const target = prev.find((node) => node.id === id)
           if (!source || !target) return prev
+          if (
+            target.data.kind === 'video' &&
+            !shouldInheritIntoVideoOnConnect(source.data.kind, VIDEO_IN_UNIFIED)
+          ) {
+            return prev
+          }
           const sourceTitle = String(source.data.title || '').trim()
-          const patch = buildInheritedPatchForTarget(target.data, sourceTitle, source.id)
+          const attached = attachVideoTargetHandleForEdge(
+            {
+              id: crypto.randomUUID(),
+              source: linkSrcId,
+              target: linkTgtId,
+              animated: true,
+              style: { strokeWidth: 2 },
+            },
+            linkSrcKind,
+            linkTgtKind,
+          ) as Edge
+          const previewEdges = addEdge(attached, edgesRef.current)
+          const videoTextSlot =
+            target.data.kind === 'video' &&
+            (source.data.kind === 'text' || source.data.kind === 'script')
+              ? computeVideoTextPromptSlot(previewEdges, prev, target.id, source.id)
+              : undefined
+          const patch = buildInheritedPatchForTarget(target.data, sourceTitle, source.id, {
+            sourceKind: source.data.kind,
+            videoTextSlot,
+          })
           if (!patch) return prev
           return prev.map((node) =>
             node.id === id
@@ -5079,26 +6018,47 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           y: anchor.position.y,
         }
         newNodes.push(createStudioNode(kind, newId, position, title))
-        newEdges.push({
-          id: crypto.randomUUID(),
-          source: anchorId,
-          target: newId,
-          animated: true,
-          style: { strokeWidth: 2 },
-        })
+        newEdges.push(
+          attachVideoTargetHandleForEdge(
+            {
+              id: crypto.randomUUID(),
+              source: anchorId,
+              target: newId,
+              animated: true,
+              style: { strokeWidth: 2 },
+            },
+            anchor.data.kind,
+            kind,
+          ) as Edge,
+        )
       })
 
       setNodes((prev) => [...prev, ...newNodes])
       setEdges((prev) => [...prev, ...newEdges])
 
       setNodes((prev) => {
+        const previewEdges = [...edgesRef.current, ...newEdges]
         let next = prev
         creations.forEach(({ anchorId, newId }) => {
           const source = next.find((node) => node.id === anchorId)
           const target = next.find((node) => node.id === newId)
           if (!source || !target) return
+          if (
+            target.data.kind === 'video' &&
+            !shouldInheritIntoVideoOnConnect(source.data.kind, VIDEO_IN_UNIFIED)
+          ) {
+            return
+          }
           const sourceTitle = String(source.data.title || '').trim()
-          const patch = buildInheritedPatchForTarget(target.data, sourceTitle, source.id)
+          const videoTextSlot =
+            target.data.kind === 'video' &&
+            (source.data.kind === 'text' || source.data.kind === 'script')
+              ? computeVideoTextPromptSlot(previewEdges, next, newId, anchorId)
+              : undefined
+          const patch = buildInheritedPatchForTarget(target.data, sourceTitle, source.id, {
+            sourceKind: source.data.kind,
+            videoTextSlot,
+          })
           if (!patch) return
           next = next.map((node) =>
             node.id === newId
@@ -5180,9 +6140,34 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       }
       const newNode = createStudioNode(kind, newId, newPos, title)
       let inheritedData = newNode.data as StudioNodeData
+      const syntheticEdges: Edge[] = orderedAnchors.map((source) =>
+        attachVideoTargetHandleForEdge(
+          {
+            id: crypto.randomUUID(),
+            source: source.id,
+            target: newId,
+            animated: true,
+            style: { strokeWidth: 2 },
+          },
+          source.data.kind,
+          kind,
+        ) as Edge,
+      )
+      const previewEdgesForCommon = [...edgesRef.current, ...syntheticEdges]
+      const nodesForSlot = [...nodes, newNode]
       ;[...orderedAnchors].reverse().forEach((source) => {
+        if (kind === 'video' && !shouldInheritIntoVideoOnConnect(source.data.kind, VIDEO_IN_UNIFIED))
+          return
         const sourceTitle = String(source.data.title || '').trim()
-        const patch = buildInheritedPatchForTarget(inheritedData, sourceTitle, source.id)
+        const videoTextSlot =
+          kind === 'video' &&
+          (source.data.kind === 'text' || source.data.kind === 'script')
+            ? computeVideoTextPromptSlot(previewEdgesForCommon, nodesForSlot, newId, source.id)
+            : undefined
+        const patch = buildInheritedPatchForTarget(inheritedData, sourceTitle, source.id, {
+          sourceKind: source.data.kind,
+          videoTextSlot,
+        })
         if (!patch) return
         inheritedData = {
           ...inheritedData,
@@ -5193,15 +6178,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         ...newNode,
         data: inheritedData,
       }
-      const newEdges: Array<Edge> = orderedAnchors.map((source) => ({
-        id: crypto.randomUUID(),
-        source: source.id,
-        target: newId,
-        animated: true,
-        style: { strokeWidth: 2 },
-      }))
       setNodes((prev) => [...prev, newNodeWithInherited])
-      setEdges((prev) => [...prev, ...newEdges])
+      setEdges((prev) => [...prev, ...syntheticEdges])
       dismissMultiSelectContextMenu()
       appendHistory(`新增共同节点：${kind}（连接 ${orderedAnchors.length} 个）`)
     },
@@ -5706,7 +6684,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     async (
       fresh: Node<StudioNodeData>,
       kind: StudioNodeKind,
-      result: { previewUrl: string | null; audioUrl: string | null; resultUrl: string | null; textResult?: string | null },
+      result: {
+        previewUrl: string | null
+        audioUrl: string | null
+        resultUrl: string | null
+        textResult?: string | null
+        /** 图/视频：同一任务多输出 view URL（Comfy 多分镜等） */
+        resultViewUrls?: string[]
+      },
     ) => {
       const id = fresh.id
       const mediaUrl = result.audioUrl || result.previewUrl || result.resultUrl || null
@@ -5731,10 +6716,18 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           result.audioUrl,
           ...previousSources.filter((item) => item !== result.audioUrl),
         ]
+        const thumb: NodeResultThumbnail = {
+          id: crypto.randomUUID(),
+          url: result.audioUrl,
+          mediaKind: 'audio',
+        }
+        const prevThumbs = data.resultThumbnails ?? []
+        const nextThumbs = [thumb, ...prevThumbs.filter((t) => t.url !== thumb.url)].slice(0, 36)
         updateNodeData(id, {
           kind: 'music',
           src: nextSources[0],
           resultSources: nextSources,
+          resultThumbnails: nextThumbs,
         })
         const mirror = await mirrorComfyOutputToDisk({
           url: result.audioUrl,
@@ -5769,10 +6762,18 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           result.audioUrl,
           ...previousSources.filter((item) => item !== result.audioUrl),
         ]
+        const thumb: NodeResultThumbnail = {
+          id: crypto.randomUUID(),
+          url: result.audioUrl,
+          mediaKind: 'audio',
+        }
+        const prevThumbs = data.resultThumbnails ?? []
+        const nextThumbs = [thumb, ...prevThumbs.filter((t) => t.url !== thumb.url)].slice(0, 36)
         updateNodeData(id, {
           kind: 'audio',
           src: nextSources[0],
           resultSources: nextSources,
+          resultThumbnails: nextThumbs,
         })
         const mirror = await mirrorComfyOutputToDisk({
           url: result.audioUrl,
@@ -5799,61 +6800,113 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         if (!mediaUrl) {
           throw new Error('执行完成但未检测到图片或视频输出，请检查工作流输出节点')
         }
-        let nextSrc = mediaUrl
-        let nextSrcAssetId: string | undefined
-        let nextSrcFileName: string | undefined
-        if (kind === 'image') {
-          try {
-            const res = await fetch(mediaUrl, { mode: 'cors', credentials: 'include' })
-            if (res.ok) {
-              const blob = await res.blob()
-              if (blob.size > 0 && String(blob.type || '').startsWith('image/')) {
-                const ext =
-                  blob.type.includes('png')
-                    ? 'png'
-                    : blob.type.includes('jpeg') || blob.type.includes('jpg')
-                      ? 'jpg'
-                      : blob.type.includes('webp')
-                        ? 'webp'
-                        : 'png'
-                const fileName = `${String(fresh.data.title || 'image').trim() || 'image'}.${ext}`
-                const file = new File([blob], fileName, {
-                  type: blob.type || 'image/png',
-                })
-                const aid = await saveLocalImageAsset(file)
-                const restored = await getLocalImageAssetObjectUrl(aid)
-                if (restored) {
-                  nextSrc = restored
-                  nextSrcAssetId = aid
-                  nextSrcFileName = fileName
+        const urlsRaw =
+          Array.isArray(result.resultViewUrls) && result.resultViewUrls.length
+            ? result.resultViewUrls
+            : [mediaUrl]
+        const urls = [...new Set(urlsRaw.map((u) => String(u || '').trim()).filter(Boolean))]
+        const newThumbs: NodeResultThumbnail[] = []
+        let primarySrc = ''
+        let primaryAssetId: string | undefined
+        let primaryFileName: string | undefined
+        for (let i = 0; i < urls.length; i += 1) {
+          const rawUrl = urls[i]!
+          let displayUrl = rawUrl
+          let assetId: string | undefined
+          let fileName: string | undefined
+          if (kind === 'image') {
+            try {
+              const res = await fetch(rawUrl, { mode: 'cors', credentials: 'include' })
+              if (res.ok) {
+                const blob = await res.blob()
+                if (blob.size > 0 && String(blob.type || '').startsWith('image/')) {
+                  const ext =
+                    blob.type.includes('png')
+                      ? 'png'
+                      : blob.type.includes('jpeg') || blob.type.includes('jpg')
+                        ? 'jpg'
+                        : blob.type.includes('webp')
+                          ? 'webp'
+                          : 'png'
+                  const baseTitle = `${String(fresh.data.title || 'image').trim() || 'image'}`
+                  const fileNameOne =
+                    urls.length > 1 ? `${baseTitle}-${i + 1}.${ext}` : `${baseTitle}.${ext}`
+                  const file = new File([blob], fileNameOne, {
+                    type: blob.type || 'image/png',
+                  })
+                  const aid = await saveLocalImageAsset(file)
+                  const restored = await getLocalImageAssetObjectUrl(aid)
+                  if (restored) {
+                    displayUrl = restored
+                    assetId = aid
+                    fileName = fileNameOne
+                  }
                 }
               }
+            } catch {
+              // 远端 URL 无法直接 fetch（防盗链/CORS）时，回退使用原始媒体 URL。
             }
-          } catch {
-            // 远端 URL 无法直接 fetch（防盗链/CORS）时，回退使用原始媒体 URL。
+          }
+          const mirror = await mirrorComfyOutputToDisk({
+            url: rawUrl,
+            mediaKind: kind === 'video' ? 'video' : 'image',
+            title: fresh.data.title,
+            requestHeaders: mirrorHeaders,
+          })
+          if (!mirror.saved && urls.length === 1) {
+            appendHistory(
+              `输出目录写入失败（${kind === 'image' ? '图片' : '视频'}）：${mirror.reason || '未知原因'}`,
+            )
+          } else if (mirror.filePath && urls.length === 1) {
+            appendHistory(`已保存到输出目录（${kind === 'image' ? '图片' : '视频'}）：${mirror.filePath}`)
+          }
+          newThumbs.push({
+            id: crypto.randomUUID(),
+            url: displayUrl,
+            assetId,
+            fileName,
+            diskPath: mirror.filePath || undefined,
+            mediaKind: kind === 'video' ? 'video' : 'image',
+          })
+          if (i === 0) {
+            primarySrc = displayUrl
+            primaryAssetId = assetId
+            primaryFileName = fileName
           }
         }
+        const prevThumbs =
+          kind === 'image'
+            ? (fresh.data as ImageNodeData).resultThumbnails ?? []
+            : (fresh.data as VideoNodeData).resultThumbnails ?? []
+        const merged = [...newThumbs, ...prevThumbs.filter((p) => !newThumbs.some((n) => n.url === p.url))].slice(
+          0,
+          36,
+        )
         updateNodeData(id, {
           kind,
-          src: nextSrc,
-          srcAssetId: nextSrcAssetId,
-          srcFileName: nextSrcFileName,
+          src: primarySrc || urls[0]!,
+          srcAssetId: primaryAssetId,
+          srcFileName: primaryFileName,
+          resultThumbnails: merged,
         } as Partial<StudioNodeData>)
-        const mirror = await mirrorComfyOutputToDisk({
-          url: mediaUrl,
-          mediaKind: kind === 'video' ? 'video' : 'image',
-          title: fresh.data.title,
-          requestHeaders: mirrorHeaders,
-        })
-        if (!mirror.saved) {
-          appendHistory(`输出目录写入失败（${kind === 'image' ? '图片' : '视频'}）：${mirror.reason || '未知原因'}`)
-        } else if (mirror.filePath) {
-          appendHistory(`已保存到输出目录（${kind === 'image' ? '图片' : '视频'}）：${mirror.filePath}`)
+        if (urls.length > 1) {
+          appendHistory(
+            `${kind === 'image' ? '图片' : '视频'}节点一次产出 ${urls.length} 个文件，已加入底部输出条并可展开查看`,
+          )
+        }
+        if (urls.length > 1) {
+          let mirrorOk = 0
+          for (const t of newThumbs) {
+            if (t.diskPath) mirrorOk += 1
+          }
+          if (mirrorOk > 0) {
+            appendHistory(`已镜像 ${mirrorOk}/${urls.length} 个文件到本地输出目录`)
+          }
         }
         appendHistory({
           text: kind === 'image' ? '图片生成成功' : '视频生成成功',
           kind,
-          src: mediaUrl,
+          src: urls[0]!,
           title: fresh.data.title,
         })
         return
@@ -5907,17 +6960,28 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     executeSingleNode: async (node) => {
       const kind = node.data.kind
       if (kind === 'group') return
+      await awaitSensitiveLexiconSettled()
       const latest = nodes.find((n) => n.id === node.id) ?? node
       const prepared = withResolvedNodeMentions(latest, nodes)
+      const sensitiveBlob = collectUserFacingTextFromNodeData(prepared.data as StudioNodeData)
+      const sensitiveGate = canSend(sensitiveBlob, true)
+      if (!sensitiveGate.allowed) {
+        appendHistory(`${String(kind)}节点未执行：${sensitiveGate.reason ?? ''}`)
+        alertSensitiveWordBlocked(sensitiveGate.reason ?? '提示词包含敏感内容，已取消执行')
+        return false
+      }
       const result = await runNodeWorkflow(prepared, {
         allNodes: nodes,
+        studioEdges: edgesRef.current,
         runNodeTitle: String(latest.data.title || latest.id),
         executionTarget:
           (latest.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow',
         rawPromptText:
-          latest.data.kind === 'image' || latest.data.kind === 'video'
-            ? String((latest.data as ImageNodeData | VideoNodeData).prompt || '')
-            : undefined,
+          latest.data.kind === 'image'
+            ? String((latest.data as ImageNodeData).prompt || '')
+            : latest.data.kind === 'video'
+              ? joinVideoRawPromptText(latest.data as VideoNodeData)
+              : undefined,
         rawNoteText:
           latest.data.kind === 'audio' || latest.data.kind === 'music'
             ? String((latest.data as AudioNodeData).note || '')
@@ -5946,6 +7010,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     window.alert('您的授权已到期。如需继续使用会员模板/云端能力，请续费并刷新授权。')
     return false
   }, [])
+
+  const runNodeFromCanvas = useCallback(
+    async (nodeId: string) => {
+      if (!ensureLicenseCanSubmit()) return
+      await executeNodeIds([nodeId], '画布节点执行')
+    },
+    [ensureLicenseCanSubmit, executeNodeIds],
+  )
 
   const pollPendingCloudTaskAndBackfill = useCallback(async (
     taskId: string,
@@ -5989,7 +7061,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         const status = String(json.status || '').trim().toLowerCase()
         if (status === 'success') {
           const mediaUrls = Array.isArray(json.result?.mediaUrls) ? json.result?.mediaUrls ?? [] : []
-          const outputUrl = String(mediaUrls[0] || '').trim()
+          const normalizedUrls = mediaUrls.map((u) => String(u || '').trim()).filter(Boolean)
+          const outputUrl = normalizedUrls[0] || ''
           if (!outputUrl) {
             appendHistory(`云端任务 ${tid} 已完成，但未返回可回填媒体 URL`)
             return
@@ -6008,6 +7081,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             previewUrl: isAudio ? null : outputUrl,
             audioUrl: isAudio ? outputUrl : null,
             resultUrl: outputUrl,
+            resultViewUrls:
+              !isAudio && (kind === 'image' || kind === 'video') && normalizedUrls.length
+                ? normalizedUrls
+                : undefined,
           })
           updateNodeData(nodeId, {
             kind,
@@ -6139,101 +7216,165 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   const workflowBusyForAiPlanning = isWorkflowRunnerRunning
 
+  type ExecuteAiAssistantOpts = {
+    queued?: boolean
+    /** 全屏工作台：不写入旧浮动面板消息列表 */
+    replySink?: (msg: string, role?: 'assistant' | 'system') => void
+    skipConfirm?: boolean
+    silentPlanning?: boolean
+  }
+
   /**
    * MVP：解析自然语言并映射到本地工具调用（建节点/连线/执行）。
    */
-  const executeAiAssistantCommand = useCallback(async (text: string, queued = false) => {
-    setAiBusy(true)
-    const reply = (msg: string, role: 'assistant' | 'system' = 'assistant') =>
-      setAiMessages((prev) => [...prev, { id: crypto.randomUUID(), role, text: msg }])
-    try {
-      const raw = text.trim()
-      if (!raw) {
-        reply('请输入要执行的指令。', 'system')
-        return
-      }
-      if (queued) {
-        reply(`工作流已空闲，继续处理缓存指令：${raw}`, 'system')
-      }
-      const modelActions = await planActionsWithModel(raw, nodes, aiConfig)
-      const actions = modelActions.length ? modelActions : planActionsWithRules(raw)
-      if (!actions.length) {
-        const chatText = await chatReplyWithModel(raw, aiConfig)
-        if (chatText) {
-          reply(chatText)
-        } else {
-          if (!aiOfflineFallbackHintShownRef.current) {
-            aiOfflineFallbackHintShownRef.current = true
-            reply('提示：当前本地模型未连接，已切换为离线兜底聊天模式。', 'system')
-          }
-          reply(buildLocalSmallTalkReply(raw))
+  const executeAiAssistantCommand = useCallback(
+    async (text: string, opts: ExecuteAiAssistantOpts = {}) => {
+      const { queued = false, replySink, skipConfirm = false, silentPlanning = false } = opts
+      setAiBusy(true)
+      const reply = (msg: string, role: 'assistant' | 'system' = 'assistant') => {
+        const out = replaceSensitiveWords(msg)
+        if (replySink) {
+          replySink(out, role)
+          return
         }
-        return
+        setAiMessages((prev) => [...prev, { id: crypto.randomUUID(), role, text: out }])
       }
-      reply(`已生成 ${actions.length} 条动作：${actions.map(describeAiAction).join('；')}`)
-      for (const action of actions) {
-        if (aiConfig.confirmBeforeRun) {
-          const ok = window.confirm(`AI 助手准备执行：${describeAiAction(action)}\n是否继续？`)
-          if (!ok) {
-            reply(`已取消：${describeAiAction(action)}`, 'system')
+      try {
+        await awaitSensitiveLexiconSettled()
+        const raw = text.trim()
+        if (!raw) {
+          reply('请输入要执行的指令。', 'system')
+          return
+        }
+        const gate = canSend(raw)
+        if (!gate.allowed) {
+          reply(gate.reason ?? '消息包含敏感内容，无法发送', 'system')
+          alertSensitiveWordBlocked(gate.reason)
+          return
+        }
+        const safeText = replaceSensitiveWords(raw)
+        if (queued) {
+          reply(`工作流已空闲，继续处理缓存指令：${safeText}`, 'system')
+        }
+        const tabsBrief = projectTabsRef.current.map((t) => ({ id: t.id, name: t.name }))
+        const forModel = augmentPromptWithMentionResolution(safeText, nodes, tabsBrief)
+        const modelActions = await planActionsWithModel(forModel, nodes, aiConfig)
+        let actions = modelActions.length ? modelActions : planActionsWithRules(safeText)
+        /** 项目标签 id 与节点 id 同为 uuid；误把 @项目(...) 规划成 run_node 时会找不到节点 */
+        const tabUuidRe =
+          /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i
+        actions = actions.filter((action) => {
+          if (action.type !== 'run_node') return true
+          const q = (action.targetQuery || '').trim()
+          if (!q || action.current) return true
+          if (!tabUuidRe.test(q)) return true
+          if (nodes.some((n) => n.id === q)) return true
+          if (projectTabsRef.current.some((t) => t.id === q)) return false
+          return true
+        })
+        if (!actions.length) {
+          const chatText = await chatReplyWithModel(forModel, aiConfig)
+          if (chatText) {
+            reply(chatText)
+          } else {
+            if (!aiOfflineFallbackHintShownRef.current) {
+              aiOfflineFallbackHintShownRef.current = true
+              reply('提示：当前本地模型未连接，已切换为离线兜底聊天模式。', 'system')
+            }
+            reply(buildLocalSmallTalkReply(safeText))
+          }
+          return
+        }
+        if (!silentPlanning) {
+          reply(`已生成 ${actions.length} 条动作：${actions.map(describeAiAction).join('；')}`)
+        }
+        for (const action of actions) {
+          if (!skipConfirm && aiConfig.confirmBeforeRun) {
+            const ok = window.confirm(`AI 助手准备执行：${describeAiAction(action)}\n是否继续？`)
+            if (!ok) {
+              reply(`已取消：${describeAiAction(action)}`, 'system')
+              continue
+            }
+          }
+          if (action.type === 'create_node') {
+            addNode(action.kind)
+            appendHistory(`AI 助手创建节点：${action.kind}`)
+            const label =
+              action.kind === 'text'
+                ? '文字'
+                : action.kind === 'script'
+                  ? '脚本'
+                  : action.kind === 'image'
+                    ? '图片'
+                    : action.kind === 'video'
+                      ? '视频'
+                      : action.kind === 'audio'
+                        ? '配音'
+                        : action.kind === 'music'
+                          ? '音乐'
+                          : action.kind === 'panorama'
+                            ? '全景'
+                            : '节点'
+            reply(`好的，已创建${label}节点（可在画布上查看）。`)
             continue
           }
-        }
-        if (action.type === 'create_node') {
-          addNode(action.kind)
-          appendHistory(`AI 助手创建节点：${action.kind}`)
-          reply(`已创建节点：${action.kind}`)
-          continue
-        }
-        if (action.type === 'connect_nodes') {
-          const s = findNodeByLabelOrId(action.sourceQuery)
-          const t = findNodeByLabelOrId(action.targetQuery)
-          if (!s || !t) {
-            reply(`未找到节点：${!s ? action.sourceQuery : ''}${!s && !t ? ' / ' : ''}${!t ? action.targetQuery : ''}`)
+          if (action.type === 'connect_nodes') {
+            const s = findNodeByLabelOrId(action.sourceQuery)
+            const t = findNodeByLabelOrId(action.targetQuery)
+            if (!s || !t) {
+              reply(
+                `未找到节点：${!s ? action.sourceQuery : ''}${!s && !t ? ' / ' : ''}${!t ? action.targetQuery : ''}`,
+              )
+              continue
+            }
+            if (s.id === t.id) {
+              reply('同一个节点不能连接到自身。')
+              continue
+            }
+            setEdges((eds) =>
+              addEdge(
+                attachVideoTargetHandleForEdge(
+                  {
+                    id: crypto.randomUUID(),
+                    source: s.id,
+                    target: t.id,
+                    animated: true,
+                    style: { strokeWidth: 2 },
+                  },
+                  s.data.kind,
+                  t.data.kind,
+                ) as Edge,
+                eds,
+              ),
+            )
+            appendHistory(`AI 助手连线：${s.data.title} -> ${t.data.title}`)
+            reply(`已完成连接：「${String(s.data.title || '').trim()}」→「${String(t.data.title || '').trim()}」。`)
             continue
           }
-          if (s.id === t.id) {
-            reply('同一个节点不能连接到自身。')
-            continue
+          if (action.type === 'run_node') {
+            if (!ensureLicenseCanSubmit()) continue
+            let targetId = selectedNodeId
+            if (!action.current && action.targetQuery) {
+              const node = findNodeByLabelOrId(action.targetQuery)
+              targetId = node?.id ?? null
+            }
+            if (!targetId) {
+              reply('请先选中一个节点，或在命令中指定节点名。')
+              continue
+            }
+            await executeNodeIds([targetId], 'AI 助手执行节点')
+            const n = nodes.find((x) => x.id === targetId)
+            reply(`已触发执行：${n?.data.title || targetId}`)
           }
-          setEdges((eds) =>
-            addEdge(
-              {
-                id: crypto.randomUUID(),
-                source: s.id,
-                target: t.id,
-                animated: true,
-                style: { strokeWidth: 2 },
-              },
-              eds,
-            ),
-          )
-          appendHistory(`AI 助手连线：${s.data.title} -> ${t.data.title}`)
-          reply(`已连线：${s.data.title} -> ${t.data.title}`)
-          continue
         }
-        if (action.type === 'run_node') {
-          if (!ensureLicenseCanSubmit()) continue
-          let targetId = selectedNodeId
-          if (!action.current && action.targetQuery) {
-            const node = findNodeByLabelOrId(action.targetQuery)
-            targetId = node?.id ?? null
-          }
-          if (!targetId) {
-            reply('请先选中一个节点，或在命令中指定节点名。')
-            continue
-          }
-          await executeNodeIds([targetId], 'AI 助手执行节点')
-          const n = nodes.find((x) => x.id === targetId)
-          reply(`已触发执行：${n?.data.title || targetId}`)
-        }
+      } catch (error) {
+        reply(`执行失败：${(error as Error)?.message || '未知错误'}`, 'system')
+      } finally {
+        setAiBusy(false)
       }
-    } catch (error) {
-      reply(`执行失败：${(error as Error)?.message || '未知错误'}`, 'system')
-    } finally {
-      setAiBusy(false)
-    }
-  }, [addNode, aiConfig, appendHistory, describeAiAction, ensureLicenseCanSubmit, executeNodeIds, findNodeByLabelOrId, nodes, selectedNodeId, setEdges])
+    },
+    [addNode, aiConfig, appendHistory, describeAiAction, ensureLicenseCanSubmit, executeNodeIds, findNodeByLabelOrId, nodes, selectedNodeId, setEdges],
+  )
 
   /**
    * 用户发送入口：工作流繁忙时，本地模型改为排队，避免与主工作流争抢本地 GPU。
@@ -6241,14 +7382,29 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const handleAiAssistantSend = useCallback(async (text: string) => {
     const raw = text.trim()
     if (!raw) return
-    const userMsg: AiAssistantMessage = { id: crypto.randomUUID(), role: 'user', text: raw }
+    await awaitSensitiveLexiconSettled()
+    const gate = canSend(raw)
+    if (!gate.allowed) {
+      alertSensitiveWordBlocked(gate.reason)
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: 'system',
+          text: gate.reason ?? '消息包含敏感内容，无法发送',
+        },
+      ])
+      return
+    }
+    const safeText = replaceSensitiveWords(raw)
+    const userMsg: AiAssistantMessage = { id: crypto.randomUUID(), role: 'user', text: safeText }
     setAiMessages((prev) => [...prev, userMsg])
     const shouldQueueLocalModel =
       aiConfig.provider === 'ollama' &&
       aiConfig.pauseLocalModelWhenWorkflowRunning &&
       workflowBusyForAiPlanning
     if (shouldQueueLocalModel) {
-      aiDeferredQueueRef.current.push(raw)
+      aiDeferredQueueRef.current.push(safeText)
       setAiMessages((prev) => [
         ...prev,
         {
@@ -6259,15 +7415,164 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       ])
       return
     }
-    await executeAiAssistantCommand(raw, false)
+    await executeAiAssistantCommand(safeText, {})
   }, [aiConfig, executeAiAssistantCommand, workflowBusyForAiPlanning])
 
   useEffect(() => {
     if (workflowBusyForAiPlanning || aiBusy) return
     const next = aiDeferredQueueRef.current.shift()
     if (!next) return
-    void executeAiAssistantCommand(next, true)
+    void executeAiAssistantCommand(next, { queued: true })
   }, [aiBusy, executeAiAssistantCommand, workflowBusyForAiPlanning])
+
+  useEffect(() => {
+    const handler: StudioAgentChatHandler = async (text, options) => {
+      await awaitSensitiveLexiconSettled()
+      const mode: AgentParseMode = options?.mode ?? 'rules'
+      if (mode !== 'rules') {
+        const hist = options?.history ?? []
+        const t0 = text.trim()
+        const pg = canSend(t0)
+        if (!pg.allowed) {
+          alertSensitiveWordBlocked(pg.reason)
+          return [pg.reason ?? '消息包含敏感内容，无法发送']
+        }
+        const userLine = replaceSensitiveWords(t0)
+        const replyText = await callLLM([...hist, { role: 'user', content: userLine }], aiConfig)
+        return [replaceSensitiveWords(replyText)]
+      }
+
+      const raw = text.trim()
+      const pg = canSend(raw)
+      if (!pg.allowed) {
+        alertSensitiveWordBlocked(pg.reason)
+        return [pg.reason ?? '消息包含敏感内容，无法发送']
+      }
+      const safeLine = replaceSensitiveWords(raw)
+      const batchMatch =
+        /\d+\s*张/.test(safeLine) &&
+        (/场景图/.test(safeLine) ||
+          /场景/.test(safeLine) ||
+          (/张/.test(safeLine) && /图/.test(safeLine) && /产品|做|生成/.test(safeLine)))
+      if (batchMatch) {
+        const est = estimateSceneBatchFromText(safeLine)
+        const points = Math.max(10, est.sceneCount * 10)
+        const res = await invokeStudioAgentExecution({
+          kind: 'scene-batch',
+          userPrompt: safeLine,
+          sceneCount: est.sceneCount,
+          points,
+        })
+        return res.ok
+          ? [
+              replaceSensitiveWords(`收到，正在按约 ${est.sceneCount} 张场景图搭建工作流…`),
+              replaceSensitiveWords(res.summary),
+            ]
+          : [replaceSensitiveWords(`执行未完成：${res.summary}`)]
+      }
+
+      if (
+        aiConfig.provider === 'ollama' &&
+        aiConfig.pauseLocalModelWhenWorkflowRunning &&
+        workflowBusyForAiPlanning
+      ) {
+        return [
+          '当前工作流正在运行，请稍后重试；或在「设置 → AI 助手」中切换到云端模型 / 关闭「工作流运行时暂停本地模型」。',
+        ]
+      }
+
+      const lines: string[] = []
+      await executeAiAssistantCommand(safeLine, {
+        replySink: (msg) => lines.push(msg),
+        skipConfirm: true,
+        silentPlanning: true,
+      })
+      return lines.length ? lines : ['好的。']
+    }
+    registerStudioAgentChatHandler(handler)
+    return () => registerStudioAgentChatHandler(null)
+  }, [aiConfig, executeAiAssistantCommand, workflowBusyForAiPlanning])
+
+  useEffect(() => {
+    registerAgentCanvasTasksProvider(() => {
+      /** 与 React Flow 内部 store 同步，避免与 `nodes` 渲染帧差一拍；仅排除幽灵占位，分组与业务节点一律列出 */
+      return getNodes()
+        .filter((n) => n.type !== 'ghost')
+        .map((n) => {
+          const d = n.data as StudioNodeData | undefined
+          const kind = (d?.kind ?? n.type ?? 'other') as string
+          const trimmed = d && typeof d.title === 'string' ? d.title.trim() : ''
+          const title = trimmed || defaultStudioNodeTitle(kind)
+          return {
+            nodeId: n.id,
+            kind,
+            title,
+            runStatus: d?.runStatus,
+            runProgress: d?.runProgress,
+            sortY: n.position?.y ?? 0,
+            sortX: n.position?.x ?? 0,
+          }
+        })
+    })
+    registerAgentNavigateToNode((nodeId) => {
+      const n = getNodes().find((x) => x.id === nodeId) ?? nodesRef.current.find((x) => x.id === nodeId)
+      if (!n) return
+      void fitView({ nodes: [n], padding: 0.38, duration: 420 })
+      updateNodeMeta(nodeId, { className: 'studio-node--agent-pick-flash' })
+      window.setTimeout(() => {
+        updateNodeMeta(nodeId, { className: undefined })
+      }, 2000)
+    })
+    registerAgentProjectContextProvider(() => {
+      const tabs = projectTabsRef.current
+      const activeId = activeProjectIdRef.current
+      const paths = loadLocalDiskPathsSettings()
+      const dir = paths.flowidProjectJsonPath.trim()
+
+      const describeTab = (t: (typeof tabs)[number]) => {
+        const fp = t.filePath?.trim()
+        if (fp) return `打开来源：${fp}`
+        if (dir) {
+          const sep = dir.includes('\\') ? '\\' : '/'
+          const base = dir.replace(/[\\/]+$/, '')
+          return `工程目录：${base}${sep}`
+        }
+        return '当前为浏览器本地存档；可在「设置 → 本地路径」绑定工程目录'
+      }
+
+      return tabs.map((t) => ({
+        id: `tab:${t.id}`,
+        label: t.name?.trim() || '未命名项目',
+        description: describeTab(t),
+        isActive: t.id === activeId,
+      }))
+    })
+    return () => {
+      registerAgentCanvasTasksProvider(null)
+      registerAgentNavigateToNode(null)
+      registerAgentProjectContextProvider(null)
+    }
+  }, [fitView, getNodes, updateNodeMeta])
+
+  useEffect(() => {
+    registerAgentOpenCanvasSettings(() => {
+      setAgentFloatingOpen(false)
+      // 助手层 z-[12000]；设置弹层若仍为 z-[100] 会被压在下面看似无响应。延后一帧再打开，避免与 portaled 层点击顺序打架。
+      window.setTimeout(() => {
+        clearSettingsFocusTab()
+        setLeftPanel('settings')
+      }, 0)
+    })
+    return () => registerAgentOpenCanvasSettings(null)
+  }, [clearSettingsFocusTab])
+
+  useEffect(() => {
+    registerStudioDeviceActivationOpener(() => {
+      setSettingsFocusTab('device-activation')
+      setLeftPanel('settings')
+    })
+    return () => registerStudioDeviceActivationOpener(null)
+  }, [])
 
   /**
    * 将助手文本通过 OpenAI 兼容 TTS 接口转为语音并播放。
@@ -6534,7 +7839,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     audio.muted = false
     aiTtsAudioRef.current = audio
     await audio.play()
-    return { size: blob.size }
   }, [aiConfig.ttsApiKey, aiConfig.ttsCloneAudioDataUrl, aiConfig.ttsCloneAudioName, aiConfig.ttsEndpoint, aiConfig.ttsModel, aiConfig.ttsVoice])
 
   const testAiChatModelFromPanel = useCallback(async () => {
@@ -6645,10 +7949,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const dockAvatarState = useMemo(
     () =>
       resolveDockAssistantAvatarState({
-        busy: aiBusy,
+        busy: aiBusy || agentWorkspaceSending,
         messages: aiMessages,
       }),
-    [aiBusy, aiMessages],
+    [agentWorkspaceSending, aiBusy, aiMessages],
   )
   const dockAvatarMedia = AI_ASSISTANT_AVATAR_MEDIA[dockAvatarState]
   const aiAssistantDockStyle = useMemo(() => {
@@ -6684,7 +7988,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   }, [aiConfig.virtualAvatarVisible, avatarDockRect.height, avatarDockRect.left, avatarDockRect.top])
 
   useEffect(() => {
-    if (!aiConfig.virtualAvatarVisible) setAiAssistantDialogOpen(false)
+    if (!aiConfig.virtualAvatarVisible) {
+      setAiAssistantDialogOpen(false)
+      setAgentFloatingOpen(false)
+    }
   }, [aiConfig.virtualAvatarVisible])
 
   useEffect(() => {
@@ -6787,6 +8094,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   ) => {
     if (!ensureLicenseCanSubmit()) return
     try {
+      await awaitSensitiveLexiconSettled()
       let panel = panelArg ?? promptPanel
       if (!panel && selectedNodeId) {
         const selected = nodes.find((n) => n.id === selectedNodeId) ?? null
@@ -6806,6 +8114,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const latestNodes = nodesRef.current
       const fresh = latestNodes.find((n) => n.id === panelNode.id) ?? panelNode
       const prepared = withResolvedNodeMentions(fresh, latestNodes)
+      const sensitiveBlob = collectUserFacingTextFromNodeData(prepared.data as StudioNodeData)
+      const sensitiveGate = canSend(sensitiveBlob, true)
+      if (!sensitiveGate.allowed) {
+        alertSensitiveWordBlocked(sensitiveGate.reason ?? '提示词包含敏感内容，已取消执行')
+        appendHistory(`${fresh.data.title || fresh.id}：${sensitiveGate.reason ?? '已取消执行'}`)
+        return
+      }
       const id = fresh.id
       if (promptPanelSubmittingNodeIdsRef.current.has(id)) {
         const tip = '任务已提交，请勿重复点击'
@@ -6824,13 +8139,16 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         updateNodeData(id, { kind, runStatus: 'running' } as Partial<StudioNodeData>)
         const result = await runNodeWorkflow(prepared, {
           allNodes: latestNodes,
+          studioEdges: edgesRef.current,
           runNodeTitle: String(fresh.data.title || fresh.id),
           executionTarget:
             (fresh.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow',
           rawPromptText:
-            fresh.data.kind === 'image' || fresh.data.kind === 'video'
-              ? String((fresh.data as ImageNodeData | VideoNodeData).prompt || '')
-              : undefined,
+            fresh.data.kind === 'image'
+              ? String((fresh.data as ImageNodeData).prompt || '')
+              : fresh.data.kind === 'video'
+                ? joinVideoRawPromptText(fresh.data as VideoNodeData)
+                : undefined,
           rawNoteText:
             fresh.data.kind === 'audio' || fresh.data.kind === 'music'
               ? String((fresh.data as AudioNodeData).note || '')
@@ -7021,6 +8339,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       updateNodeMeta={updateNodeMeta}
       removeNodeById={removeNodeById}
       addPanoramaViewToCanvas={addPanoramaViewToCanvas}
+      runNodeFromCanvas={runNodeFromCanvas}
     >
       <input
         ref={uploadInputRef}
@@ -7044,7 +8363,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         }}
       >
         <div
-          className="studio-flow-wrap"
+          className={canvasDayMode ? 'studio-flow-wrap studio-flow-wrap--canvas-day' : 'studio-flow-wrap'}
           onMouseDownCapture={(event) => {
             const target = event.target as HTMLElement | null
             if (!target) return
@@ -7080,10 +8399,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 setAiAssistantDialogOpen(false)
               }
             }
+            if (agentFloatingOpen && target.closest('[data-studio-agent-workspace="1"]')) {
+              return
+            }
             if (!leftPanel) return
             if (leftPanel === 'settings') {
               const clickedSettingsModal = target.closest('[data-studio-settings-modal="1"]')
               if (!clickedSettingsModal) {
+                clearSettingsFocusTab()
                 setLeftPanel(null)
               }
               return
@@ -7098,11 +8421,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         >
           {/* Canvas background overlay (UI-only) */}
           <div
-            className="fixed inset-0 opacity-[0.05] pointer-events-none z-0"
-            style={{
-              backgroundImage: 'radial-gradient(circle, #fff 1.2px, transparent 1.2px)',
-              backgroundSize: '48px 48px',
-            }}
+            className="studio-canvas-grain fixed inset-0 pointer-events-none z-0"
             aria-hidden
           />
 
@@ -7111,11 +8430,21 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             aria-label="画布顶部栏"
           >
             <div className="studio-canvas-topbar__brand flex items-center gap-4 pointer-events-auto">
-              <div className="flex items-center gap-3 bg-[#111114] border border-white/5 px-4 py-2 rounded-full shadow-2xl backdrop-blur-xl">
+              <div
+                className={
+                  canvasDayMode
+                    ? 'flex items-center gap-3 bg-[#FFFFFF] border border-[#E8E8E8] px-4 py-2 rounded-2xl shadow-[0_8px_32px_rgba(38,38,38,0.08)] backdrop-blur-xl'
+                    : 'flex items-center gap-3 bg-[#111114] border border-white/5 px-4 py-2 rounded-full shadow-2xl backdrop-blur-xl'
+                }
+              >
                 {/* Brand */}
                 <button
                   type="button"
-                  className="flex items-center gap-2 rounded-full px-1 text-left transition-colors hover:bg-white/5"
+                  className={
+                    canvasDayMode
+                      ? 'flex items-center gap-2 rounded-xl px-1 text-left transition-colors hover:bg-[#F5F5F5]'
+                      : 'flex items-center gap-2 rounded-full px-1 text-left transition-colors hover:bg-white/5'
+                  }
                   title="回到首页"
                   aria-label="回到首页"
                   onClick={() => {
@@ -7127,12 +8456,21 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                   }}
                 >
                   <FlowidMark />
-                  <span className="text-sm font-black tracking-widest uppercase text-white/90">
+                  <span
+                    className={
+                      canvasDayMode
+                        ? 'text-sm font-black tracking-widest uppercase text-[#262626]'
+                        : 'text-sm font-black tracking-widest uppercase text-white/90'
+                    }
+                  >
                     Flowid
                   </span>
                 </button>
 
-                <div className="w-[1px] h-4 bg-white/10 mx-2" aria-hidden />
+                <div
+                  className={canvasDayMode ? 'w-[1px] h-4 bg-[#E8E8E8] mx-2' : 'w-[1px] h-4 bg-white/10 mx-2'}
+                  aria-hidden
+                />
 
                 {/* Project tabs (keep behavior; match fig-1 look) */}
                 <div className="flex items-center gap-2">
@@ -7142,7 +8480,15 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       <div
                         key={tab.id}
                         className={`studio-project-pill group flex items-center gap-2 px-2 py-1 transition-colors cursor-pointer select-none ${
-                          isActive ? 'text-white' : 'text-white/70 hover:text-white'
+                          isActive ? 'is-active' : ''
+                        } ${
+                          canvasDayMode
+                            ? isActive
+                              ? 'text-[#262626]'
+                              : 'text-[#525252] hover:text-[#262626]'
+                            : isActive
+                              ? 'text-white'
+                              : 'text-white/70 hover:text-white'
                         }`}
                         onClick={() => activateProjectTab(tab.id)}
                         onDoubleClick={() => startRenameProjectLabel(tab.id)}
@@ -7157,7 +8503,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       >
                         {editingTabId === tab.id ? (
                           <input
-                            className="studio-project-pill__input bg-transparent outline-none border border-white/15 rounded-md px-2 py-0.5 text-[13px] font-black tracking-widest uppercase text-white/90"
+                            className={
+                              canvasDayMode
+                                ? 'studio-project-pill__input bg-[#FFFFFF] outline-none border border-[#E8E8E8] rounded-md px-2 py-0.5 text-[13px] font-black tracking-widest uppercase text-[#262626]'
+                                : 'studio-project-pill__input bg-transparent outline-none border border-white/15 rounded-md px-2 py-0.5 text-[13px] font-black tracking-widest uppercase text-white/90'
+                            }
                             value={editingName}
                             style={{
                               width: `${Math.min(220, Math.max(68, (editingName.trim().length + 1) * 9))}px`,
@@ -7195,7 +8545,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         )}
                         <button
                           type="button"
-                          className="studio-project-pill__close text-white/40 hover:text-white transition-colors opacity-0 group-hover:opacity-100"
+                          className={
+                            canvasDayMode
+                              ? 'studio-project-pill__close text-[#737373] hover:text-[#262626] transition-colors opacity-0 group-hover:opacity-100'
+                              : 'studio-project-pill__close text-white/40 hover:text-white transition-colors opacity-0 group-hover:opacity-100'
+                          }
                           aria-label="关闭当前项目"
                           onClick={(event) => {
                             event.stopPropagation()
@@ -7213,7 +8567,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               {/* Add project (separate + like fig-1) */}
               <button
                 type="button"
-                className="studio-project-add w-10 h-10 rounded-xl bg-[#111114] border border-white/10 shadow-2xl backdrop-blur-xl text-white/70 hover:text-white hover:bg-white/5 transition-colors pointer-events-auto"
+                className={
+                  canvasDayMode
+                    ? 'studio-project-add w-10 h-10 rounded-xl bg-[#FFFFFF] border border-[#E8E8E8] shadow-[0_6px_20px_rgba(38,38,38,0.06)] backdrop-blur-xl text-[#525252] hover:text-[#262626] hover:border-[#D4D4D4] hover:bg-[#F5F5F5] transition-colors pointer-events-auto'
+                    : 'studio-project-add w-10 h-10 rounded-xl bg-[#111114] border border-white/10 shadow-2xl backdrop-blur-xl text-white/70 hover:text-white hover:bg-white/5 transition-colors pointer-events-auto'
+                }
                 aria-label="新增项目"
                 onClick={createProjectLabel}
                 title="新增项目"
@@ -7223,11 +8581,17 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             </div>
             <div className="studio-canvas-topbar__actions flex items-center gap-3 pointer-events-auto">
               {/* Right pill group (fig-1) */}
-              <div className="flex items-center gap-4 bg-[#111114] border border-white/5 px-5 py-2 rounded-full shadow-2xl backdrop-blur-xl">
+              <div
+                className={
+                  canvasDayMode
+                    ? 'flex items-center gap-4 bg-[#FFFFFF] border border-[#E8E8E8] px-5 py-2 rounded-2xl shadow-[0_8px_32px_rgba(38,38,38,0.07)] backdrop-blur-xl'
+                    : 'flex items-center gap-4 bg-[#111114] border border-white/5 px-5 py-2 rounded-full shadow-2xl backdrop-blur-xl'
+                }
+              >
                 <button
                   type="button"
                   className={`btn--top-local inline-flex items-center px-1 ${
-                    'text-white/85 hover:text-white'
+                    canvasDayMode ? 'text-[#262626] hover:text-[#171717]' : 'text-white/85 hover:text-white'
                   }`}
                   title="选择工程 JSON 并导入"
                   aria-label="本地项目"
@@ -7245,13 +8609,23 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           {/* Sidebar Toolbelt — match @flowid (2); behavior unchanged */}
           <div className="absolute left-6 inset-y-0 flex items-center z-50 pointer-events-none" aria-label="画布左侧工具栏">
             <div className="relative pointer-events-auto flex items-center">
-              <div className="studio-left-toolbelt bg-[#111114] border border-white/10 p-2 rounded-2xl shadow-2xl flex flex-col gap-1 items-center backdrop-blur-xl relative z-20">
+              <div
+                className={
+                  canvasDayMode
+                    ? 'studio-left-toolbelt bg-[#FFFFFF] border border-[#E8E8E8] p-2 rounded-2xl shadow-[0_10px_36px_rgba(38,38,38,0.08)] flex flex-col gap-1 items-center backdrop-blur-xl relative z-20'
+                    : 'studio-left-toolbelt bg-[#111114] border border-white/10 p-2 rounded-2xl shadow-2xl flex flex-col gap-1 items-center backdrop-blur-xl relative z-20'
+                }
+              >
                 <button
                   type="button"
                   className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all shadow-lg active:scale-95 mb-2 ${
-                    leftPanel === 'add-node'
-                      ? 'bg-orange-600 text-white'
-                      : 'bg-white text-black hover:bg-orange-500 hover:text-white'
+                    canvasDayMode
+                      ? leftPanel === 'add-node'
+                        ? 'border border-[rgba(234,88,12,0.38)] bg-[rgba(234,88,12,0.18)] text-[#9a3412] shadow-[0_8px_24px_rgba(234,88,12,0.12)]'
+                        : 'bg-[#FFFFFF] border border-[#E8E8E8] text-[#262626] hover:bg-[#F5F5F5] hover:border-[#D4D4D4]'
+                      : leftPanel === 'add-node'
+                        ? 'bg-orange-600 text-white'
+                        : 'bg-white text-black hover:bg-orange-500 hover:text-white'
                   }`}
                   onClick={() => {
                     dismissCanvasAddMenu()
@@ -7265,9 +8639,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 <button
                   type="button"
                   className={`w-12 h-12 flex items-center justify-center rounded-xl transition-all group ${
-                    leftPanel === 'download-node'
-                      ? 'text-orange-500 bg-orange-500/10'
-                      : 'text-white/20 hover:text-white hover:bg-white/5'
+                    canvasDayMode
+                      ? leftPanel === 'download-node'
+                        ? 'border border-[rgba(234,88,12,0.38)] bg-[rgba(234,88,12,0.18)] text-[#9a3412]'
+                        : 'border border-transparent text-[#525252] hover:bg-[#F5F5F5] hover:text-[#262626]'
+                      : leftPanel === 'download-node'
+                        ? 'text-orange-500 bg-orange-500/10'
+                        : 'text-white/20 hover:text-white hover:bg-white/5'
                   }`}
                   title="预设模板"
                   aria-label="预设模板"
@@ -7281,14 +8659,19 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 <button
                   type="button"
                   className={`w-12 h-12 flex items-center justify-center rounded-xl transition-all group ${
-                    leftPanel === 'settings'
-                      ? 'text-orange-500 bg-orange-500/10'
-                      : 'text-white/20 hover:text-white hover:bg-white/5'
+                    canvasDayMode
+                      ? leftPanel === 'settings'
+                        ? 'text-[#262626] bg-[#F5F5F5]'
+                        : 'text-[#525252] hover:text-[#262626] hover:bg-[#F5F5F5]'
+                      : leftPanel === 'settings'
+                        ? 'text-orange-500 bg-orange-500/10'
+                        : 'text-white/20 hover:text-white hover:bg-white/5'
                   }`}
                   title="系统设置"
                   aria-label="系统设置"
                   onClick={() => {
                     dismissCanvasAddMenu()
+                    clearSettingsFocusTab()
                     setLeftPanel((prev) => (prev === 'settings' ? null : 'settings'))
                   }}
                 >
@@ -7313,9 +8696,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       transition={{ duration: 0.18 }}
                       className={`left-flyout ${leftPanel === 'add-node' ? 'left-flyout--add' : ''} ${leftPanel === 'download-node' ? 'left-flyout--preset' : ''}`}
                     >
-                      {leftPanel === 'add-node' ? <AddNodePanel addNodeItems={addNodeItems} /> : null}
+                      {leftPanel === 'add-node' ? (
+                        <AddNodePanel addNodeItems={addNodeItems} canvasDayMode={canvasDayMode} />
+                      ) : null}
                       {leftPanel === 'download-node' ? (
                         <DownloadPanel
+                          canvasDayMode={canvasDayMode}
                           selectedNode={selectedNode}
                           onDownloadSelected={downloadSelectedNode}
                           onDownloadProject={exportJson}
@@ -7346,6 +8732,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           </div>
 
           <RightPanel
+            canvasDayMode={canvasDayMode}
             isOpen={rightPanelOpen}
             onToggleOpen={() => setRightPanelOpen((v) => !v)}
             activeTab={rightPanelTab}
@@ -7367,6 +8754,21 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           />
 
           {/* Local projects popover removed: use native pickers instead */}
+
+          {agentFloatingOpen && typeof document !== 'undefined'
+            ? createPortal(
+                <AgentFloatingChatWindow
+                  open
+                  busy={aiBusy}
+                  ttsEnabled={aiConfig.ttsEnabled}
+                  onSpeak={speakAssistantText}
+                  onClose={() => setAgentFloatingOpen(false)}
+                  onWorkspaceSendingChange={setAgentWorkspaceSending}
+                  assistantModelName={aiConfig.model}
+                />,
+                document.body,
+              )
+            : null}
 
           {aiAssistantDialogOpen && typeof document !== 'undefined'
             ? createPortal(
@@ -7394,12 +8796,36 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               )
             : null}
 
+          {pointsTaskFailToast && typeof document !== 'undefined'
+            ? createPortal(
+                <PointsTaskFailureToast
+                  state={pointsTaskFailToast}
+                  onClose={() => {
+                    if (pointsTaskFailToastTimerRef.current) {
+                      clearTimeout(pointsTaskFailToastTimerRef.current)
+                      pointsTaskFailToastTimerRef.current = null
+                    }
+                    setPointsTaskFailToast(null)
+                  }}
+                />,
+                document.body,
+              )
+            : null}
+
           {leftPanel === 'settings' ? (
             <div
-              className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md"
-              onMouseDown={() => setLeftPanel(null)}
+              className={
+                canvasDayMode
+                  ? 'fixed inset-0 z-[12100] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm'
+                  : 'fixed inset-0 z-[12100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md'
+              }
+              onMouseDown={() => {
+                clearSettingsFocusTab()
+                setLeftPanel(null)
+              }}
             >
               <WorkflowSettingsPanel
+                canvasDayMode={canvasDayMode}
                 executionMode={executionMode}
                 executionProvider={executionProvider}
                 randomizeKsamplerSeedsOnRun={randomizeKsamplerSeedsOnRun}
@@ -7442,7 +8868,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                   void persistAiAssistantConfigToExternalPath(aiConfig)
                   window.alert('AI 助手配置已保存')
                 }}
-                onClose={() => setLeftPanel(null)}
+                settingsFocusTab={settingsFocusTab}
+                onSettingsFocusTabConsumed={clearSettingsFocusTab}
+                onClose={() => {
+                  clearSettingsFocusTab()
+                  setLeftPanel(null)
+                }}
               />
             </div>
           ) : null}
@@ -7457,7 +8888,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               role="dialog"
               aria-label="添加节点"
             >
-              <AddNodePanel addNodeItems={addNodeItems} />
+              <AddNodePanel addNodeItems={addNodeItems} canvasDayMode={canvasDayMode} />
             </div>
           ) : null}
 
@@ -7471,7 +8902,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               role="dialog"
               aria-label="连接后添加节点"
             >
-              <AddNodePanel addNodeItems={connectAddNodeItems} />
+              <AddNodePanel addNodeItems={connectAddNodeItems} canvasDayMode={canvasDayMode} />
             </div>
           ) : null}
 
@@ -7662,12 +9093,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
           <ReactFlow
             ref={reactFlowRootRef}
-            className="dark"
+            className={canvasDayMode ? undefined : 'dark'}
             nodes={nodes}
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
+            isValidConnection={isValidConnection}
             onConnectStart={onConnectStart}
             onConnectEnd={onConnectEnd}
             onMoveEnd={onMoveEnd}
@@ -7698,24 +9130,25 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             selectionKeyCode={['Shift']}
             multiSelectionKeyCode={['Control', 'Meta']}
             panOnDrag
-            defaultEdgeOptions={{
-              animated: true,
-              style: { stroke: '#94a3b8', strokeWidth: 2 },
-            }}
+            defaultEdgeOptions={flowDefaultEdgeOptions}
           >
-            <Background variant={BackgroundVariant.Lines} gap={32} size={1} color="#1a1a1a" />
+            {!canvasDayMode ? (
+              <Background variant={BackgroundVariant.Lines} gap={32} size={1} color="#1a1a1a" />
+            ) : null}
             <Controls showInteractive={false} className="studio-controls studio-controls--hidden" />
             {showMiniPreview ? (
               <MiniMap
                 className="studio-flowid-minimap"
                 pannable
                 zoomable
-                nodeColor={minimapColor}
-                maskColor="rgba(0,0,0,0.6)"
+                nodeColor={minimapNodeColor}
+                maskColor={canvasDayMode ? 'rgba(245,245,245,0.78)' : 'rgba(0,0,0,0.6)'}
                 style={{
-                  backgroundColor: '#111114',
+                  backgroundColor: canvasDayMode ? '#f5f5f5' : '#111114',
                   borderRadius: '16px',
-                  border: '1px solid rgba(255,255,255,0.1)',
+                  border: canvasDayMode
+                    ? '1px solid #E8E8E8'
+                    : '1px solid rgba(255,255,255,0.1)',
                   width: 240,
                   height: 140,
                   bottom: 120,
@@ -7727,7 +9160,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             {typeof document !== 'undefined' && aiConfig.virtualAvatarVisible
               ? createPortal(
                   <div
-                    className="studio-ai-avatar-dock"
+                    className={`studio-ai-avatar-dock${agentFloatingOpen ? ' studio-ai-avatar-dock--over-agent' : ''}`}
                     aria-label="AI 虚拟人"
                     style={{
                       left: `${avatarDockRect.left}px`,
@@ -7735,8 +9168,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       width: `${avatarDockRect.width}px`,
                       height: `${avatarDockRect.height}px`,
                     }}
-                    onMouseDown={handleAvatarDockMouseDown}
-                    onDoubleClick={() => setAiAssistantDialogOpen(true)}
+                    onMouseDown={agentFloatingOpen ? undefined : handleAvatarDockMouseDown}
+                    onDoubleClick={agentFloatingOpen ? undefined : () => setAgentFloatingOpen(true)}
                   >
                     <video
                       key={dockAvatarState}
@@ -7746,6 +9179,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       loop
                       muted
                       playsInline
+                      onMouseDown={agentFloatingOpen ? handleAvatarDockMouseDown : undefined}
+                      onDoubleClick={agentFloatingOpen ? () => setAgentFloatingOpen(true) : undefined}
                     />
                     <button
                       type="button"
@@ -7759,13 +9194,15 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               : null}
             {visiblePromptPanel && visiblePromptPanelLayout && promptPanelWrapStyle ? (
               <div
-                className={`studio-music-prompt-panel-wrap ${promptPanelExpanded ? 'is-expanded' : ''}`}
+                className={`studio-music-prompt-panel-wrap nodrag nopan nowheel ${promptPanelExpanded ? 'is-expanded' : ''}`}
                 style={promptPanelWrapStyle}
                 aria-label="节点提示词与执行面板"
                 onMouseDown={(event) => event.stopPropagation()}
                 onClick={(event) => event.stopPropagation()}
               >
-                <div className={`studio-music-prompt-panel ${promptPanelExpanded ? 'is-expanded' : ''}`}>
+                <div
+                  className={`studio-music-prompt-panel nodrag nopan ${promptPanelExpanded ? 'is-expanded' : ''}`}
+                >
                   <div className="studio-music-prompt-panel__head">
                     <span>
                       {visiblePromptPanel.kind === 'text'
@@ -7794,6 +9231,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         }}
                         onDoubleClick={(event) => {
                           event.stopPropagation()
+                          clearSettingsFocusTab()
                           setLeftPanel('settings')
                         }}
                       >
@@ -7985,109 +9423,112 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                     </div>
                   )}
                   <textarea
-                    ref={panelPromptTextareaRef}
-                    className="studio-music-prompt-panel__textarea"
-                    placeholder={
-                      visiblePromptPanel.kind === 'music' || visiblePromptPanel.kind === 'audio'
-                        ? '描述你想要生成的内容；工作流中可使用占位符 __NOTE__、__REF_IMAGES__（多图 URL 换行）'
-                        : visiblePromptPanel.kind === 'text'
-                          ? '输入文本或提示词；工作流中可使用占位符 __BODY__'
-                          : '输入画面/镜头描述；工作流中可使用占位符 __PROMPT__、__SRC__、__REF_IMAGES__'
-                    }
-                    value={promptPanelText}
-                    onDragOver={(event) => {
-                      const text = event.dataTransfer?.getData('text/plain') || ''
-                      if (text.startsWith('@系统提示词(')) {
+                      ref={panelPromptTextareaRef}
+                      data-studio-prompt-textarea="1"
+                      className="studio-music-prompt-panel__textarea nodrag nopan nowheel"
+                      placeholder={
+                        visiblePromptPanel.kind === 'music' || visiblePromptPanel.kind === 'audio'
+                          ? '描述你想要生成的内容；工作流中可使用占位符 __NOTE__、__REF_IMAGES__（多图 URL 换行）'
+                          : visiblePromptPanel.kind === 'text'
+                            ? '输入文本或提示词；工作流中可使用占位符 __BODY__'
+                            : visiblePromptPanel.kind === 'video'
+                              ? '@ 引用与文案写在一起；上游文本按画布顺序对应 __PROMPT__、__PROMPT2__…（第二路同时映射 __BODY__）。工作流可写 __PROMPT5__ 等占位符。'
+                              : '输入画面/镜头描述；'
+                      }
+                      value={promptPanelText}
+                      onDragOver={(event) => {
+                        const text = event.dataTransfer?.getData('text/plain') || ''
+                        if (text.startsWith('@系统提示词(')) {
+                          event.preventDefault()
+                          event.dataTransfer.dropEffect = 'copy'
+                        }
+                      }}
+                      onDrop={(event) => {
+                        const raw = event.dataTransfer?.getData('text/plain') || ''
+                        if (!raw.startsWith('@系统提示词(')) return
                         event.preventDefault()
-                        event.dataTransfer.dropEffect = 'copy'
-                      }
-                    }}
-                    onDrop={(event) => {
-                      const raw = event.dataTransfer?.getData('text/plain') || ''
-                      if (!raw.startsWith('@系统提示词(')) return
-                      event.preventDefault()
-                      const el = event.currentTarget
-                      const insert = raw.endsWith(')') ? `${raw} ` : `${raw}) `
-                      const { nextValue, nextCaret } = insertTextAtCaret(el, insert)
-                      updatePromptPanelText(nextValue)
-                      queueMicrotask(() => {
-                        try {
-                          el.focus()
-                          el.setSelectionRange(nextCaret, nextCaret)
-                        } catch {
-                          // ignore
-                        }
-                      })
-                    }}
-                    onChange={(event) => {
-                      const v = event.target.value
-                      updatePromptPanelText(v)
-                      const caret = event.target.selectionStart ?? v.length
-                      const match = detectMentionAtCaret(v, caret)
-                      if (!match || !promptPanel) {
-                        closeMentionMenu()
-                        return
-                      }
-                      mentionRangeRef.current = { start: match.start, end: match.end }
-                      const picked = nodes
-                        .filter((n) => n.id !== promptPanel.node.id)
-                        .map((n) => ({ id: n.id, title: String(n.data.title || '').trim() }))
-                        .filter((item) => item.title)
-                        .filter((item) => item.title.includes(match.query))
-                        .slice(0, 8)
-                      setMentionCandidates(picked)
-                      setMentionActiveIndex(0)
-                    }}
-                    onPaste={onPromptPanelTextareaPaste}
-                    onKeyDown={(event) => {
-                      if (mentionCandidates.length > 0) {
-                        if (event.key === 'ArrowDown') {
-                          event.preventDefault()
-                          setMentionActiveIndex((prev) =>
-                            Math.min(mentionCandidates.length - 1, prev + 1),
-                          )
-                          return
-                        }
-                        if (event.key === 'ArrowUp') {
-                          event.preventDefault()
-                          setMentionActiveIndex((prev) => Math.max(0, prev - 1))
-                          return
-                        }
-                        if (event.key === 'Enter' || event.key === 'Tab') {
-                          event.preventDefault()
-                          const picked = mentionCandidates[mentionActiveIndex]
-                          const range = mentionRangeRef.current
-                          const text = event.currentTarget.value
-                          if (picked && range) {
-                            const token = `${buildMentionToken(picked.title, picked.id)} `
-                            const next =
-                              text.slice(0, range.start) + token + text.slice(range.end)
-                            updatePromptPanelText(next)
-                            closeMentionMenu()
-                            requestAnimationFrame(() => {
-                              const el = panelPromptTextareaRef.current
-                              if (!el) return
-                              const pos = range.start + token.length
-                              el.focus()
-                              el.setSelectionRange(pos, pos)
-                            })
+                        const el = event.currentTarget
+                        const insert = raw.endsWith(')') ? `${raw} ` : `${raw}) `
+                        const { nextValue, nextCaret } = insertTextAtCaret(el, insert)
+                        updatePromptPanelText(nextValue)
+                        queueMicrotask(() => {
+                          try {
+                            el.focus()
+                            el.setSelectionRange(nextCaret, nextCaret)
+                          } catch {
+                            // ignore
                           }
-                          return
-                        }
-                        if (event.key === 'Escape') {
+                        })
+                      }}
+                      onChange={(event) => {
+                        const v = event.target.value
+                        updatePromptPanelText(v)
+                        const caret = event.target.selectionStart ?? v.length
+                        const match = detectMentionAtCaret(v, caret)
+                        if (!match || !promptPanel) {
                           closeMentionMenu()
                           return
                         }
-                      }
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault()
-                        void executePromptPanelFromPanel(visiblePromptPanel)
-                      }
-                    }}
-                    onBlur={() => {
-                      window.setTimeout(() => closeMentionMenu(), 80)
-                    }}
-                  />
+                        mentionRangeRef.current = { start: match.start, end: match.end }
+                        const picked = nodes
+                          .filter((n) => n.id !== promptPanel.node.id)
+                          .map((n) => ({ id: n.id, title: String(n.data.title || '').trim() }))
+                          .filter((item) => item.title)
+                          .filter((item) => item.title.includes(match.query))
+                          .slice(0, 8)
+                        setMentionCandidates(picked)
+                        setMentionActiveIndex(0)
+                      }}
+                      onPaste={onPromptPanelTextareaPaste}
+                      onKeyDown={(event) => {
+                        if (mentionCandidates.length > 0) {
+                          if (event.key === 'ArrowDown') {
+                            event.preventDefault()
+                            setMentionActiveIndex((prev) =>
+                              Math.min(mentionCandidates.length - 1, prev + 1),
+                            )
+                            return
+                          }
+                          if (event.key === 'ArrowUp') {
+                            event.preventDefault()
+                            setMentionActiveIndex((prev) => Math.max(0, prev - 1))
+                            return
+                          }
+                          if (event.key === 'Enter' || event.key === 'Tab') {
+                            event.preventDefault()
+                            const picked = mentionCandidates[mentionActiveIndex]
+                            const range = mentionRangeRef.current
+                            const text = event.currentTarget.value
+                            if (picked && range) {
+                              const token = `${buildMentionToken(picked.title, picked.id)} `
+                              const next =
+                                text.slice(0, range.start) + token + text.slice(range.end)
+                              updatePromptPanelText(next)
+                              closeMentionMenu()
+                              requestAnimationFrame(() => {
+                                const el = panelPromptTextareaRef.current
+                                if (!el) return
+                                const pos = range.start + token.length
+                                el.focus()
+                                el.setSelectionRange(pos, pos)
+                              })
+                            }
+                            return
+                          }
+                          if (event.key === 'Escape') {
+                            closeMentionMenu()
+                            return
+                          }
+                        }
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault()
+                          void executePromptPanelFromPanel(visiblePromptPanel)
+                        }
+                      }}
+                      onBlur={() => {
+                        window.setTimeout(() => closeMentionMenu(), 80)
+                      }}
+                    />
                   {mentionCandidates.length > 0 ? (
                     <div className="studio-music-prompt-panel__mentionMenu">
                       {mentionCandidates.map((item, idx) => (
@@ -8133,22 +9574,36 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         className="studio-music-prompt-panel__select"
                         placeholder="选择工作流"
                         value={promptPanelWorkflowSelectValue}
-                        options={promptPanelWorkflowOptions.map((item) => ({ value: item, label: item }))}
-                        onChange={(pickedName) => {
+                        options={promptPanelWorkflowDropdownOptions}
+                        onChange={(picked) => {
                           const wfKind = visiblePromptPanel.kind
+                          if (executionProvider === 'cloud') {
+                            const cloudList = cloudWorkflowMetaList.filter(
+                              (w) => !w.nodeKind || w.nodeKind === wfKind,
+                            )
+                            const hit = cloudList.find((w) => w.id === picked)
+                            if (hit) {
+                              updateNodeData(visiblePromptPanel.node.id, {
+                                kind: wfKind,
+                                model: hit.name,
+                                workflowEntryId: hit.id,
+                              } as Partial<StudioNodeData>)
+                            }
+                            return
+                          }
                           const list = nodeConfigs[wfKind].workflows
-                          const picked =
-                            list.find((item) => item.name === pickedName) ??
-                            list.find((item) => item.name.trim() === pickedName.trim()) ??
-                            findWorkflowEntryByPreferredName(list, pickedName)
-                          if (picked) {
-                            selectNodeWorkflow(wfKind, picked.id)
+                          const pickedEntry =
+                            list.find((item) => item.name === picked) ??
+                            list.find((item) => item.name.trim() === picked.trim()) ??
+                            findWorkflowEntryByPreferredName(list, picked)
+                          if (pickedEntry) {
+                            selectNodeWorkflow(wfKind, pickedEntry.id)
                           }
                           updateNodeData(visiblePromptPanel.node.id, {
                             kind: wfKind,
-                            model: pickedName,
+                            model: picked,
                             /** 与执行逻辑一致：以条目 id 为准，不依赖全局 selectedWorkflowId */
-                            workflowEntryId: picked?.id,
+                            workflowEntryId: pickedEntry?.id,
                           } as Partial<StudioNodeData>)
                         }}
                       />
@@ -8196,23 +9651,30 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         }}
                       />
                     ) : null}
-                    <span className="studio-music-prompt-panel__count">
-                      {visiblePromptPanel.kind === 'music' || visiblePromptPanel.kind === 'audio'
-                        ? `${(visiblePromptPanel.node.data as AudioNodeData).note?.length || 0}/5000`
-                        : visiblePromptPanel.kind === 'text'
-                          ? `${(visiblePromptPanel.node.data as TextNodeData).body?.length || 0}/5000`
-                          : visiblePromptPanel.kind === 'image'
-                            ? `${(visiblePromptPanel.node.data as ImageNodeData).prompt?.length || 0}/5000`
-                            : `${(visiblePromptPanel.node.data as VideoNodeData).prompt?.length || 0}/5000`}
-                    </span>
-                    <button
-                      type="button"
-                      className="studio-music-prompt-panel__submit"
-                      onClick={() => void executePromptPanelFromPanel(visiblePromptPanel)}
-                      title="执行当前节点工作流；长任务在后台跑时仍可再次提交，仅最后一次完成的任务会写回节点"
-                    >
-                      ↑
-                    </button>
+                    <div className="studio-music-prompt-panel__footEnd">
+                      {promptPanelFootPointsHint != null ? (
+                        <span
+                          className="studio-music-prompt-panel__footPoints"
+                          title="预估单次执行预扣积分（与预扣接口一致）"
+                        >
+                          <Zap
+                            className="studio-music-prompt-panel__footPointsIcon"
+                            size={17}
+                            strokeWidth={2.35}
+                            aria-hidden
+                          />
+                          积分 {Math.round(promptPanelFootPointsHint)}
+                        </span>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="studio-music-prompt-panel__submit"
+                        onClick={() => void executePromptPanelFromPanel(visiblePromptPanel)}
+                        title="执行当前节点工作流；长任务在后台跑时仍可再次提交，仅最后一次完成的任务会写回节点"
+                      >
+                        ↑
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -8222,29 +9684,72 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             className="absolute bottom-8 right-8 flex flex-col items-end gap-6 z-50 studio-flowid-map-ui [-webkit-tap-highlight-color:transparent] [&_button]:outline-none"
             data-studio-flowid-map-ui="1"
           >
-            <div className="bg-[#111114] border border-white/10 p-1.5 rounded-full shadow-2xl flex items-center gap-3 pointer-events-auto backdrop-blur-xl">
+            <div
+              className={
+                canvasDayMode
+                  ? 'bg-[#FFFFFF] border border-[#E8E8E8] p-2 rounded-2xl shadow-[0_12px_40px_rgba(38,38,38,0.08)] flex items-center gap-2 pointer-events-auto backdrop-blur-xl'
+                  : 'bg-[#111114] border border-white/10 p-1.5 rounded-full shadow-2xl flex items-center gap-3 pointer-events-auto backdrop-blur-xl'
+              }
+            >
               <button
                 type="button"
                 onClick={() => setShowMiniPreview((v) => !v)}
                 aria-label="小地图"
-                className={`w-10 h-10 flex items-center justify-center transition-all bg-white/5 rounded-full ${
-                  showMiniPreview ? 'text-orange-500' : 'text-white/40 hover:text-white'
-                }`}
+                className={
+                  canvasDayMode
+                    ? `w-10 h-10 flex items-center justify-center transition-all rounded-xl ${
+                        showMiniPreview
+                          ? 'bg-[#F5F5F5] text-[#262626] ring-2 ring-[#E8E8E8]'
+                          : 'bg-[#F5F5F5] text-[#525252] hover:bg-[#EEEEEE] hover:text-[#262626]'
+                      }`
+                    : `w-10 h-10 flex items-center justify-center transition-all bg-white/5 rounded-full ${
+                        showMiniPreview ? 'text-orange-500' : 'text-white/40 hover:text-white'
+                      }`
+                }
               >
                 <MapIcon className="w-4 h-4" aria-hidden />
               </button>
-              <div className="w-[1px] h-4 bg-white/10" />
-              <div className="flex items-center gap-1">
+              <div className={canvasDayMode ? 'w-[1px] h-5 bg-[#E8E8E8]' : 'w-[1px] h-4 bg-white/10'} />
+              <button
+                type="button"
+                onClick={() => setCanvasDayMode((v) => !v)}
+                aria-pressed={canvasDayMode}
+                aria-label={canvasDayMode ? '关闭日间模式' : '开启日间模式'}
+                title={canvasDayMode ? '关闭日间模式（深色画布）' : '开启日间模式（浅色画布）'}
+                className={
+                  canvasDayMode
+                    ? 'w-10 h-10 flex items-center justify-center rounded-xl bg-[#F5F5F5] text-[#525252] hover:bg-[#EEEEEE] hover:text-[#262626] transition-all'
+                    : 'w-10 h-10 flex items-center justify-center rounded-full bg-transparent text-orange-500 transition-all hover:text-orange-400 active:bg-orange-500/15 active:text-orange-300'
+                }
+              >
+                {canvasDayMode ? <Moon className="w-4 h-4" aria-hidden /> : <Sun className="w-4 h-4" aria-hidden />}
+              </button>
+              <div className={canvasDayMode ? 'w-[1px] h-5 bg-[#E8E8E8]' : 'w-[1px] h-4 bg-white/10'} />
+              <div
+                className={
+                  canvasDayMode
+                    ? 'flex items-center gap-0.5 rounded-xl bg-[#F5F5F5] px-1 py-0.5'
+                    : 'flex items-center gap-1'
+                }
+              >
                 <button
                   type="button"
                   onClick={() => zoomOut()}
                   aria-label="缩小"
-                  className="w-8 h-8 flex items-center justify-center text-white/40 hover:text-white transition-all text-sm font-light"
+                  className={
+                    canvasDayMode
+                      ? 'w-8 h-8 flex items-center justify-center rounded-lg text-[#525252] hover:bg-[#FFFFFF] hover:text-[#262626] transition-all text-sm font-light'
+                      : 'w-8 h-8 flex items-center justify-center text-white/40 hover:text-white transition-all text-sm font-light'
+                  }
                 >
                   −
                 </button>
                 <span
-                  className="text-[15px] font-black tracking-widest text-white/90 min-w-[60px] text-center"
+                  className={
+                    canvasDayMode
+                      ? 'text-[14px] font-black tracking-widest text-[#262626] min-w-[56px] text-center tabular-nums'
+                      : 'text-[15px] font-black tracking-widest text-white/90 min-w-[60px] text-center'
+                  }
                   title="节点编辑区视口缩放；与浏览器页面缩放无关。"
                 >
                   {Math.round((Number.isFinite(viewport.zoom) ? viewport.zoom : getZoom()) * 100)}%
@@ -8253,7 +9758,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                   type="button"
                   onClick={() => zoomIn()}
                   aria-label="放大"
-                  className="w-8 h-8 flex items-center justify-center text-white/60 hover:text-white transition-all text-sm font-light"
+                  className={
+                    canvasDayMode
+                      ? 'w-8 h-8 flex items-center justify-center rounded-lg text-[#525252] hover:bg-[#FFFFFF] hover:text-[#262626] transition-all text-sm font-light'
+                      : 'w-8 h-8 flex items-center justify-center text-white/60 hover:text-white transition-all text-sm font-light'
+                  }
                 >
                   +
                 </button>

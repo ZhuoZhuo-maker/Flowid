@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlowID — 授权码管理</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --card: #1e293b;
+        --row-hover: rgba(51, 65, 85, 0.45);
+        --border: rgba(51, 65, 85, 0.9);
+        --text: #e2e8f0;
+        --text-strong: #f8fafc;
+        --muted: #94a3b8;
+        --brand: #ea580c;
+        --input-bg: rgba(0, 0, 0, 0.32);
+        --input-border: rgba(255, 255, 255, 0.12);
+        --accent: #8b5cf6;
+        --danger: #ef4444;
+        --ok: #22c55e;
+        --ok-bg: rgba(34, 197, 94, 0.15);
+        --err-bg: rgba(239, 68, 68, 0.15);
+        --grey-bg: rgba(107, 114, 128, 0.15);
+        --radius: 10px;
+        --radius-lg: 14px;
+        --card-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+        --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: var(--font);
+        font-size: 15px;
+        background:
+          radial-gradient(1000px 560px at 92% -8%, rgba(139, 92, 246, 0.12), transparent 52%),
+          radial-gradient(820px 480px at 0% 0%, rgba(234, 88, 12, 0.1), transparent 48%),
+          radial-gradient(700px 420px at 40% 100%, rgba(51, 65, 85, 0.35), transparent 55%),
+          var(--bg);
+        color: var(--text);
+        line-height: 1.55;
+      }
+      a {
+        color: #fb923c;
+        text-decoration: none;
+      }
+      a:hover {
+        color: #fdba74;
+        text-decoration: underline;
+      }
+      .lic-wrap {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 22px 18px 40px;
+      }
+      .lic-title {
+        margin: 0 0 14px;
+        font-size: 1.55rem;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        color: var(--text-strong);
+      }
+      .lic-intro {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 18px 20px;
+        margin-bottom: 18px;
+        font-size: 15px;
+        color: var(--muted);
+        line-height: 1.6;
+        box-shadow: var(--card-shadow);
+      }
+      .lic-intro strong {
+        color: var(--text-strong);
+      }
+      .lic-intro code {
+        font-family: var(--mono);
+        font-size: 13px;
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: rgba(15, 23, 42, 0.65);
+        border: 1px solid var(--border);
+        color: #cbd5e1;
+      }
+      .lic-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .lic-toolbar__left,
+      .lic-toolbar__right {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+      }
+      .lic-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 16px;
+        border-radius: var(--radius);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.5);
+        color: var(--text-strong);
+        transition: border-color 0.15s, background 0.15s, transform 0.12s;
+      }
+      .lic-btn:hover:not(:disabled) {
+        border-color: rgba(249, 115, 22, 0.4);
+        background: rgba(234, 88, 12, 0.1);
+      }
+      .lic-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .lic-btn--primary {
+        border: 1px solid rgba(251, 146, 60, 0.55);
+        background: linear-gradient(135deg, #ea580c 0%, #c2410c 55%, #9a3412 100%);
+        color: #fffbeb;
+        box-shadow: 0 6px 20px rgba(234, 88, 12, 0.28);
+      }
+      .lic-btn--primary:hover:not(:disabled) {
+        filter: brightness(1.05);
+        box-shadow: 0 8px 26px rgba(234, 88, 12, 0.36);
+      }
+      .lic-btn--danger {
+        border-color: rgba(239, 68, 68, 0.45);
+        color: #fecaca;
+        background: rgba(239, 68, 68, 0.08);
+      }
+      .lic-btn--danger:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.18);
+      }
+      .lic-input,
+      .lic-select {
+        padding: 9px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--input-border);
+        background: var(--input-bg);
+        color: var(--text-strong);
+        font-size: 14px;
+        min-width: 0;
+      }
+      .lic-input:focus,
+      .lic-select:focus {
+        outline: none;
+        border-color: rgba(249, 115, 22, 0.55);
+        box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.14);
+      }
+      .lic-input--token {
+        width: 200px;
+        max-width: 42vw;
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+      .lic-input--search {
+        width: 200px;
+        max-width: 36vw;
+      }
+      .lic-table-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        box-shadow: var(--card-shadow);
+      }
+      .lic-table-scroll {
+        overflow-x: auto;
+      }
+      .lic-table-scroll.is-loading {
+        opacity: 0.55;
+        pointer-events: none;
+      }
+      table.lic-table {
+        width: 100%;
+        min-width: 1180px;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      .lic-table th,
+      .lic-table td {
+        padding: 11px 12px;
+        text-align: left;
+        border-bottom: 1px solid var(--border);
+        vertical-align: middle;
+      }
+      .lic-table th {
+        background: var(--card);
+        color: var(--text-strong);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .lic-table tbody tr:hover {
+        background: var(--row-hover);
+      }
+      .lic-table .num {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .lic-table .mono {
+        font-family: var(--mono);
+        font-size: 13px;
+        word-break: break-all;
+      }
+      .lic-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 4px 11px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .lic-badge--active {
+        background: var(--ok-bg);
+        color: var(--ok);
+      }
+      .lic-badge--expired {
+        background: var(--err-bg);
+        color: #ef4444;
+      }
+      .lic-badge--revoked {
+        background: var(--grey-bg);
+        color: #9ca3af;
+      }
+      .lic-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .lic-actions .lic-btn {
+        padding: 7px 14px;
+        font-size: 13px;
+        min-height: 34px;
+      }
+      .lic-batch {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border-top: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.35);
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .lic-pager {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border-top: 1px solid var(--border);
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .lic-msg {
+        min-height: 1.2em;
+        font-size: 15px;
+        margin: 0 0 10px;
+      }
+      .lic-msg--err {
+        color: #fca5a5;
+      }
+      .lic-msg--ok {
+        color: #86efac;
+      }
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        padding: 16px;
+      }
+      .modal-backdrop.show {
+        display: flex;
+      }
+      .modal {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 20px 22px;
+        min-width: 320px;
+        max-width: 96vw;
+        max-height: 90vh;
+        overflow: auto;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+      }
+      .modal h3 {
+        margin: 0 0 14px;
+        font-size: 17px;
+        font-weight: 800;
+      }
+      .modal .row {
+        margin-bottom: 12px;
+      }
+      .modal label {
+        display: block;
+        font-size: 14px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .modal-footer {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 18px;
+      }
+    </style>
+    <link rel="stylesheet" href="/pts/admin/static/pts-admin-shared.css" />
+  </head>
+  <body>
+    <div class="lic-wrap">
+      <h1 class="lic-title">授权码管理（SQLite · 明文积分码）</h1>
+
+      <div class="lic-intro">
+        <strong>功能：</strong>管理积分 SQLite 中的<strong>明文授权码</strong>：批量生成、分页列表、禁用与删除（受规则限制）。<strong>JWT 会员列表</strong>在 Auth 服务
+        「License 授权」中维护。<br />
+        管理 API 需请求头 <code>x-admin-token</code>；未单独配置 <code>ADMIN_TOKEN</code> 时开发默认与 Auth 一致为
+        <code>flowid-admin-dev</code>。<br />
+        <strong>路径：</strong>请使用含 <code>/pts</code> 的地址（如 <code>http://127.0.0.1:3721/pts/admin/licenses</code>）。口令保存在浏览器
+        <code>localStorage</code>（<code>flowid.pts.admin.token.v1</code>），<strong>勿在公共电脑</strong>使用本页。
+      </div>
+
+      <div class="lic-toolbar">
+        <div class="lic-toolbar__left">
+          <a class="lic-btn" href="/pts/admin">← 返回总览</a>
+          <a class="lic-btn" href="/pts/admin/confirm-failures">confirm 死信队列</a>
+          <a class="lic-btn" href="/pts/admin/points-pricing">积分单价</a>
+        </div>
+        <div class="lic-toolbar__right">
+          <input type="password" id="token" class="lic-input lic-input--token" placeholder="x-admin-token" autocomplete="off" />
+          <button type="button" class="lic-btn" id="btnRefresh">
+            <svg class="lic-btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M3 3v5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M16 16h5v5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span>刷新</span>
+          </button>
+          <button type="button" class="lic-btn lic-btn--primary" id="openGen">生成授权码</button>
+          <input type="text" id="fSearch" class="lic-input lic-input--search" placeholder="授权码 / 机器码" autocomplete="off" />
+          <button type="button" class="lic-btn" id="btnSearch">搜索</button>
+          <select id="fStatus" class="lic-select" aria-label="状态">
+            <option value="all">全部</option>
+            <option value="active">active</option>
+            <option value="expired">expired</option>
+            <option value="revoked">revoked</option>
+          </select>
+          <select id="pageSize" class="lic-select" style="min-width: 88px" aria-label="每页条数">
+            <option value="20" selected>20 条/页</option>
+            <option value="50">50 条/页</option>
+            <option value="100">100 条/页</option>
+          </select>
+        </div>
+      </div>
+
+      <p id="msg" class="lic-msg"></p>
+
+      <div class="lic-table-card">
+        <div class="lic-table-scroll" id="tableScroll">
+          <table class="lic-table" id="tbl">
+            <colgroup>
+              <col style="width: 44px" />
+              <col style="width: 180px" />
+              <col style="width: 160px" />
+              <col style="width: 100px" />
+              <col style="width: 100px" />
+              <col style="width: 100px" />
+              <col style="width: 88px" />
+              <col style="width: 160px" />
+              <col style="width: 160px" />
+              <col style="width: 130px" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="chkAll" title="全选本页" aria-label="全选本页" /></th>
+                <th>授权码</th>
+                <th>绑定机器码</th>
+                <th class="num">当前积分</th>
+                <th class="num">累计消耗</th>
+                <th class="num">累计获得</th>
+                <th>状态</th>
+                <th>绑定时间</th>
+                <th>过期时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="body"></tbody>
+          </table>
+        </div>
+        <div class="lic-batch" id="batchBar">
+          <span id="batchCount">已选中 0 条</span>
+          <button type="button" class="lic-btn" id="batchRevoke" disabled>批量禁用</button>
+          <button type="button" class="lic-btn lic-btn--danger" id="batchDelete" disabled>批量删除</button>
+          <button type="button" class="lic-btn" id="batchExport" disabled>导出选中 CSV</button>
+        </div>
+        <div class="lic-pager" id="pager">
+          <span id="pageInfo"></span>
+          <button type="button" class="lic-btn" id="prevPage">上一页</button>
+          <button type="button" class="lic-btn" id="nextPage">下一页</button>
+          <label style="display: inline-flex; align-items: center; gap: 6px; margin: 0">
+            跳转
+            <input type="number" id="gotoPage" class="lic-input" style="width: 72px" min="1" step="1" />
+            <button type="button" class="lic-btn" id="btnGoto">前往</button>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div id="genModal" class="modal-backdrop" aria-hidden="true">
+      <div class="modal" role="dialog" aria-labelledby="genTitle">
+        <h3 id="genTitle">生成授权码</h3>
+        <div class="row">
+          <label>积分数量（必填）</label>
+          <input type="number" id="gPoints" class="lic-input" style="width: 100%" value="1000" min="0" step="1" />
+        </div>
+        <div class="row">
+          <label>生成数量（1–100）</label>
+          <input type="number" id="gCount" class="lic-input" style="width: 100%" value="5" min="1" max="100" />
+        </div>
+        <div class="row">
+          <label>过期天数（0 = 永久，&gt;0 为有效天数）</label>
+          <input type="number" id="gExpire" class="lic-input" style="width: 100%" value="0" min="0" step="1" />
+        </div>
+        <p style="margin: 0; font-size: 12px; color: var(--muted)">服务端单次最多 500 条；本页限制为 100 条以降低误操作风险。</p>
+        <div class="modal-footer">
+          <button type="button" class="lic-btn lic-btn--primary" id="doGen">确认生成</button>
+          <button type="button" class="lic-btn" id="closeGen">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="detailModal" class="modal-backdrop" aria-hidden="true">
+      <div class="modal" role="dialog" aria-labelledby="detTitle">
+        <h3 id="detTitle">授权码详情</h3>
+        <pre id="detBody" class="mono" style="margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--muted)"></pre>
+        <p style="margin: 12px 0 0; font-size: 12px; color: var(--muted)">修改积分等写操作待对接管理 API；当前仅查看。</p>
+        <div class="modal-footer">
+          <button type="button" class="lic-btn" id="closeDet">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/pts/admin/static/pts-admin-token.js"></script>
+    <script>
+      const apiBase = (() => {
+        const o = String(location.origin || '')
+        if (!o || o === 'null' || o.startsWith('file:')) return 'http://127.0.0.1:3721/pts'
+        return o.replace(/\/+$/, '') + '/pts'
+      })()
+
+      let page = 1
+      let pageSize = 20
+      let lastTotal = 0
+      /** @type {any[]} */
+      let lastRows = []
+
+      const hdr = () => ({ 'x-admin-token': document.getElementById('token').value.trim() })
+
+      function escapeHtml(s) {
+        return String(s ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+      }
+
+      function maskLicenseCode(code) {
+        const s = String(code || '').trim()
+        if (!s) return '—'
+        const parts = s.split('-').filter(Boolean)
+        if (parts.length >= 2) {
+          const head = (parts[0] || '').slice(0, 4)
+          const tail = (parts[parts.length - 1] || '').slice(-4)
+          if (head.length >= 2 && tail.length >= 2) return `${head}-****-****-${tail}`
+        }
+        if (s.length <= 8) return '****'
+        return `${s.slice(0, 4)}-****-****-${s.slice(-4)}`
+      }
+
+      function maskMachineCode(mc) {
+        const s = String(mc || '').trim()
+        if (!s) return '—'
+        if (s.length <= 8) return '****'
+        return `${s.slice(0, 4)}...${s.slice(-4)}`
+      }
+
+      function parseExpireMs(ex) {
+        const t = String(ex || '').trim()
+        if (!t) return null
+        let d = Date.parse(t)
+        if (!Number.isFinite(d)) d = Date.parse(t.replace(' ', 'T'))
+        return Number.isFinite(d) ? d : null
+      }
+
+      function rowEffectiveStatus(r) {
+        const st = String(r.status || '').trim().toLowerCase()
+        if (st === 'revoked') return { key: 'revoked', label: 'revoked' }
+        const exMs = parseExpireMs(r.expire_time)
+        if (exMs != null && exMs < Date.now()) return { key: 'expired', label: 'expired' }
+        return { key: 'active', label: 'active' }
+      }
+
+      function badgeHtml(eff) {
+        const cls =
+          eff.key === 'active' ? 'lic-badge lic-badge--active' : eff.key === 'expired' ? 'lic-badge lic-badge--expired' : 'lic-badge lic-badge--revoked'
+        return `<span class="${cls}">${escapeHtml(eff.label)}</span>`
+      }
+
+      function formatExpireCell(v) {
+        const t = String(v || '').trim()
+        if (!t) return '永久'
+        return t
+      }
+
+      function canDeleteRow(r) {
+        const bound = r.machine_code && String(r.machine_code).trim()
+        const st = String(r.status || '').trim().toLowerCase()
+        if (st === 'revoked') return true
+        const exMs = parseExpireMs(r.expire_time)
+        const expired = exMs != null && exMs < Date.now()
+        if (!bound) return true
+        if (st === 'active' && expired) return true
+        return false
+      }
+
+      function confirmDanger(msg) {
+        if (!confirm(msg)) return false
+        if (!confirm('请再次确认该操作。')) return false
+        return true
+      }
+
+      async function parseJson(res) {
+        const t = await res.text()
+        try {
+          return JSON.parse(t || '{}')
+        } catch {
+          return {}
+        }
+      }
+
+      function setMsg(text, kind) {
+        const el = document.getElementById('msg')
+        el.textContent = text || ''
+        el.className = 'lic-msg' + (kind === 'err' ? ' lic-msg--err' : kind === 'ok' ? ' lic-msg--ok' : '')
+      }
+
+      function getSelectedCodes() {
+        const codes = []
+        document.querySelectorAll('#body input.lic-row-chk:checked').forEach((inp) => {
+          codes.push(inp.getAttribute('data-code'))
+        })
+        return codes.filter(Boolean)
+      }
+
+      function updateBatchUi() {
+        const all = document.querySelectorAll('#body input.lic-row-chk')
+        const checked = document.querySelectorAll('#body input.lic-row-chk:checked')
+        const chkAll = document.getElementById('chkAll')
+        chkAll.checked = all.length > 0 && checked.length === all.length
+        const n = checked.length
+        document.getElementById('batchCount').textContent = '已选中 ' + n + ' 条'
+        document.getElementById('batchRevoke').disabled = n === 0
+        document.getElementById('batchDelete').disabled = n === 0
+        document.getElementById('batchExport').disabled = n === 0
+      }
+
+      async function loadList(resetPage) {
+        const scroll = document.getElementById('tableScroll')
+        const body = document.getElementById('body')
+        const tok = document.getElementById('token').value.trim()
+        if (!tok) {
+          setMsg('请先填写 x-admin-token。', 'err')
+          body.innerHTML = ''
+          return
+        }
+        if (resetPage) page = 1
+        pageSize = Math.min(100, Math.max(1, Math.trunc(Number(document.getElementById('pageSize').value) || 20)))
+        setMsg('加载中…', '')
+        scroll.classList.add('is-loading')
+        body.innerHTML = ''
+        document.getElementById('chkAll').checked = false
+        const q = new URLSearchParams()
+        q.set('page', String(page))
+        q.set('pageSize', String(pageSize))
+        const s = document.getElementById('fSearch').value.trim()
+        if (s) q.set('search', s)
+        const st = document.getElementById('fStatus').value
+        if (st && st !== 'all') q.set('statusFilter', st)
+        try {
+          const res = await fetch(apiBase + '/api/admin/licenses?' + q.toString(), { headers: hdr() })
+          const data = await parseJson(res)
+          if (!res.ok || data.ok === false) {
+            setMsg((data && data.message) || res.statusText || '加载失败', 'err')
+            lastRows = []
+            return
+          }
+          if (window.flowidPtsAdminToken) window.flowidPtsAdminToken.save('token')
+          lastTotal = Number(data.total || 0)
+          lastRows = Array.isArray(data.licenses) ? data.licenses : []
+          const curPage = Math.max(1, Math.trunc(Number(data.page) || page))
+          const curSize = Math.max(1, Math.trunc(Number(data.pageSize) || pageSize))
+          page = curPage
+          pageSize = curSize
+          const maxPage = Math.max(1, Math.ceil(lastTotal / curSize) || 1)
+          document.getElementById('pageInfo').textContent =
+            '第 ' + page + ' / ' + maxPage + ' 页 · 每页 ' + curSize + ' 条 · 共 ' + lastTotal + ' 条'
+          document.getElementById('gotoPage').value = String(page)
+          document.getElementById('prevPage').disabled = page <= 1
+          document.getElementById('nextPage').disabled = page >= maxPage
+
+          lastRows.forEach((r) => {
+            const tr = document.createElement('tr')
+            const code = String(r.code || '')
+            const eff = rowEffectiveStatus(r)
+            tr.innerHTML =
+              `<td><input type="checkbox" class="lic-row-chk" data-code="${escapeHtml(code)}" aria-label="选择" /></td>` +
+              `<td class="mono">${escapeHtml(maskLicenseCode(code))}</td>` +
+              `<td class="mono">${escapeHtml(maskMachineCode(r.machine_code))}</td>` +
+              `<td class="num">${escapeHtml(r.points)}</td>` +
+              `<td class="num">${escapeHtml(r.total_spent)}</td>` +
+              `<td class="num">${escapeHtml(r.total_earned)}</td>` +
+              `<td>${badgeHtml(eff)}</td>` +
+              `<td class="mono">${escapeHtml(r.bind_time || '—')}</td>` +
+              `<td class="mono">${escapeHtml(formatExpireCell(r.expire_time))}</td>` +
+              `<td class="lic-actions"></td>`
+            tr.querySelector('.lic-row-chk').addEventListener('change', updateBatchUi)
+
+            const act = tr.querySelector('.lic-actions')
+            const bDet = document.createElement('button')
+            bDet.type = 'button'
+            bDet.className = 'lic-btn'
+            bDet.textContent = '详情'
+            bDet.onclick = () => openDetail(r)
+            act.appendChild(bDet)
+
+            if (String(r.status) !== 'revoked') {
+              const bDis = document.createElement('button')
+              bDis.type = 'button'
+              bDis.className = 'lic-btn lic-btn--danger'
+              bDis.textContent = '禁用'
+              bDis.onclick = () => void doRevoke(code)
+              act.appendChild(bDis)
+            }
+
+            if (canDeleteRow(r)) {
+              const bDel = document.createElement('button')
+              bDel.type = 'button'
+              bDel.className = 'lic-btn lic-btn--danger'
+              bDel.textContent = '删除'
+              bDel.onclick = () => void doDelete(code)
+              act.appendChild(bDel)
+            }
+
+            body.appendChild(tr)
+          })
+          setMsg('已加载。', 'ok')
+        } finally {
+          scroll.classList.remove('is-loading')
+          updateBatchUi()
+        }
+      }
+
+      async function doRevoke(code) {
+        if (!confirm('确定禁用该授权码？已绑定设备将无法继续使用。')) return
+        setMsg('处理中…', '')
+        const res = await fetch(apiBase + '/api/admin/licenses/' + encodeURIComponent(code) + '/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...hdr() },
+          body: '{}',
+        })
+        const j = await parseJson(res)
+        if (!res.ok || j.ok === false) {
+          setMsg((j && j.message) || '禁用失败', 'err')
+          return
+        }
+        setMsg('已禁用。', 'ok')
+        await loadList(false)
+      }
+
+      async function doDelete(code) {
+        if (!confirmDanger('确定删除该授权码？不可恢复。')) return
+        setMsg('删除中…', '')
+        const res = await fetch(apiBase + '/api/admin/licenses/' + encodeURIComponent(code), {
+          method: 'DELETE',
+          headers: hdr(),
+        })
+        const j = await parseJson(res)
+        if (!res.ok || j.ok === false) {
+          setMsg((j && j.message) || '删除失败', 'err')
+          return
+        }
+        setMsg('已删除。', 'ok')
+        await loadList(false)
+      }
+
+      function openDetail(r) {
+        const m = document.getElementById('detailModal')
+        document.getElementById('detBody').textContent = JSON.stringify(r, null, 2)
+        m.classList.add('show')
+        m.setAttribute('aria-hidden', 'false')
+      }
+      function closeDetail() {
+        const m = document.getElementById('detailModal')
+        m.classList.remove('show')
+        m.setAttribute('aria-hidden', 'true')
+      }
+
+      document.getElementById('chkAll').addEventListener('change', (e) => {
+        const on = e.target.checked
+        document.querySelectorAll('#body input.lic-row-chk').forEach((c) => {
+          c.checked = on
+        })
+        updateBatchUi()
+      })
+
+      document.getElementById('batchRevoke').onclick = async () => {
+        const codes = getSelectedCodes()
+        const toRevoke = []
+        for (const c of codes) {
+          const row = lastRows.find((x) => String(x.code) === c)
+          if (row && String(row.status) !== 'revoked') toRevoke.push(c)
+        }
+        if (!toRevoke.length) {
+          setMsg('所选行中没有可禁用的 active 授权码。', 'err')
+          return
+        }
+        if (!confirm('将禁用 ' + toRevoke.length + ' 条授权码，确定？')) return
+        for (const code of toRevoke) {
+          const res = await fetch(apiBase + '/api/admin/licenses/' + encodeURIComponent(code) + '/revoke', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...hdr() },
+            body: '{}',
+          })
+          const j = await parseJson(res)
+          if (!res.ok || j.ok === false) {
+            setMsg('批量禁用中断：' + ((j && j.message) || code), 'err')
+            await loadList(false)
+            return
+          }
+        }
+        setMsg('批量禁用完成。', 'ok')
+        await loadList(false)
+      }
+
+      document.getElementById('batchDelete').onclick = async () => {
+        const codes = getSelectedCodes()
+        const okList = codes.filter((c) => {
+          const row = lastRows.find((x) => String(x.code) === c)
+          return row && canDeleteRow(row)
+        })
+        if (!okList.length) {
+          setMsg('所选条目均不符合删除条件：已绑定且未过期的 active 不可删；未绑定、已过期 active 或 revoked 可删（有积分流水时服务端会拒绝）。', 'err')
+          return
+        }
+        if (!confirmDanger('将永久删除 ' + okList.length + ' 条授权码（存在流水引用的将失败）。')) return
+        for (const code of okList) {
+          const res = await fetch(apiBase + '/api/admin/licenses/' + encodeURIComponent(code), {
+            method: 'DELETE',
+            headers: hdr(),
+          })
+          const j = await parseJson(res)
+          if (!res.ok || j.ok === false) {
+            setMsg('批量删除中断：' + ((j && j.message) || code), 'err')
+            await loadList(false)
+            return
+          }
+        }
+        setMsg('批量删除完成。', 'ok')
+        await loadList(false)
+      }
+
+      document.getElementById('batchExport').onclick = () => {
+        const codes = getSelectedCodes()
+        const rows = lastRows.filter((r) => codes.includes(String(r.code)))
+        if (!rows.length) return
+        const cols = ['code', 'machine_code', 'points', 'total_earned', 'total_spent', 'bind_time', 'expire_time', 'status', 'created_at']
+        const esc = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"'
+        const lines = [cols.join(',')]
+        for (const r of rows) {
+          lines.push(cols.map((k) => esc(r[k])).join(','))
+        }
+        const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' })
+        const a = document.createElement('a')
+        a.href = URL.createObjectURL(blob)
+        a.download = 'licenses-export-' + new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.csv'
+        a.click()
+        URL.revokeObjectURL(a.href)
+        setMsg('已导出 ' + rows.length + ' 条 CSV。', 'ok')
+      }
+
+      document.getElementById('btnRefresh').onclick = () => void loadList(false)
+      document.getElementById('btnSearch').onclick = () => void loadList(true)
+      document.getElementById('fSearch').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') void loadList(true)
+      })
+      document.getElementById('fStatus').addEventListener('change', () => void loadList(true))
+      document.getElementById('pageSize').addEventListener('change', () => void loadList(true))
+      document.getElementById('prevPage').onclick = () => {
+        if (page > 1) {
+          page--
+          void loadList(false)
+        }
+      }
+      document.getElementById('nextPage').onclick = () => {
+        const maxPage = Math.max(1, Math.ceil(lastTotal / pageSize) || 1)
+        if (page < maxPage) {
+          page++
+          void loadList(false)
+        }
+      }
+      document.getElementById('btnGoto').onclick = () => {
+        const maxPage = Math.max(1, Math.ceil(lastTotal / pageSize) || 1)
+        let g = Math.trunc(Number(document.getElementById('gotoPage').value) || 1)
+        g = Math.min(maxPage, Math.max(1, g))
+        page = g
+        void loadList(false)
+      }
+
+      const genModal = document.getElementById('genModal')
+      document.getElementById('openGen').onclick = () => {
+        genModal.classList.add('show')
+        genModal.setAttribute('aria-hidden', 'false')
+      }
+      document.getElementById('closeGen').onclick = () => {
+        genModal.classList.remove('show')
+        genModal.setAttribute('aria-hidden', 'true')
+      }
+      genModal.addEventListener('click', (e) => {
+        if (e.target === genModal) genModal.classList.remove('show')
+      })
+      document.getElementById('closeDet').onclick = closeDetail
+      document.getElementById('detailModal').addEventListener('click', (e) => {
+        if (e.target.id === 'detailModal') closeDetail()
+      })
+
+      document.getElementById('doGen').onclick = async () => {
+        setMsg('', '')
+        const points = Math.trunc(Number(document.getElementById('gPoints').value))
+        let count = Math.trunc(Number(document.getElementById('gCount').value))
+        const expireDays = Math.trunc(Number(document.getElementById('gExpire').value))
+        if (!Number.isFinite(points) || points < 0) {
+          setMsg('积分数量无效。', 'err')
+          return
+        }
+        if (!Number.isFinite(count) || count < 1 || count > 100) {
+          setMsg('生成数量须在 1–100。', 'err')
+          return
+        }
+        const res = await fetch(apiBase + '/api/admin/licenses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...hdr() },
+          body: JSON.stringify({ points, count, expireDays }),
+        })
+        const data = await parseJson(res)
+        if (!res.ok || data.ok === false) {
+          setMsg((data && data.message) || '生成失败', 'err')
+          return
+        }
+        genModal.classList.remove('show')
+        setMsg('已生成 ' + (data.count || 0) + ' 条。', 'ok')
+        page = 1
+        await loadList(false)
+        console.info('generated', data.created)
+      }
+
+      if (window.flowidPtsAdminToken) {
+        window.flowidPtsAdminToken.load('token')
+        window.flowidPtsAdminToken.bind('token')
+        if (document.getElementById('token').value.trim()) void loadList(true)
+      }
+    </script>
+  </body>
+</html>

@@ -2,31 +2,32 @@
   const U = window.FlowidAdminUtil
   const api = window.FlowidAdminApi
 
+  function esc(s) {
+    return U.escapeHtml(String(s || ''))
+  }
+
   window.FlowidAdminPanelOverview = async function (root) {
     root.innerHTML = `
       <div class="admin-card">
         <h3>运行状态</h3>
-        <div class="stat-grid" id="ov-stats"></div>
+        <div class="ov-runtime-grid" id="ov-stats" aria-live="polite"></div>
       </div>
       <div class="admin-card">
         <h3>代理与白名单</h3>
-        <p class="hint">OpenAI 兼容代理：<code>POST /proxy/openai</code>。上游域名白名单当前仅允许 <code>dashscope.aliyuncs.com</code>（与后端实现一致）。</p>
+        <p class="hint">OpenAI 兼容代理：<code>POST /proxy/openai</code>。上游域名白名单当前仅允许 <span class="admin-chip">dashscope.aliyuncs.com</span>（与后端实现一致）。</p>
         <div class="admin-form-actions">
-          <button type="button" class="btn btn-primary" id="ov-proxy-test">探测代理通道（安全请求）</button>
+          <button type="button" class="btn btn-primary" id="ov-proxy-test">刷新代理通道（安全请求）</button>
         </div>
-        <p class="mono" id="ov-proxy-msg" style="margin-top:10px;"></p>
+        <p class="mono" id="ov-proxy-msg" style="margin-top:12px;"></p>
       </div>
       <div class="admin-card">
         <h3>环境变量（文档）</h3>
         <p class="hint">后端不会通过接口暴露密钥。以下为常用变量名，供运维对照；实际值请在启动进程环境中配置。</p>
-        <table class="mono" style="width:100%;border-collapse:collapse;font-size:12px;">
-          <thead><tr style="text-align:left;border-bottom:1px solid rgba(255,255,255,0.1);"><th style="padding:8px 6px;">变量</th><th style="padding:8px 6px;">说明</th></tr></thead>
-          <tbody id="ov-env-rows"></tbody>
-        </table>
+        <div id="ov-env-grid" class="ov-env-grid"></div>
       </div>`
 
     const stats = root.querySelector('#ov-stats')
-    const envRows = root.querySelector('#ov-env-rows')
+    const envGrid = root.querySelector('#ov-env-grid')
     const proxyMsg = root.querySelector('#ov-proxy-msg')
 
     const rows = [
@@ -37,10 +38,10 @@
       ['SYSTEM_PROMPT_HMAC_SECRET', '系统提示词 HMAC 与完整性校验密钥'],
       ['AUTH_JWT_SECRET', '未设置 HMAC 密钥时可作为回退'],
     ]
-    envRows.innerHTML = rows
+    envGrid.innerHTML = rows
       .map(
         ([k, d]) =>
-          `<tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:8px 6px;color:rgba(249,115,22,0.95);">${k}</td><td style="padding:8px 6px;color:rgba(255,255,255,0.55);">${d}</td></tr>`,
+          `<div class="ov-env-chip"><div class="ov-env-chip__k">${esc(k)}</div><div class="ov-env-chip__d">${esc(d)}</div></div>`,
       )
       .join('')
 
@@ -51,12 +52,37 @@
       window.FlowidAdminToast(String(e.message || e), true)
     }
 
+    const ok = Boolean(health && health.ok)
     const origin = window.location.origin
     stats.innerHTML = `
-      <div class="stat"><div class="k">服务根地址</div><div class="v mono" style="font-size:12px;">${origin}</div></div>
-      <div class="stat"><div class="k">健康检查</div><div class="v">${health.ok ? 'OK' : '异常'}</div></div>
-      <div class="stat"><div class="k">服务标识</div><div class="v mono" style="font-size:12px;">${String(health.service || '-')}</div></div>
-      <div class="stat"><div class="k">本页时间</div><div class="v">${U.fmt(Date.now())}</div></div>`
+      <article class="ov-runtime-card">
+        <div class="ov-runtime-card__hd">
+          <span class="ov-health-dot ov-health-dot--neutral" title="信息"></span>
+          <span class="ov-runtime-card__label">服务根地址</span>
+        </div>
+        <div class="ov-runtime-card__value mono" style="font-size:12px;">${esc(origin)}</div>
+      </article>
+      <article class="ov-runtime-card">
+        <div class="ov-runtime-card__hd">
+          <span class="ov-health-dot ${ok ? 'ov-health-dot--ok' : 'ov-health-dot--bad'}" title="${ok ? '正常' : '异常'}"></span>
+          <span class="ov-runtime-card__label">健康检查</span>
+        </div>
+        <div class="ov-runtime-card__value">${ok ? '正常' : '异常'}</div>
+      </article>
+      <article class="ov-runtime-card">
+        <div class="ov-runtime-card__hd">
+          <span class="ov-health-dot ${ok ? 'ov-health-dot--ok' : 'ov-health-dot--warn'}" title="服务标识"></span>
+          <span class="ov-runtime-card__label">服务标识</span>
+        </div>
+        <div class="ov-runtime-card__value mono" style="font-size:12px;">${esc(String(health.service || '-'))}</div>
+      </article>
+      <article class="ov-runtime-card">
+        <div class="ov-runtime-card__hd">
+          <span class="ov-health-dot ov-health-dot--neutral" title="本页时间"></span>
+          <span class="ov-runtime-card__label">本页时间</span>
+        </div>
+        <div class="ov-runtime-card__value">${esc(U.fmt(Date.now()))}</div>
+      </article>`
 
     root.querySelector('#ov-proxy-test').onclick = async () => {
       proxyMsg.textContent = '请求中…'

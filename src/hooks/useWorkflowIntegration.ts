@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { Node } from '@xyflow/react'
+import type { Edge, Node } from '@xyflow/react'
 import type {
+  ImageNodeData,
   NodeRunProgress,
   NodeWorkflowConfig,
   ShortcutCommandId,
@@ -17,10 +18,10 @@ import {
   type WorkflowConfigSnapshot,
 } from '../lib/workflowConfigStorage'
 import {
-  listMentionImageAttachments,
   parseMentionRefs,
   resolveMentionRefToNode,
 } from '../lib/nodeMentions'
+import { cloneNodeWithInboundTextPromptPrepended } from '../lib/studioPromptInheritance'
 import { computeAccessState, loadLicenseServerConfig, loadLicenseSnapshotV2, saveLicenseSnapshotV2 } from '../lib/licenseAccess'
 import { verifyLicenseRemote } from '../lib/licenseClient'
 import { matchStudioNodeWorkflow } from '../lib/matchStudioNodeWorkflow'
@@ -28,7 +29,15 @@ import { persistWorkflowJsonToDisk } from '../lib/localAssetDiskMirror'
 import { normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
 import { fetchOpenAICompat } from '../lib/openaiProxy'
 import { appendCloudCallLog } from '../lib/cloudCallLogs'
-import { readLocalImageAssetBlob } from '../lib/localImageAssetStore'
+import {
+  apiPointsCancel,
+  apiPointsConfirm,
+  apiPointsConfirmFailure,
+  apiPointsReserve,
+} from '../lib/licensePointsApi'
+import { emitPointsTaskFailure } from '../lib/pointsService'
+import { buildPointsReserveParams } from '../lib/pointsReserveMetadata'
+import { readLocalImageAssetBlob, getLocalImageAssetObjectUrl } from '../lib/localImageAssetStore'
 import {
   buildComfyPromptDigest,
   checkComfyHealth,
@@ -38,6 +47,8 @@ import {
   pickLatestComfyMediaUrlFromHistory,
   pickComfyResultAudioUrl,
   pickComfyResultImageUrl,
+  pickComfyResultImageViewUrls,
+  readFilenameFromComfyViewUrl,
   refetchHistoryEntryWithRasterVisual,
   submitComfyPrompt,
   type ComfyUploadedInputImage,
@@ -48,6 +59,32 @@ import {
 
 type NodeInputRecord = Record<string, unknown>
 
+/** 工作流 JSON 字符串中的 `__PROMPTn__`（n≥2）按序替换；`__PROMPT__` 单独处理为第 1 路。 */
+function getIndexedPromptValueForWorkflow(inputs: NodeInputRecord, slot: number): string {
+  if (slot <= 1) return String(inputs.prompt ?? '')
+  if (slot === 2) return String((inputs as { prompt2?: string }).prompt2 ?? '')
+  if (slot === 3) return String((inputs as { prompt3?: string }).prompt3 ?? '')
+  if (slot === 4) return String((inputs as { prompt4?: string }).prompt4 ?? '')
+  const extras = (inputs as { extraPrompts?: string[] }).extraPrompts ?? []
+  return String(extras[slot - 5] ?? '')
+}
+
+function replaceIndexedPromptPlaceholders(serialized: string, nodeInputs: NodeInputRecord): string {
+  let text = serialized.replaceAll('__PROMPT__', String(nodeInputs.prompt ?? ''))
+  const seen = new Set<number>()
+  const re = /__PROMPT(\d+)__/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(serialized)) !== null) {
+    const n = Number(m[1])
+    if (Number.isFinite(n) && n >= 2) seen.add(n)
+  }
+  for (const n of [...seen].sort((a, b) => b - a)) {
+    const ph = `__PROMPT${n}__`
+    text = text.split(ph).join(getIndexedPromptValueForWorkflow(nodeInputs, n))
+  }
+  return text
+}
+
 /**
  * 单节点执行 Comfy 时的可选参数（进度回调等）。
  */
@@ -55,6 +92,8 @@ export type RunNodeWorkflowOptions = {
   onProgress?: (info: NodeRunProgress) => void
   /** 当前画布全部节点：用于从提示词 @ 引用合并图片 URL（与 Studio 中 `withResolvedNodeMentions` 一致）。 */
   allNodes?: Array<Node<StudioNodeData>>
+  /** 画布连线：执行前把已连线的文字/剧本正文合并进单槽提示（见 `cloneNodeWithInboundTextPromptPrepended`）。 */
+  studioEdges?: Edge[]
   /** 执行前的原始提示词文本（未做 @ 引用解析），用于准确诊断参考图是否进入上传链路。 */
   rawPromptText?: string
   /** 执行前的原始说明文本（未做 @ 引用解析）。 */
@@ -159,10 +198,10 @@ function validatePromptNodes(prompt: Record<string, unknown>) {
  *
  * @param allNodes 传入时可合并提示词/描述中的 @ 引用图片 URL，避免仅改文案未同步 `src` 时 Comfy 收不到图。
  */
-function extractNodeInputs(
+async function extractNodeInputs(
   node: Node<StudioNodeData>,
   allNodes?: Array<Node<StudioNodeData>>,
-): NodeInputRecord {
+): Promise<NodeInputRecord> {
   const common: NodeInputRecord = {
     title: node.data.title,
     kind: node.data.kind,
@@ -173,7 +212,7 @@ function extractNodeInputs(
   if (node.data.kind === 'text' || node.data.kind === 'script') {
     return { ...common, body: node.data.body, refImages: '' }
   }
-  if (node.data.kind === 'image' || node.data.kind === 'video') {
+  if (node.data.kind === 'image') {
     const promptText = String(node.data.prompt || '')
     const refs = node.data.referenceImageSources?.filter(Boolean) ?? []
     const refIds = (node.data as any)?.referenceImageAssetIds as string[] | undefined
@@ -186,25 +225,43 @@ function extractNodeInputs(
         const hit = resolveMentionRefToNode(ref, allNodes, node.id)
         if (!hit) continue
         const kind = (hit.data as StudioNodeData).kind
-        if (kind !== 'image' && kind !== 'video' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music')
-          continue
-        const u =
+        /** 仅静态图可进 LoadImage；视频/音频/音乐的 src 不是单张图输入 */
+        if (kind !== 'image' && kind !== 'panorama') continue
+        let u =
           kind === 'panorama'
             ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
             : String((hit.data as any)?.src || '').trim()
-        if (!u) continue
         const aid = String((hit.data as any)?.srcAssetId || '').trim()
+
+        if (!u && aid) {
+          const restored = await getLocalImageAssetObjectUrl(aid)
+          if (restored) {
+            u = restored
+          }
+        }
+
+        if (!u) {
+          continue
+        }
         pairs.push({ url: u, assetId: aid || undefined })
       }
     }
 
     // 2) 节点自身参考图：按 referenceImageSources 顺序，绑定同索引 assetId
-    refs.forEach((u, i) => {
-      const url = String(u || '').trim()
-      if (!url) return
+    for (let i = 0; i < refs.length; i++) {
+      let url = String(refs[i] || '').trim()
+      if (!url) continue
       const aid = Array.isArray(refIds) && i < refIds.length ? String(refIds[i] || '').trim() : ''
+      
+      if (url.startsWith('blob:') && aid) {
+        const restored = await getLocalImageAssetObjectUrl(aid)
+        if (restored) {
+          url = restored
+        }
+      }
+      
       pairs.push({ url, assetId: aid || undefined })
-    })
+    }
 
     // 去重：先按 url 去重（保留第一个有 assetId 的）
     const mergedPairs: Array<{ url: string; assetId?: string }> = []
@@ -214,14 +271,145 @@ function extractNodeInputs(
       else if (!existing.assetId && p.assetId) existing.assetId = p.assetId
     }
 
-    const primarySrc = String(node.data.src || mergedPairs[0]?.url || '').trim()
+    let primarySrc = String(node.data.src || mergedPairs[0]?.url || '').trim()
     const primaryAssetId =
       String((node.data as any)?.srcAssetId || '').trim() ||
       (mergedPairs.find((p) => p.url === primarySrc)?.assetId ?? '')
+    
+    if (primarySrc.startsWith('blob:') && primaryAssetId) {
+      const restored = await getLocalImageAssetObjectUrl(primaryAssetId)
+      if (restored) {
+        primarySrc = restored
+      }
+    }
+    
     const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
+    const imgMatting = node.data as ImageNodeData
+    const rawMp = imgMatting.mattingPoints
+    const safeMp = (Array.isArray(rawMp) ? rawMp : []).map((p) => ({
+      x: Math.max(0, Math.min(1, Number(p.x) || 0)),
+      y: Math.max(0, Math.min(1, Number(p.y) || 0)),
+      t: (p.t === 0 ? 0 : 1) as 0 | 1,
+    }))
+    const mattingPointsJson = JSON.stringify(safeMp)
+    const iw = Math.max(0, Math.round(Number(imgMatting.mattingRefWidth) || 0))
+    const ih = Math.max(0, Math.round(Number(imgMatting.mattingRefHeight) || 0))
+    const toPixel = (p: { x: number; y: number }) => {
+      if (iw > 0 && ih > 0) {
+        return { x: Math.round(p.x * iw), y: Math.round(p.y * ih) }
+      }
+      return { x: p.x, y: p.y }
+    }
+    const posPx = safeMp.filter((p) => p.t === 1).map((p) => toPixel(p))
+    const negPx = safeMp.filter((p) => p.t === 0).map((p) => toPixel(p))
+    const mattingPositiveCoordsJson = JSON.stringify(posPx)
+    const mattingNegativeCoordsJson = JSON.stringify(negPx)
+    /** 与 `easy framesEditor` 的 `info` 字段对齐（见 flowid 导出 API 工作流） */
+    const mattingFrameInfoJson = JSON.stringify({
+      positive_coords: posPx,
+      negative_coords: negPx,
+      bbox: [] as number[],
+      frame_index: 0,
+    })
     return {
       ...common,
       prompt: node.data.prompt,
+      src: primarySrc,
+      srcAssetId: primaryAssetId,
+      refImages: purePairs.map((p) => p.url).join('\n'),
+      refImageAssetIds: purePairs.map((p) => String(p.assetId || '').trim()).filter(Boolean),
+      mattingPointsJson,
+      mattingPositiveCoordsJson,
+      mattingNegativeCoordsJson,
+      mattingFrameInfoJson,
+    }
+  }
+  if (node.data.kind === 'video') {
+    const p1 = String(node.data.prompt || '')
+    const p2 = String((node.data as { prompt2?: string }).prompt2 || '')
+    const p3 = String((node.data as { prompt3?: string }).prompt3 || '')
+    const p4 = String((node.data as { prompt4?: string }).prompt4 || '')
+    const pExtra = Array.isArray((node.data as { extraPrompts?: string[] }).extraPrompts)
+      ? (node.data as { extraPrompts?: string[] }).extraPrompts!.map((s) => String(s || ''))
+      : []
+    const promptText = [p1, p2, p3, p4, ...pExtra].filter(Boolean).join('\n')
+    const refs = node.data.referenceImageSources?.filter(Boolean) ?? []
+    const refIds = (node.data as any)?.referenceImageAssetIds as string[] | undefined
+
+    const pairs: Array<{ url: string; assetId?: string }> = []
+    if (allNodes?.length && promptText.includes('@')) {
+      const mentionRefs = parseMentionRefs(promptText)
+      for (const ref of mentionRefs) {
+        const hit = resolveMentionRefToNode(ref, allNodes, node.id)
+        if (!hit) continue
+        const kind = (hit.data as StudioNodeData).kind
+        /** 仅静态图可进 LoadImage；@视频 / @音频 等不走此链 */
+        if (kind !== 'image' && kind !== 'panorama') continue
+        let u =
+          kind === 'panorama'
+            ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
+            : String((hit.data as any)?.src || '').trim()
+        const aid = String((hit.data as any)?.srcAssetId || '').trim()
+
+        if (!u && aid) {
+          const restored = await getLocalImageAssetObjectUrl(aid)
+          if (restored) {
+            u = restored
+          }
+        }
+
+        if (!u) {
+          continue
+        }
+        pairs.push({ url: u, assetId: aid || undefined })
+      }
+    }
+
+    for (let i = 0; i < refs.length; i++) {
+      let url = String(refs[i] || '').trim()
+      if (!url) continue
+      const aid = Array.isArray(refIds) && i < refIds.length ? String(refIds[i] || '').trim() : ''
+
+      if (url.startsWith('blob:') && aid) {
+        const restored = await getLocalImageAssetObjectUrl(aid)
+        if (restored) {
+          url = restored
+        }
+      }
+
+      pairs.push({ url, assetId: aid || undefined })
+    }
+
+    const mergedPairs: Array<{ url: string; assetId?: string }> = []
+    for (const p of pairs) {
+      const existing = mergedPairs.find((x) => x.url === p.url)
+      if (!existing) mergedPairs.push(p)
+      else if (!existing.assetId && p.assetId) existing.assetId = p.assetId
+    }
+
+    let primarySrc = String(node.data.src || mergedPairs[0]?.url || '').trim()
+    const primaryAssetId =
+      String((node.data as any)?.srcAssetId || '').trim() ||
+      (mergedPairs.find((p) => p.url === primarySrc)?.assetId ?? '')
+
+    if (primarySrc.startsWith('blob:') && primaryAssetId) {
+      const restored = await getLocalImageAssetObjectUrl(primaryAssetId)
+      if (restored) {
+        primarySrc = restored
+      }
+    }
+
+    const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
+    /** 第二路提示词映射到工作流 `__BODY__`（常见于图音视频：__PROMPT__ + __BODY__ 双文本口）。 */
+    const bodyForWorkflow = String(p2 || '').trim()
+    return {
+      ...common,
+      prompt: node.data.prompt,
+      prompt2: p2,
+      prompt3: p3,
+      prompt4: p4,
+      ...(pExtra.length ? { extraPrompts: pExtra } : {}),
+      body: bodyForWorkflow,
       src: primarySrc,
       srcAssetId: primaryAssetId,
       refImages: purePairs.map((p) => p.url).join('\n'),
@@ -243,8 +431,7 @@ function extractNodeInputs(
         const hit = resolveMentionRefToNode(ref, allNodes, node.id)
         if (!hit) continue
         const kind = (hit.data as StudioNodeData).kind
-        if (kind !== 'image' && kind !== 'video' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music')
-          continue
+        if (kind !== 'image' && kind !== 'panorama') continue
         const u =
           kind === 'panorama'
             ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
@@ -290,8 +477,7 @@ function extractNodeInputs(
       const hit = resolveMentionRefToNode(ref, allNodes, node.id)
       if (!hit) continue
       const kind = (hit.data as StudioNodeData).kind
-      if (kind !== 'image' && kind !== 'video' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music')
-        continue
+      if (kind !== 'image' && kind !== 'panorama') continue
       const u =
         kind === 'panorama'
           ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
@@ -602,27 +788,6 @@ function summarizeForLoopStartTotalForLog(prompt: Record<string, unknown>): Arra
     })
   }
   return rows
-}
-
-/**
- * 从 `/view?...` URL 中提取 filename 参数，失败返回空串。
- */
-function readFilenameFromComfyViewUrl(viewUrl: string | null | undefined): string {
-  const raw = String(viewUrl || '').trim()
-  if (!raw) return ''
-  try {
-    const absolute = raw.startsWith('http') ? raw : `${window.location.origin}${raw.startsWith('/') ? '' : '/'}${raw}`
-    const parsed = new URL(absolute)
-    return String(parsed.searchParams.get('filename') || '').trim()
-  } catch {
-    const m = raw.match(/[?&]filename=([^&]+)/i)
-    if (!m?.[1]) return ''
-    try {
-      return decodeURIComponent(m[1]).trim()
-    } catch {
-      return m[1].trim()
-    }
-  }
 }
 
 /**
@@ -2057,24 +2222,65 @@ export function useWorkflowIntegration() {
 
   const refreshOfficialTemplates = useCallback(async () => {
     const base = String(loadLicenseServerConfig().baseUrl || '').trim().replace(/\/+$/, '')
-    const headers = buildLicenseHeaders()
-    if (!base || !headers) {
+    if (!base) {
       setOfficialTemplates([])
       return []
     }
-    const response = await fetch(`${base}/templates`, {
-      headers: {
-        ...headers,
-      },
-    })
-    const json = (await response.json().catch(() => ({}))) as {
-      templates?: OfficialTemplateMeta[]
-      message?: string
+    const licHeaders = buildLicenseHeaders()
+    const fetchOpts: RequestInit = licHeaders ? { headers: { ...licHeaders } } : {}
+
+    const parseTemplatesPayload = (raw: unknown): OfficialTemplateMeta[] => {
+      const j = raw as {
+        templates?: unknown
+        groups?: Array<{ items?: unknown }>
+        message?: string
+      }
+      if (Array.isArray(j.templates)) {
+        return j.templates
+          .filter((x): x is Record<string, unknown> => Boolean(x) && typeof x === 'object' && !Array.isArray(x))
+          .map((row) => ({
+            id: String(row.id || '').trim(),
+            name: String(row.name || row.id || '').trim(),
+            version: String(row.version || '1.0.0').trim() || '1.0.0',
+            description: row.description != null ? String(row.description) : undefined,
+            paramsSchema:
+              row.paramsSchema && typeof row.paramsSchema === 'object' && !Array.isArray(row.paramsSchema)
+                ? (row.paramsSchema as Record<string, unknown>)
+                : undefined,
+          }))
+          .filter((x) => x.id)
+      }
+      const groups = Array.isArray(j.groups) ? j.groups : []
+      const out: OfficialTemplateMeta[] = []
+      for (const g of groups) {
+        const items = Array.isArray(g?.items) ? g.items : []
+        for (const rawItem of items) {
+          if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) continue
+          const row = rawItem as Record<string, unknown>
+          const id = String(row.id || '').trim()
+          if (!id) continue
+          out.push({
+            id,
+            name: String(row.name || id).trim(),
+            version: String(row.version || '1.0.0').trim() || '1.0.0',
+            description: row.description != null ? String(row.description) : undefined,
+            paramsSchema:
+              row.paramsSchema && typeof row.paramsSchema === 'object' && !Array.isArray(row.paramsSchema)
+                ? (row.paramsSchema as Record<string, unknown>)
+                : undefined,
+          })
+        }
+      }
+      return out
     }
+
+    /** Auth 列表在 GET /templates/groups（公开）；旧 /templates 会 302 且 JSON 不含 templates[] */
+    const response = await fetch(`${base}/templates/groups`, fetchOpts)
+    const json = (await response.json().catch(() => ({}))) as { message?: string }
     if (!response.ok) {
-      throw new Error(String(json.message || `拉取官方模板失败：${response.status}`))
+      throw new Error(String((json as { message?: string }).message || `拉取官方模板失败：${response.status}`))
     }
-    const list = Array.isArray(json.templates) ? json.templates : []
+    const list = parseTemplatesPayload(json)
     setOfficialTemplates(list)
     return list
   }, [])
@@ -2105,7 +2311,7 @@ export function useWorkflowIntegration() {
       }
       const access = computeAccessState(loadLicenseSnapshotV2())
       if (access === 'expired') {
-        throw new Error('您的授权已到期：会员模板/云端能力不可用。请续费后在「授权」里点击刷新。')
+        throw new Error('您的授权已到期：请在「授权」里续费或刷新。')
       }
       if (node.data.kind === 'group') {
         throw new Error('分组节点不可执行')
@@ -2114,22 +2320,107 @@ export function useWorkflowIntegration() {
         throw new Error('VR360 全景节点为本地预览与导出工具，请在节点内使用「当前视角」，不参与 Comfy 执行')
       }
 
-      const nodeKind = node.data.kind
+      const reserveParams = buildPointsReserveParams(node, snapshot, {
+        executionTarget: options?.executionTarget,
+      })
+      const { nodeKind, executionTarget, metadata: reserveMeta } = reserveParams
       const nodeConfig = snapshot.nodeConfigs[nodeKind]
 
-      /**
-       * 节点提示框切换：
-       * - model：仅调用云端模型，不提交 ComfyUI
-       * - workflow：仅提交 ComfyUI（即使配置了云端模型也不走模型）
-       */
-      const hasCloudModelConfigured =
-        Boolean(String(nodeConfig.cloudModelUrl || '').trim()) &&
-        Boolean(String(nodeConfig.cloudModelName || '').trim())
-      const executionTarget =
-        options?.executionTarget ??
-        ((node.data as any)?.promptPickerMode === 'model' ? 'model' : undefined) ??
-        // 对“只用模型、不懂 ComfyUI”的用户：当节点配置了云端模型且本地/云端执行未启用时，默认走模型。
-        ((!snapshot.local.enabled && !snapshot.cloud.enabled && hasCloudModelConfigured) ? 'model' : 'workflow')
+      let reserveMetadata = { ...reserveMeta }
+      if (snapshot.executionMode === 'official') {
+        const tid = String(nodeConfig.officialTemplateId || '').trim()
+        const tpl = officialTemplates.find((t) => t.id === tid)
+        const tn = String(tpl?.name || '').trim()
+        if (tn) {
+          reserveMetadata = { ...reserveMetadata, workflowName: tn }
+        }
+        if (snapshot.executionProvider === 'local') {
+          reserveMetadata = { ...reserveMetadata, pointsBillingKind: 'local_workflow' }
+        }
+      }
+
+      const runWithPointsGuard = async (run: () => Promise<any>): Promise<any> => {
+        const snapPoints = loadLicenseSnapshotV2()
+        const lc = String(snapPoints?.licenseCode || '').trim()
+        const mc = String(snapPoints?.machineId || '').trim()
+        if (!lc || !mc) {
+          return await run()
+        }
+        const dedupeKey = `${lc}_${node.id}_${Date.now()}`
+        const rv = await apiPointsReserve({
+          licenseCode: lc,
+          machineCode: mc,
+          dedupeKey,
+          nodeKind,
+          executionTarget,
+          metadata: reserveMetadata,
+        })
+        if (!rv.success) {
+          const code = String((rv as { error?: string }).error || '')
+          if (code === 'need_pro_membership') {
+            throw new Error(
+              String(
+                (rv as { message?: string }).message ||
+                  '需要 Auth 会员（proTemplates）：请在环境变量 POINTS_PRO_MEMBERSHIP_NODE_KINDS 启用时，为预扣请求附带 JWT 会员码。',
+              ),
+            )
+          }
+          throw new Error(
+            String(rv.message || '积分不足：请检查授权或启动 Auth 服务（npm run auth:dev / npm run dev，积分 API 在 /pts）'),
+          )
+        }
+        const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+        const confirmWithRetries = async () => {
+          const max = 5
+          let lastMsg = 'confirm_failed'
+          for (let i = 0; i < max; i += 1) {
+            try {
+              const c = await apiPointsConfirm({ licenseCode: lc, machineCode: mc, dedupeKey })
+              if (c.success) return
+              lastMsg = String(c.message || 'confirm_failed')
+            } catch (e) {
+              lastMsg = String((e as Error)?.message || e || 'confirm_failed')
+            }
+            await sleep(350 * (i + 1) * (i + 1))
+          }
+          await apiPointsConfirmFailure({
+            licenseCode: lc,
+            machineCode: mc,
+            dedupeKey,
+            errorText: lastMsg,
+            metadata: { ...reserveMetadata, attempts: max },
+          }).catch(() => {})
+        }
+        let out: any
+        try {
+          out = await run()
+        } catch (err) {
+          const msg = String((err as Error)?.message || err || '未知错误')
+          await apiPointsCancel({
+            licenseCode: lc,
+            machineCode: mc,
+            dedupeKey,
+            cancelReason: 'failure',
+            error: msg,
+            metadata: { ...reserveMetadata, nodeId: node.id },
+          }).catch(() => {})
+          const reasonMax = 120
+          const errRaw = msg.trim()
+          const truncated = errRaw.length > reasonMax
+          const errShort = truncated ? `${errRaw.slice(0, reasonMax)}…` : errRaw
+          const toastShort = `任务失败：${errShort}，积分已自动退还`
+          setLastExecutionMessage(`任务失败：${msg}，积分已自动退还`)
+          emitPointsTaskFailure({
+            message: toastShort,
+            errorFull: truncated ? errRaw : undefined,
+          })
+          throw err
+        }
+        await confirmWithRetries()
+        return out
+      }
+
+      return await runWithPointsGuard(async () => {
       if (executionTarget === 'model') {
         const nodeModel = String((node.data as any)?.cloudModelName || nodeConfig.cloudModelName || '').trim()
         const nodeBaseUrlRaw = String((node.data as any)?.cloudModelUrl || nodeConfig.cloudModelUrl || '')
@@ -2174,14 +2465,32 @@ export function useWorkflowIntegration() {
         if (!apiKey) {
           throw new Error('未填写 API Key。请先在「设置 - 云端模型」里填写 API Key。')
         }
+        const modelPromptNode =
+          nodeKind === 'image' && options?.studioEdges?.length && options?.allNodes?.length
+            ? cloneNodeWithInboundTextPromptPrepended(
+                node,
+                options.studioEdges,
+                options.allNodes,
+                undefined,
+              )
+            : node
         const inputText =
           nodeKind === 'text' || nodeKind === 'script'
             ? String((node.data as any)?.body || '').trim()
-            : nodeKind === 'image' || nodeKind === 'video'
-              ? String((node.data as any)?.prompt || '').trim()
-              : nodeKind === 'audio' || nodeKind === 'music'
-                ? String((node.data as any)?.note || '').trim()
-                : ''
+            : nodeKind === 'image'
+              ? String((modelPromptNode.data as any)?.prompt || '').trim()
+              : nodeKind === 'video'
+                ? [
+                    String((node.data as any)?.prompt || '').trim(),
+                    String((node.data as any)?.prompt2 || '').trim(),
+                    String((node.data as any)?.prompt3 || '').trim(),
+                    String((node.data as any)?.prompt4 || '').trim(),
+                  ]
+                    .filter(Boolean)
+                    .join('\n\n')
+                : nodeKind === 'audio' || nodeKind === 'music'
+                  ? String((node.data as any)?.note || '').trim()
+                  : ''
         if (!inputText) {
           throw new Error('输入内容为空，无法调用模型。请先在节点提示框填写内容再执行。')
         }
@@ -2292,7 +2601,7 @@ export function useWorkflowIntegration() {
             const isIntl = /dashscope-intl\.aliyuncs\.com/i.test(baseUrl)
             const host = isIntl ? 'https://dashscope-intl.aliyuncs.com' : 'https://dashscope.aliyuncs.com'
             const endpoint = `${host}/api/v1/services/aigc/multimodal-generation/generation`
-            const nodeInputs = extractNodeInputs(node, options?.allNodes)
+            const nodeInputs = await extractNodeInputs(node, options?.allNodes)
             const refCandidates = pickModelReferenceImages(nodeInputs as any, 4)
             const dashscopeRefImages = (
               await Promise.all(
@@ -2403,7 +2712,7 @@ export function useWorkflowIntegration() {
           } else {
             const endpoint = `${baseUrl}/v1/images/generations`
             // 若存在参考图，优先走 Responses 多模态（input_image + image_generation tool）
-            const nodeInputs = extractNodeInputs(node, options?.allNodes)
+            const nodeInputs = await extractNodeInputs(node, options?.allNodes)
             const refCandidates = pickModelReferenceImages(nodeInputs as any, 4)
             const refImages = (
               await Promise.all(
@@ -2515,6 +2824,7 @@ export function useWorkflowIntegration() {
             audioUrl: null,
             resultUrl: imageUrl,
             historyEntry: json,
+            resultViewUrls: imageUrl ? [imageUrl] : undefined,
           }
         }
         if (nodeKind === 'video') {
@@ -2644,6 +2954,7 @@ export function useWorkflowIntegration() {
             audioUrl: null,
             resultUrl: videoUrl,
             historyEntry: createJson,
+            resultViewUrls: videoUrl ? [videoUrl] : undefined,
           }
         }
         const systemPrompt =
@@ -2653,7 +2964,7 @@ export function useWorkflowIntegration() {
               ? '你是分镜/脚本生成助手。请根据用户输入输出结构清晰、可直接用于短片/漫剧的脚本正文，输出纯文本，不要解释。'
               : '你是 Flowid 文本节点助手。请直接输出最终文本，不要输出额外解释。'
         options?.onProgress?.({ percent: 8, label: '正在调用云端模型…' })
-        const nodeInputs = extractNodeInputs(node, options?.allNodes)
+        const nodeInputs = await extractNodeInputs(node, options?.allNodes)
         const refCandidates = pickModelReferenceImages(nodeInputs as any, 6)
         const refImages = (
           await Promise.all(
@@ -2753,7 +3064,16 @@ export function useWorkflowIntegration() {
         if (!authBaseUrl || !licenseHeaders) {
           throw new Error('未配置授权服务地址或尚未激活授权，无法提交官方模板任务')
         }
-        const nodeInputs = extractNodeInputs(node, options?.allNodes)
+        const officialInputNode =
+          nodeKind === 'image' && options?.studioEdges?.length && options?.allNodes?.length
+            ? cloneNodeWithInboundTextPromptPrepended(
+                node,
+                options.studioEdges,
+                options.allNodes,
+                undefined,
+              )
+            : node
+        const nodeInputs = await extractNodeInputs(officialInputNode, options?.allNodes)
         const rawRefImages = String(nodeInputs.refImages ?? '')
         const refImageUrls = rawRefImages
           .split('\n')
@@ -2816,7 +3136,9 @@ export function useWorkflowIntegration() {
             throw new Error(String(statusJson.error || '官方模板任务执行失败'))
           }
           if (status === 'success') {
-            const mediaUrls = statusJson.result?.mediaUrls ?? []
+            const mediaUrls = (statusJson.result?.mediaUrls ?? [])
+              .map((u) => String(u || '').trim())
+              .filter(Boolean)
             const outputUrl = mediaUrls[0] || ''
             const outputLower = outputUrl.toLowerCase()
             const isAudio =
@@ -2831,6 +3153,10 @@ export function useWorkflowIntegration() {
               audioUrl: isAudio ? outputUrl : null,
               resultUrl: outputUrl || null,
               historyEntry: statusJson.result?.history ?? {},
+              resultViewUrls:
+                !isAudio && (nodeKind === 'image' || nodeKind === 'video') && mediaUrls.length
+                  ? mediaUrls
+                  : undefined,
             }
           }
           options?.onProgress?.({
@@ -2841,48 +3167,102 @@ export function useWorkflowIntegration() {
         }
         throw new Error('官方模板任务超时，请稍后重试')
       }
-      /** 允许「仅在工作流列表中存 JSON、根编辑区为空」的配置，否则三视图等条目有内容也会被误拦在提交之前 */
-      const hasUsableWorkflowTemplate =
-        Boolean(nodeConfig.workflowJsonText.trim()) ||
-        nodeConfig.workflows.some((item) => (item.jsonText || '').trim().length > 0)
+      const isCloudCustom = targetProvider === 'cloud' && snapshot.executionMode === 'custom'
+      const cloudWorkflowEntryId = isCloudCustom
+        ? String((node.data as { workflowEntryId?: string }).workflowEntryId || '').trim()
+        : ''
+      const rootWorkflowJson = nodeConfig.workflowJsonText.trim()
+      /** 云端自定义：仅允许「已选云端条目 id」或根 JSON；不依赖本地 workflows 列表是否有内容。 */
+      const hasUsableWorkflowTemplate = isCloudCustom
+        ? Boolean(cloudWorkflowEntryId) || Boolean(rootWorkflowJson)
+        : Boolean(rootWorkflowJson) ||
+          nodeConfig.workflows.some((item) => (item.jsonText || '').trim().length > 0)
       if (!hasUsableWorkflowTemplate) {
         throw new Error(
-          `请先在「${nodeKind}」配置工作流：在设置中导入或粘贴至少一条工作流 JSON（或填写根编辑区）`,
+          isCloudCustom
+            ? `请先在底部面板选择云端工作流，或在「${nodeKind}」设置中填写根工作流 JSON`
+            : `请先在「${nodeKind}」配置工作流：在设置中导入或粘贴至少一条工作流 JSON（或填写根编辑区）`,
         )
       }
       let prompt: Record<string, unknown>
+      type RemoteCloudPick = { id: string; name: string }
+      let remoteCloudPick: RemoteCloudPick | null = null
+      let workflowSource = ''
+      if (isCloudCustom && cloudWorkflowEntryId) {
+        const authBaseUrl = String(loadLicenseServerConfig().baseUrl || '')
+          .trim()
+          .replace(/\/+$/, '')
+        if (!authBaseUrl) {
+          throw new Error('未配置授权服务地址，无法拉取云端工作流')
+        }
+        const wfRes = await fetch(
+          `${authBaseUrl}/cloud-workflows/${encodeURIComponent(cloudWorkflowEntryId)}/workflow`,
+        )
+        const wfJson = (await wfRes.json().catch(() => ({}))) as {
+          workflowJson?: string
+          name?: string
+          id?: string
+          message?: string
+        }
+        const remoteJson = String(wfJson.workflowJson || '').trim()
+        if (!wfRes.ok || !remoteJson) {
+          throw new Error(
+            String(wfJson.message || `无法拉取云端工作流 JSON（HTTP ${wfRes.status}）`),
+          )
+        }
+        workflowSource = remoteJson
+        remoteCloudPick = {
+          id: String(wfJson.id || cloudWorkflowEntryId).trim(),
+          name: String(wfJson.name || (node.data as { model?: string }).model || cloudWorkflowEntryId).trim(),
+        }
+      } else if (isCloudCustom && rootWorkflowJson) {
+        workflowSource = rootWorkflowJson
+      }
       const { preferredName, byEntryId, byName, picked: pickedWorkflow } =
         matchStudioNodeWorkflow(
           node.data as { model?: string; workflowEntryId?: string },
           nodeConfig,
         )
-      // 节点上写了名称但列表对不上时不再静默回退到全局，避免误跑成其它工作流（如 z-image）
-      if (preferredName && !byEntryId && !byName) {
-        throw new Error(
-          `未找到工作流「${preferredName}」，请在下拉中重新选择，或在设置中核对名称是否与列表完全一致`,
-        )
+      if (!workflowSource) {
+        // 节点上写了名称但列表对不上时不再静默回退到全局，避免误跑成其它工作流（如 z-image）
+        if (preferredName && !byEntryId && !byName) {
+          throw new Error(
+            `未找到工作流「${preferredName}」，请在下拉中重新选择，或在设置中核对名称是否与列表完全一致`,
+          )
+        }
+        workflowSource =
+          (pickedWorkflow?.jsonText || '').trim() || nodeConfig.workflowJsonText.trim()
       }
-      const workflowSource =
-        (pickedWorkflow?.jsonText || '').trim() || nodeConfig.workflowJsonText.trim()
       if (!workflowSource) {
         throw new Error(
           `当前选中的工作流「${pickedWorkflow?.name || '（未命名）'}」JSON 为空，请到设置中打开该条目并重新保存`,
         )
       }
+      const wfLabel =
+        remoteCloudPick?.name ||
+        pickedWorkflow?.name ||
+        (typeof (node.data as { model?: string }).model === 'string'
+          ? String((node.data as { model?: string }).model || '')
+          : '') ||
+        '（未命名）'
+      const wfEntryId = remoteCloudPick?.id || pickedWorkflow?.id || ''
+      const wfResultNodeId = pickedWorkflow?.resultNodeId || nodeConfig.resultNodeId
+      const wfResultFieldPath = pickedWorkflow?.resultFieldPath || nodeConfig.resultFieldPath
       /** 开发环境：在浏览器控制台（F12 → Console）打印本次实际解析到的工作流，便于核对是否串台 */
       if (shouldLogComfyDebug()) {
-        const 匹配来源 =
-          byEntryId != null
+        const 匹配来源 = remoteCloudPick
+          ? '授权服务 /cloud-workflows/:id/workflow'
+          : byEntryId != null
             ? '节点.workflowEntryId'
             : byName != null
               ? '节点.model'
-              : '设置列表首条（置顶默认）'
+              : '设置列表首条（置顶默认）/根 JSON'
         console.info('[Flowid Comfy] 本次执行工作流', {
           节点标题: node.data.title || node.id,
           节点id: node.id,
           节点类型: nodeKind,
-          工作流名称: pickedWorkflow?.name,
-          工作流条目id: pickedWorkflow?.id,
+          工作流名称: wfLabel,
+          工作流条目id: wfEntryId || '（无）',
           匹配来源,
           节点model字段: preferredName || '（空）',
           workflowJson字符数: workflowSource.length,
@@ -2896,34 +3276,33 @@ export function useWorkflowIntegration() {
       prompt = normalizePromptShape(prompt)
       prompt = sanitizePromptNodes(prompt)
       validatePromptNodes(prompt)
-      const nodeInputs = extractNodeInputs(node, options?.allNodes)
+      const comfyInputNode =
+        nodeKind === 'image' && options?.studioEdges?.length && options?.allNodes?.length
+          ? cloneNodeWithInboundTextPromptPrepended(
+              node,
+              options.studioEdges,
+              options.allNodes,
+              workflowSource,
+            )
+          : node
+      const nodeInputs = await extractNodeInputs(comfyInputNode, options?.allNodes)
       const rawSrc = String(nodeInputs.src ?? '').trim()
       const rawRefImages = String(nodeInputs.refImages ?? '')
       const refImageUrls = rawRefImages
         .split('\n')
         .map((item) => item.trim())
         .filter(Boolean)
-      const promptOrNoteText =
-        nodeKind === 'image' || nodeKind === 'video'
-          ? String(options?.rawPromptText ?? node.data.prompt ?? '')
-          : String(options?.rawNoteText ?? (node.data as { note?: string }).note ?? '')
-      const mentionAttachments =
-        (nodeKind === 'image' || nodeKind === 'video' || nodeKind === 'audio' || nodeKind === 'music') &&
-        options?.allNodes?.length
-          ? listMentionImageAttachments(promptOrNoteText, options.allNodes, node.id)
-          : []
-      const mentionImageUrls = mentionAttachments.map((item) => String(item.url || '').trim())
       /**
        * 图片输入统一策略：不区分主图/参考图，只看“最终输入序列”。
-       * - 若提示框存在 @ 引用：严格按 @ 顺序作为输入序列；
-       * - 否则：按节点现有 src + refImages 组装并去重。
+       * 使用 extractNodeInputs 返回的已恢复 URL，避免使用失效的 blob URL。
        */
+      const nodeInputsRefImages = String((nodeInputs as any)?.refImages || '').trim()
       const orderedInputImageUrls = (
-        (nodeKind === 'image' || nodeKind === 'video') && mentionImageUrls.length > 0
-          ? mentionImageUrls
+        (nodeKind === 'image' || nodeKind === 'video') && nodeInputsRefImages
+          ? [String((nodeInputs as any)?.src || ''), ...nodeInputsRefImages.split('\n')]
           : [rawSrc, ...refImageUrls]
       ).filter((url) => String(url || '').trim())
-      const missingMentionRefs = mentionImageUrls.filter((url) => !orderedInputImageUrls.includes(url))
+      const missingMentionRefs: string[] = []
       if (import.meta.env.DEV && (nodeKind === 'image' || nodeKind === 'video')) {
         console.info('[Flowid Diagnose] 输入图判定详情', {
           节点标题: node.data.title || node.id,
@@ -2931,23 +3310,17 @@ export function useWorkflowIntegration() {
           rawPromptText: String(options?.rawPromptText ?? ''),
           当前src: rawSrc || '（空）',
           nodeInputs_refImages原始文本: rawRefImages || '（空）',
-          mention解析URL: mentionImageUrls,
           最终输入序列URL: orderedInputImageUrls,
           缺失参考图URL: missingMentionRefs,
         })
       }
-      if ((nodeKind === 'image' || nodeKind === 'video') && mentionImageUrls.length > 0 && orderedInputImageUrls.length === 0) {
+      if ((nodeKind === 'image' || nodeKind === 'video') && orderedInputImageUrls.length === 0 && nodeInputsRefImages) {
         throw new Error(
-          `检测到提示词里有 ${mentionImageUrls.length} 个 @ 图片引用，但最终输入图为 0。请检查 @ 引用是否指向有效图片节点。`,
-        )
-      }
-      if ((nodeKind === 'image' || nodeKind === 'video') && missingMentionRefs.length > 0) {
-        throw new Error(
-          `图片输入组装不一致：@ 解析出 ${mentionImageUrls.length} 张，但最终仅组装 ${orderedInputImageUrls.length} 张。缺失 ${missingMentionRefs.length} 张（详见控制台 [Flowid Diagnose] 输入图判定详情）。`,
+          `检测到提示词里有 @ 图片引用，但最终输入图为 0。请检查 @ 引用是否指向有效图片节点，或参考图是否已保存。`,
         )
       }
       if (nodeKind === 'image' || nodeKind === 'video') {
-        const summary = `执行输入判定：输入图总数=${orderedInputImageUrls.length}（@引用=${mentionImageUrls.length}）`
+        const summary = `执行输入判定：输入图总数=${orderedInputImageUrls.length}`
         setLastExecutionMessage(summary)
       }
       if (nodeKind === 'image' || nodeKind === 'video') {
@@ -2955,15 +3328,15 @@ export function useWorkflowIntegration() {
         const loadImageSlotCount = countComfyFileLoadImageSlots(prompt)
         if (import.meta.env.DEV) {
           console.info('[Flowid Diagnose] 工作流图片槽位容量', {
-            工作流名称: pickedWorkflow?.name || '（未命名）',
-            工作流条目id: pickedWorkflow?.id || '（无）',
+            工作流名称: wfLabel,
+            工作流条目id: wfEntryId || '（无）',
             需要图片数: requiredInputImages,
             LoadImage槽位数: loadImageSlotCount,
           })
         }
         if (requiredInputImages > 0 && loadImageSlotCount > 0 && loadImageSlotCount < requiredInputImages) {
           throw new Error(
-            `当前工作流「${pickedWorkflow?.name || '（未命名）'}」仅有 ${loadImageSlotCount} 个图片输入槽位，但本次需要 ${requiredInputImages} 张。请切换到槽位更多的工作流，或减少图片数量。`,
+            `当前工作流「${wfLabel}」仅有 ${loadImageSlotCount} 个图片输入槽位，但本次需要 ${requiredInputImages} 张。请切换到槽位更多的工作流，或减少图片数量。`,
           )
         }
       }
@@ -2993,16 +3366,6 @@ export function useWorkflowIntegration() {
         return uploaded
       }
       const mentionLabelByUrl = new Map<string, string>()
-      const mentionNodeIdByUrl = new Map<string, string>()
-      for (const item of mentionAttachments) {
-        const key = String(item.url || '').trim()
-        if (!key || mentionLabelByUrl.has(key)) continue
-        const rawMention = String(item.mention || '').trim()
-        const labelMatch = rawMention.match(/^@\[(?<label>[^\]]+)\]/u)
-        const idMatch = rawMention.match(/\((?<nid>[0-9a-fA-F-]{36})\)$/u)
-        mentionLabelByUrl.set(key, labelMatch?.groups?.label?.trim() || `图${mentionLabelByUrl.size + 1}`)
-        mentionNodeIdByUrl.set(key, idMatch?.groups?.nid?.trim() || '')
-      }
       const uploadFailures: Array<{ index: number; url: string; reason: string }> = []
       const allUploads: ComfyUploadedInputImage[] = []
       if (orderedInputImageUrls.length > 0) {
@@ -3098,10 +3461,25 @@ export function useWorkflowIntegration() {
         )
       }
       options?.onProgress?.({ percent: 4, label: '输入已准备，正在组装工作流…' })
-      // 兼容简单占位符：把 "__PROMPT__"、"__BODY__"、"__SRC__" 自动替换。
+      // 兼容简单占位符：把 "__PROMPT__"、"__PROMPTn__"、"__BODY__"、"__SRC__" 自动替换。
       const serializedBefore = JSON.stringify(prompt)
-      const text = serializedBefore
-        .replaceAll('__PROMPT__', String(nodeInputs.prompt ?? ''))
+      const text = replaceIndexedPromptPlaceholders(serializedBefore, nodeInputs)
+        .replaceAll('__MATTING_POINTS_JSON__', String((nodeInputs as { mattingPointsJson?: string }).mattingPointsJson ?? '[]'))
+        .replaceAll(
+          '__MATTING_POSITIVE_COORDS_JSON__',
+          String((nodeInputs as { mattingPositiveCoordsJson?: string }).mattingPositiveCoordsJson ?? '[]'),
+        )
+        .replaceAll(
+          '__MATTING_NEGATIVE_COORDS_JSON__',
+          String((nodeInputs as { mattingNegativeCoordsJson?: string }).mattingNegativeCoordsJson ?? '[]'),
+        )
+        .replaceAll(
+          '__MATTING_FRAME_INFO_JSON__',
+          String(
+            (nodeInputs as { mattingFrameInfoJson?: string }).mattingFrameInfoJson ??
+              '{"positive_coords":[],"negative_coords":[],"bbox":[],"frame_index":0}',
+          ),
+        )
         .replaceAll('__BODY__', String(nodeInputs.body ?? ''))
         .replaceAll('__SRC__', comfySrc)
         .replaceAll('__NOTE__', String(nodeInputs.note ?? ''))
@@ -3159,11 +3537,7 @@ export function useWorkflowIntegration() {
       ) {
         prompt = injectTextBodyFallback(prompt, nodeInputs.body)
       }
-      const selectedWorkflowName =
-        pickedWorkflow?.name ||
-        (typeof (node.data as { model?: string }).model === 'string'
-          ? (node.data as { model?: string }).model || ''
-          : '')
+      const selectedWorkflowName = wfLabel
       const workflowNeedsImageInput = requiresImageInputByWorkflowName(selectedWorkflowName)
       // 图片/视频节点：允许纯图片输入（无文本提示词）执行，不再做空提示词拦截。
       if (nodeKind === 'image' || nodeKind === 'video') {
@@ -3365,8 +3739,8 @@ export function useWorkflowIntegration() {
         ? `执行完成：${node.data.title}，结果预览 ${finalResultUrl}`
         : `执行完成：${node.data.title}`
       setLastExecutionMessage(msg)
-      const mappedNodeId = pickedWorkflow?.resultNodeId || nodeConfig.resultNodeId
-      const mappedFieldPath = pickedWorkflow?.resultFieldPath || nodeConfig.resultFieldPath
+      const mappedNodeId = wfResultNodeId
+      const mappedFieldPath = wfResultFieldPath
       const textResult =
         nodeKind === 'text' || nodeKind === 'script'
           ? extractComfyResultTextByMapping({
@@ -3375,15 +3749,31 @@ export function useWorkflowIntegration() {
               fieldPath: mappedFieldPath,
             }) ?? extractComfyResultText(historyEntry)
           : null
+      let resultViewUrls: string[] | undefined
+      if (nodeKind === 'image' || nodeKind === 'video') {
+        let multi = pickComfyResultImageViewUrls({
+          providerConfig: effectiveProviderConfig,
+          historyEntry,
+          allowFullEntryFallback: true,
+          excludeFilenames: uploadedInputFilenameSet,
+        })
+        multi = multi.filter((u) => !isInputEchoPreview(u))
+        if (!multi.length && effectiveMediaUrl) {
+          multi = [effectiveMediaUrl]
+        }
+        resultViewUrls = multi.length ? multi : undefined
+      }
       return {
         previewUrl: effectiveMediaUrl,
         audioUrl: verifiedAudioUrl,
         resultUrl: finalResultUrl,
         textResult,
         historyEntry,
+        resultViewUrls,
       }
+      })
     },
-    [snapshot],
+    [snapshot, officialTemplates],
   )
 
   const resetWorkflowConfig = useCallback(() => {
@@ -3423,5 +3813,7 @@ export function useWorkflowIntegration() {
     refreshOfficialTemplates,
     runNodeWorkflow,
     resetWorkflowConfig,
+    /** 工作流配置快照（供画布积分预估等读取） */
+    workflowSnapshot: snapshot,
   }
 }

@@ -2,6 +2,30 @@ import type { XYPosition } from '@xyflow/react'
 import type { Node } from '@xyflow/react'
 import type { StudioNodeData, StudioNodeKind } from '../types'
 
+/** 与 `createStudioNode` / `createGroupNode` 默认标题一致，供侧栏等与画布展示对齐 */
+export function defaultStudioNodeTitle(kind: StudioNodeKind | string): string {
+  switch (kind) {
+    case 'text':
+      return '文本'
+    case 'script':
+      return '剧本'
+    case 'image':
+      return '图像'
+    case 'video':
+      return '视频'
+    case 'audio':
+      return '音频'
+    case 'music':
+      return '音乐'
+    case 'panorama':
+      return 'VR360 全景'
+    case 'group':
+      return '分组'
+    default:
+      return typeof kind === 'string' && kind ? kind : '节点'
+  }
+}
+
 /**
  * 在画布上新建指定类型的节点，默认放在 `position`。
  */
@@ -27,7 +51,7 @@ export function createStudioNode(
         type: 'text',
         data: {
           kind: 'text',
-          title: titleOverride ?? '文本',
+          title: titleOverride ?? defaultStudioNodeTitle('text'),
           runStatus: 'idle',
           body: '',
           model: '',
@@ -39,7 +63,7 @@ export function createStudioNode(
         type: 'script',
         data: {
           kind: 'script',
-          title: titleOverride ?? '剧本',
+          title: titleOverride ?? defaultStudioNodeTitle('script'),
           runStatus: 'idle',
           body: '',
         },
@@ -50,7 +74,7 @@ export function createStudioNode(
         type: 'image',
         data: {
           kind: 'image',
-          title: titleOverride ?? '图像',
+          title: titleOverride ?? defaultStudioNodeTitle('image'),
           runStatus: 'idle',
           src: '',
           prompt: '',
@@ -65,7 +89,7 @@ export function createStudioNode(
         type: 'video',
         data: {
           kind: 'video',
-          title: titleOverride ?? '视频',
+          title: titleOverride ?? defaultStudioNodeTitle('video'),
           runStatus: 'idle',
           src: '',
           prompt: '',
@@ -82,7 +106,7 @@ export function createStudioNode(
         type: 'audio',
         data: {
           kind: 'audio',
-          title: titleOverride ?? '音频',
+          title: titleOverride ?? defaultStudioNodeTitle('audio'),
           runStatus: 'idle',
           src: '',
           resultSources: [],
@@ -97,7 +121,7 @@ export function createStudioNode(
         type: 'audio',
         data: {
           kind: 'music',
-          title: titleOverride ?? '音乐',
+          title: titleOverride ?? defaultStudioNodeTitle('music'),
           runStatus: 'idle',
           src: '',
           resultSources: [],
@@ -117,7 +141,7 @@ export function createStudioNode(
         },
         data: {
           kind: 'panorama',
-          title: titleOverride ?? 'VR360 全景',
+          title: titleOverride ?? defaultStudioNodeTitle('panorama'),
           runStatus: 'idle',
           src: '',
           exportWidth: 1024,
@@ -139,7 +163,7 @@ export function createGroupNode(
   position: XYPosition,
   size: { width: number; height: number },
   memberIds: string[],
-  title = '分组',
+  title = defaultStudioNodeTitle('group'),
 ): Node<StudioNodeData> {
   return {
     id,

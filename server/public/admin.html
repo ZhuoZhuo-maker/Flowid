@@ -3,23 +3,25 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Flowid 后端管理</title>
+    <title>FlowID Auth 控制台</title>
     <link rel="stylesheet" href="/admin/css/admin.css" />
   </head>
   <body class="admin-app">
     <aside class="admin-sidebar">
       <div class="admin-brand">
-        <h1>Flowid</h1>
-        <strong>Admin <em>Console</em></strong>
+        <h1><span class="admin-brand-mark" aria-hidden="true">◇</span> FlowID</h1>
+        <strong>Auth <em>Console</em></strong>
       </div>
       <nav class="admin-nav" id="admin-nav-root" aria-label="主导航"></nav>
       <div class="admin-sidebar-footer">
-        <label>
-          <span>管理员口令（x-admin-token）</span>
-          <input id="admin-token-input" type="password" autocomplete="off" placeholder="开发默认见服务端日志" />
-        </label>
-        <div class="row">
-          <button type="button" class="btn btn-primary" id="admin-token-save">保存口令</button>
+        <div class="admin-token-panel">
+          <label>
+            <span>管理员口令（<code class="admin-inline-code">x-admin-token</code>）</span>
+            <input id="admin-token-input" type="password" autocomplete="off" placeholder="开发默认见服务端日志" />
+          </label>
+          <div class="row">
+            <button type="button" class="btn btn-primary" id="admin-token-save">保存口令</button>
+          </div>
         </div>
         <p class="mono admin-footnote" style="margin:10px 0 0;font-size:11px;">
           非 production 环境下后端可放行空口令；生产环境必须在请求头携带正确 token。
@@ -33,6 +35,12 @@
           <p class="sub" id="admin-main-sub">健康检查、端口、环境变量说明、代理状态</p>
         </div>
       </header>
+      <div class="admin-banner admin-cross-service-hint">
+        <strong>积分 / 预扣 / SQLite 授权码</strong> 已与当前服务<strong>同端口</strong>，路径前缀 <code>/pts</code>：<strong>JWT 会员列表与权益</strong>见左侧「License 授权」；<strong>明文积分授权码生成与管理</strong>请打开
+        <a href="/pts/admin/licenses" target="_blank" rel="noopener">/pts/admin/licenses</a>
+        （总览 <a href="/pts/admin" target="_blank" rel="noopener">/pts/admin</a>）。需运行 <code style="font-size: 12px">npm run auth:dev</code> 或 <code style="font-size: 12px">npm run dev</code>。
+        HTML 管理页校验 <code>x-admin-token</code> 或 <code>?token=</code>，可与本页口令一致（未单独设置 <code>ADMIN_TOKEN</code> 时使用 <code>AUTH_ADMIN_SECRET</code>）。
+      </div>
       <div class="admin-main-body">
         <div id="admin-panel-mount"></div>
       </div>
@@ -47,9 +55,9 @@
     <script src="/admin/js/module-overview.js"></script>
     <script src="/admin/js/module-licenses.js"></script>
     <script src="/admin/js/module-cloud-models.js"></script>
-    <script src="/admin/js/module-templates-free.js"></script>
+    <script src="/admin/js/module-cloud-comfyui.js"></script>
     <script src="/admin/js/module-templates-pro.js"></script>
-    <script src="/admin/js/module-prompts-free.js"></script>
+    <script src="/admin/js/module-inspiration-market.js"></script>
     <script src="/admin/js/module-prompts-pro.js"></script>
     <script src="/admin/js/module-user-agreement.js"></script>
     <script src="/admin/js/app.js"></script>

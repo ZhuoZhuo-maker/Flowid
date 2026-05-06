@@ -1,5 +1,6 @@
 const fs = require('node:fs')
 const path = require('node:path')
+const { pathToFileURL } = require('node:url')
 const crypto = require('node:crypto')
 const express = require('express')
 const cors = require('cors')
@@ -15,7 +16,15 @@ const TEMPLATE_INDEX_PATH = path.join(TEMPLATES_DIR, 'index.json')
 const SYSTEM_PROMPTS_DIR = path.resolve(__dirname, 'system-prompts')
 const SYSTEM_PROMPTS_INDEX_PATH = path.join(SYSTEM_PROMPTS_DIR, 'index.json')
 const CLOUD_MODELS_PATH = path.resolve(__dirname, 'cloud-models.json')
+const CLOUD_WORKFLOWS_PATH = path.resolve(__dirname, 'cloud-workflows.json')
 const USER_AGREEMENT_PATH = path.resolve(__dirname, 'user-agreement.json')
+const INSPIRATION_MARKET_DIR = path.resolve(__dirname, 'inspiration-market')
+const INSPIRATION_INDEX_PATH = path.join(INSPIRATION_MARKET_DIR, 'index.json')
+const INSPIRATION_CATEGORIES_PATH = path.join(INSPIRATION_MARKET_DIR, 'categories.json')
+/** 首次部署时的默认分类（可写入 categories.json 后在管理端增删改） */
+const INSPIRATION_CATEGORIES_DEFAULT = ['UI', '海报', '角色', '场景', '产品', '其它']
+/** @type {string[] | null} */
+let inspirationCategoriesCache = null
 const DAY_MS = 24 * 60 * 60 * 1000
 const TASK_TIMEOUT_MS = 30 * 60 * 1000
 const tasks = new Map()
@@ -127,6 +136,66 @@ function writeCloudModels(next) {
   fs.writeFileSync(CLOUD_MODELS_PATH, JSON.stringify({ token, providers }, null, 2), 'utf8')
 }
 
+function ensureCloudWorkflows() {
+  if (!fs.existsSync(CLOUD_WORKFLOWS_PATH)) {
+    fs.writeFileSync(CLOUD_WORKFLOWS_PATH, JSON.stringify({ workflows: [] }, null, 2), 'utf8')
+  }
+}
+
+/**
+ * @returns {{ workflows: Array<{ id: string; name: string; description: string; nodeKind: string; workflowJson: string }> }}
+ */
+function readCloudWorkflows() {
+  ensureCloudWorkflows()
+  try {
+    const raw = fs.readFileSync(CLOUD_WORKFLOWS_PATH, 'utf8')
+    const j = JSON.parse(raw)
+    if (!j || typeof j !== 'object') return { workflows: [] }
+    const rawList = Array.isArray(j.workflows) ? j.workflows : []
+    const workflows = []
+    for (const w of rawList) {
+      if (!w || typeof w !== 'object') continue
+      const id = String(w.id || '').trim() || crypto.randomUUID()
+      const name = String(w.name || '').trim()
+      if (!name) continue
+      const workflowJson = String(w.workflowJson || '')
+      workflows.push({
+        id,
+        name,
+        description: String(w.description || '').trim().slice(0, 500),
+        nodeKind: String(w.nodeKind || '').trim().slice(0, 32),
+        workflowJson: workflowJson.slice(0, 500000),
+      })
+    }
+    return { workflows }
+  } catch {
+    return { workflows: [] }
+  }
+}
+
+/**
+ * @param {{ workflows?: unknown[] }} next
+ */
+function writeCloudWorkflows(next) {
+  const rawList = Array.isArray(next?.workflows) ? next.workflows : []
+  const workflows = []
+  for (const w of rawList) {
+    if (!w || typeof w !== 'object') continue
+    const id = String(w.id || '').trim() || crypto.randomUUID()
+    const name = String(w.name || '').trim()
+    if (!name) continue
+    const workflowJson = String(w.workflowJson || '')
+    workflows.push({
+      id,
+      name,
+      description: String(w.description || '').trim().slice(0, 500),
+      nodeKind: String(w.nodeKind || '').trim().slice(0, 32),
+      workflowJson: workflowJson.slice(0, 500000),
+    })
+  }
+  fs.writeFileSync(CLOUD_WORKFLOWS_PATH, JSON.stringify({ workflows }, null, 2), 'utf8')
+}
+
 function readUserAgreement() {
   try {
     if (!fs.existsSync(USER_AGREEMENT_PATH)) {
@@ -236,6 +305,139 @@ function writeSystemPromptsIndex(prompts) {
     ),
     'utf8',
   )
+}
+
+function ensureInspirationMarketIndex() {
+  if (!fs.existsSync(INSPIRATION_MARKET_DIR)) fs.mkdirSync(INSPIRATION_MARKET_DIR, { recursive: true })
+  if (!fs.existsSync(INSPIRATION_INDEX_PATH)) {
+    fs.writeFileSync(INSPIRATION_INDEX_PATH, JSON.stringify({ items: [] }, null, 2), 'utf8')
+  }
+}
+
+function readInspirationMarketIndex() {
+  ensureInspirationMarketIndex()
+  try {
+    const raw = fs.readFileSync(INSPIRATION_INDEX_PATH, 'utf8')
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed.items) ? parsed.items : []
+  } catch {
+    return []
+  }
+}
+
+function writeInspirationMarketIndex(items) {
+  ensureInspirationMarketIndex()
+  fs.writeFileSync(INSPIRATION_INDEX_PATH, JSON.stringify({ items }, null, 2), 'utf8')
+}
+
+function readInspirationCategories() {
+  ensureInspirationMarketIndex()
+  if (inspirationCategoriesCache) return inspirationCategoriesCache.slice()
+  try {
+    if (!fs.existsSync(INSPIRATION_CATEGORIES_PATH)) {
+      writeInspirationCategories(INSPIRATION_CATEGORIES_DEFAULT.slice())
+      return inspirationCategoriesCache.slice()
+    }
+    const raw = fs.readFileSync(INSPIRATION_CATEGORIES_PATH, 'utf8')
+    const parsed = JSON.parse(raw)
+    const arr = Array.isArray(parsed) ? parsed : parsed?.categories
+    const out = []
+    const seen = new Set()
+    if (Array.isArray(arr)) {
+      for (const x of arr) {
+        const s = String(x || '').trim()
+        if (!s || seen.has(s)) continue
+        seen.add(s)
+        out.push(s)
+      }
+    }
+    if (!out.length) {
+      writeInspirationCategories(INSPIRATION_CATEGORIES_DEFAULT.slice())
+      return inspirationCategoriesCache.slice()
+    }
+    inspirationCategoriesCache = out
+    return out.slice()
+  } catch {
+    inspirationCategoriesCache = INSPIRATION_CATEGORIES_DEFAULT.slice()
+    return inspirationCategoriesCache.slice()
+  }
+}
+
+/**
+ * @param {string[]} categories
+ */
+function writeInspirationCategories(categories) {
+  ensureInspirationMarketIndex()
+  const unique = []
+  const seen = new Set()
+  for (const x of categories) {
+    const s = String(x || '').trim()
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    unique.push(s)
+  }
+  if (!unique.length) throw new Error('至少保留一个分类标签')
+  fs.writeFileSync(INSPIRATION_CATEGORIES_PATH, JSON.stringify(unique, null, 2), 'utf8')
+  inspirationCategoriesCache = unique
+}
+
+function normalizeInspirationCategory(raw) {
+  const c = String(raw || '').trim()
+  const list = readInspirationCategories()
+  if (list.includes(c)) return c
+  if (list.includes('其它')) return '其它'
+  return list[0] || '其它'
+}
+
+function inspirationMimeToExt(mime) {
+  const m = String(mime || '')
+    .toLowerCase()
+    .split(';')[0]
+    .trim()
+  if (m === 'image/png') return 'png'
+  if (m === 'image/jpeg' || m === 'image/jpg') return 'jpg'
+  if (m === 'image/webp') return 'webp'
+  if (m === 'image/gif') return 'gif'
+  return 'png'
+}
+
+function parseInspirationImageBase64(body) {
+  const raw = String(body?.imageBase64 || '').trim()
+  if (!raw) return { buf: null, ext: 'png' }
+  let b64 = raw
+  let mime = String(body?.imageMime || 'image/png').trim()
+  const dataUrl = /^data:([^;]+);base64,(.+)$/i.exec(raw)
+  if (dataUrl) {
+    mime = dataUrl[1] || mime
+    b64 = dataUrl[2] || ''
+  }
+  const ext = inspirationMimeToExt(mime)
+  try {
+    const buf = Buffer.from(b64, 'base64')
+    if (!buf.length) return { buf: null, ext }
+    if (buf.length > 12 * 1024 * 1024) throw new Error('图片过大（上限 12MB）')
+    return { buf, ext }
+  } catch (e) {
+    throw new Error(String(e?.message || e || '图片 Base64 无效'))
+  }
+}
+
+function safeInspirationBasename(fileName) {
+  const n = String(fileName || '').trim()
+  if (!n || n.includes('..') || n.includes('/') || n.includes('\\')) return ''
+  return n
+}
+
+function inspirationItemImagePath(item) {
+  const f = safeInspirationBasename(item.imageFile)
+  if (!f) return ''
+  return path.join(INSPIRATION_MARKET_DIR, f)
+}
+
+function inspirationItemPromptPath(item) {
+  const f = safeInspirationBasename(item.promptFile)
+  if (!f) return ''
+  return path.join(INSPIRATION_MARKET_DIR, f)
 }
 
 function sha256Hex(text) {
@@ -536,13 +738,6 @@ function sendPublicTemplateWorkflow(req, res) {
       res.status(404).json({ message: '模板不存在' })
       return
     }
-    const tier = normalizeTier(template.tier)
-    const resolved = resolveLicenseFromHeadersOptional(req)
-    const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
-    if (tier === 'pro' && !canSeePro) {
-      res.status(403).json({ message: '该模板为会员内容，请先激活授权' })
-      return
-    }
     const fileName = String(template.workflowFile || '').trim()
     if (!fileName || fileName.includes('..') || fileName.includes('/') || fileName.includes('\\')) {
       res.status(400).json({ message: '模板 workflow 文件名无效' })
@@ -563,6 +758,92 @@ function sendPublicTemplateWorkflow(req, res) {
 
 app.get('/templates/:id/workflow', sendPublicTemplateWorkflow)
 app.get('/templates/:id/workflow.json', sendPublicTemplateWorkflow)
+
+/** 灵感市集：公开列表 / 详情 / 封面（由管理端维护） */
+app.get('/inspiration-market/meta', (_req, res) => {
+  res.json({
+    categories: readInspirationCategories(),
+    serverTimeMs: Date.now(),
+  })
+})
+
+app.get('/inspiration-market/list', (req, res) => {
+  const cat = String(req.query.category || '').trim()
+  let items = readInspirationMarketIndex()
+  if (cat && cat !== '全部') {
+    items = items.filter((x) => normalizeInspirationCategory(x.category) === cat)
+  }
+  items = items.slice().sort((a, b) => Number(b.updatedAtMs || 0) - Number(a.updatedAtMs || 0))
+  const out = items.map((item) => ({
+    id: item.id,
+    title: item.title,
+    description: item.description || '',
+    category: normalizeInspirationCategory(item.category),
+    imageUrl: `/inspiration-market/image/${encodeURIComponent(item.id)}`,
+  }))
+  res.json({ total: out.length, items: out, serverTimeMs: Date.now() })
+})
+
+app.get('/inspiration-market/item/:id', (req, res) => {
+  const id = String(req.params.id || '').trim()
+  const item = readInspirationMarketIndex().find((x) => x.id === id)
+  if (!item) {
+    res.status(404).json({ message: '条目不存在' })
+    return
+  }
+  const pp = inspirationItemPromptPath(item)
+  if (!pp || !fs.existsSync(pp)) {
+    res.status(404).json({ message: '提示词文件缺失' })
+    return
+  }
+  const promptText = fs.readFileSync(pp, 'utf8')
+  res.json({
+    id: item.id,
+    title: item.title,
+    description: item.description || '',
+    category: normalizeInspirationCategory(item.category),
+    promptText,
+    imageUrl: `/inspiration-market/image/${encodeURIComponent(id)}`,
+    serverTimeMs: Date.now(),
+  })
+})
+
+app.get('/inspiration-market/image/:id', (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim()
+    const item = readInspirationMarketIndex().find((x) => x.id === id)
+    if (!item) {
+      res.status(404).end()
+      return
+    }
+    const ip = inspirationItemImagePath(item)
+    if (!ip || !fs.existsSync(ip)) {
+      res.status(404).end()
+      return
+    }
+    const ext = path.extname(ip).toLowerCase()
+    const ct =
+      ext === '.png'
+        ? 'image/png'
+        : ext === '.jpg' || ext === '.jpeg'
+          ? 'image/jpeg'
+          : ext === '.webp'
+            ? 'image/webp'
+            : ext === '.gif'
+              ? 'image/gif'
+              : 'application/octet-stream'
+    res.setHeader('Content-Type', ct)
+    res.setHeader('Cache-Control', 'public, max-age=3600')
+    fs.createReadStream(ip).pipe(res)
+  } catch {
+    res.status(500).end()
+  }
+})
+
+/** 直达灵感市集管理（与侧栏「灵感市集」同模块，带 query 自动打开） */
+app.get('/admin/inspiration', (_req, res) => {
+  res.redirect(302, '/admin.html?panel=inspiration-market')
+})
 
 app.use(express.static(path.join(__dirname, 'public')))
 
@@ -617,8 +898,52 @@ app.post('/proxy/openai', async (req, res) => {
 })
 
 app.get('/healthz', (_req, res) => {
-  res.json({ ok: true, service: 'flowid-auth-server' })
+  res.json({
+    ok: true,
+    service: 'flowid-auth-server',
+    pointsMount: '/pts',
+    pointsAdmin: '/pts/admin',
+    pointsApi: '/pts/api',
+  })
 })
+
+/** 健康检查扩展字段（供 /status 可视化页使用）；不改变 GET /healthz 的 JSON 形态。 */
+app.get('/healthz/detailed', (_req, res) => {
+  let authDbOk = false
+  try {
+    ensureDb()
+    readDb()
+    authDbOk = true
+  } catch {
+    authDbOk = false
+  }
+  res.json({
+    ok: true,
+    service: 'flowid-auth-server',
+    pointsMount: '/pts',
+    pointsAdmin: '/pts/admin',
+    pointsApi: '/pts/api',
+    serverTimeMs: Date.now(),
+    serverTimeIso: new Date().toISOString(),
+    listenPort: PORT,
+    nodeEnv: String(process.env.NODE_ENV || '').trim() || '未设置',
+    authDbOk,
+  })
+})
+
+const statusHtmlPath = path.join(__dirname, 'public', 'status.html')
+function sendStatusPage(_req, res) {
+  res.sendFile(statusHtmlPath, (err) => {
+    if (err) {
+      // eslint-disable-next-line no-console
+      console.error('[auth-server] status page sendFile failed', err.message)
+      if (!res.headersSent) res.status(500).type('text/plain; charset=utf-8').send('status page unavailable')
+    }
+  })
+}
+
+app.get('/status', sendStatusPage)
+app.get('/healthz-ui', sendStatusPage)
 
 /**
  * 辅助模式（配置下发）：拉取后台预设的「模型 + 接口地址」配置。
@@ -656,24 +981,18 @@ app.get('/templates', licenseMiddleware, (req, res) => {
 })
 
 app.get('/templates/groups', (req, res) => {
-  const resolved = resolveLicenseFromHeadersOptional(req)
-  const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
-  const all = readTemplatesIndex().map((item) => ({
+  void req
+  const items = readTemplatesIndex().map((item) => ({
     id: item.id,
     name: item.name,
     version: item.version,
     category: item.category || 'image',
     description: item.description || '',
     paramsSchema: item.paramsSchema || {},
-    tier: normalizeTier(item.tier),
+    tier: 'free',
   }))
-  const free = all.filter((t) => t.tier === 'free')
-  const pro = canSeePro ? all.filter((t) => t.tier === 'pro') : []
   res.json({
-    groups: [
-      { id: 'free', label: '免费预设模板', tier: 'free', items: free },
-      { id: 'member', label: '会员预设模板', tier: 'pro', items: pro },
-    ],
+    groups: [{ id: 'all', label: '预设模板', tier: 'free', items }],
     serverTimeMs: Date.now(),
   })
 })
@@ -686,12 +1005,6 @@ app.get('/templates/:id', (req, res) => {
     return
   }
   const tier = normalizeTier(template.tier)
-  const resolved = resolveLicenseFromHeadersOptional(req)
-  const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
-  if (tier === 'pro' && !canSeePro) {
-    res.status(403).json({ message: '该模板为会员内容，请先激活授权' })
-    return
-  }
   res.json({
     id: template.id,
     name: template.name,
@@ -710,8 +1023,7 @@ app.get('/system-prompts', (req, res) => {
 })
 
 app.get('/system-prompts/groups', (req, res) => {
-  const resolved = resolveLicenseFromHeadersOptional(req)
-  const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
+  void req
   const all = readSystemPromptsIndex().map((item) => ({
     id: item.id,
     name: item.name,
@@ -721,7 +1033,7 @@ app.get('/system-prompts/groups', (req, res) => {
     tier: normalizeTier(item.tier),
   }))
   const free = all.filter((p) => p.tier === 'free')
-  const pro = canSeePro ? all.filter((p) => p.tier === 'pro') : []
+  const pro = all.filter((p) => p.tier === 'pro')
   res.json({
     groups: [
       { id: 'free', label: '免费提示词模板', tier: 'free', items: free },
@@ -739,12 +1051,6 @@ app.get('/system-prompts/:id', (req, res) => {
     return
   }
   const tier = normalizeTier(prompt.tier)
-  const resolved = resolveLicenseFromHeadersOptional(req)
-  const canSeePro = Boolean(resolved.entitlements?.proTemplates) && isLicenseActive(resolved.license)
-  if (tier === 'pro' && !canSeePro) {
-    res.status(403).json({ message: '该系统提示词为会员内容，请先激活授权' })
-    return
-  }
   const promptPath = path.join(SYSTEM_PROMPTS_DIR, prompt.promptFile)
   if (!fs.existsSync(promptPath)) {
     res.status(404).json({ message: `系统提示词文件不存在：${prompt.promptFile}` })
@@ -920,9 +1226,61 @@ function adminMiddleware(req, res, next) {
 app.get('/admin/cloud-models', adminMiddleware, (_req, res) => {
   const cfg = readCloudModels()
   res.json({
+    token: String(cfg.token || ''),
     providers: Array.isArray(cfg.providers) ? cfg.providers : [],
     serverTimeMs: Date.now(),
   })
+})
+
+/** 公开：按 id 拉取云端工作流完整 JSON（供客户端在「云端 Comfy + 自定义」模式下组 prompt） */
+app.get('/cloud-workflows/:workflowId/workflow', (req, res) => {
+  const workflowId = String(req.params.workflowId || '').trim()
+  if (!workflowId) {
+    res.status(400).json({ message: '缺少工作流 id' })
+    return
+  }
+  const { workflows } = readCloudWorkflows()
+  const w = workflows.find((x) => x.id === workflowId)
+  if (!w) {
+    res.status(404).json({ message: '未找到该云端工作流' })
+    return
+  }
+  const jsonText = String(w.workflowJson || '').trim()
+  if (!jsonText) {
+    res.status(404).json({ message: '该云端工作流 JSON 为空' })
+    return
+  }
+  res.json({
+    id: w.id,
+    name: w.name,
+    description: w.description,
+    nodeKind: w.nodeKind,
+    workflowJson: jsonText,
+    serverTimeMs: Date.now(),
+  })
+})
+
+app.get('/cloud-workflows', (_req, res) => {
+  const { workflows } = readCloudWorkflows()
+  res.json({
+    workflows: workflows.map((w) => ({
+      id: w.id,
+      name: w.name,
+      description: w.description,
+      nodeKind: w.nodeKind,
+    })),
+    serverTimeMs: Date.now(),
+  })
+})
+
+app.get('/admin/cloud-workflows', adminMiddleware, (_req, res) => {
+  res.json({ ...readCloudWorkflows(), serverTimeMs: Date.now() })
+})
+
+app.post('/admin/cloud-workflows/save', adminMiddleware, (req, res) => {
+  const list = Array.isArray(req.body?.workflows) ? req.body.workflows : []
+  writeCloudWorkflows({ workflows: list })
+  res.json({ ok: true, count: readCloudWorkflows().workflows.length, serverTimeMs: Date.now() })
 })
 
 app.post('/admin/cloud-models/save', adminMiddleware, (req, res) => {
@@ -947,37 +1305,13 @@ app.post('/admin/cloud-models/save', adminMiddleware, (req, res) => {
         : [],
     }))
     .filter((p) => p.id && p.baseUrl)
-  writeCloudModels({ token: String(readCloudModels()?.token || ''), providers })
+  const prev = readCloudModels()
+  const token =
+    req.body && Object.prototype.hasOwnProperty.call(req.body, 'token')
+      ? String(req.body.token ?? '')
+      : String(prev.token || '')
+  writeCloudModels({ token, providers })
   res.json({ ok: true, providers: providers.length, serverTimeMs: Date.now() })
-})
-
-app.post('/admin/licenses/issue', adminMiddleware, (req, res) => {
-  const daysRaw = Number(req.body?.days)
-  const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(3650, Math.floor(daysRaw))) : LICENSE_DAYS
-  const entitlements =
-    req.body?.entitlements && typeof req.body.entitlements === 'object' && !Array.isArray(req.body.entitlements)
-      ? req.body.entitlements
-      : { proTemplates: true, cloudModels: true }
-  const now = Date.now()
-  const licenseCode = `LIC-${crypto.randomUUID().replaceAll('-', '')}`
-  const codeHash = sha256(licenseCode)
-  const db = readDb()
-  db.licenses = Array.isArray(db.licenses) ? db.licenses : []
-  db.licenses.unshift({
-    codeHash,
-    expiresAtMs: now + days * DAY_MS,
-    entitlements,
-    frozen: false,
-    boundMachineId: '',
-    createdAtMs: now,
-  })
-  writeDb(db)
-  res.json({
-    ok: true,
-    licenseCode,
-    expiresAtMs: now + days * DAY_MS,
-    entitlements,
-  })
 })
 
 app.get('/admin/licenses', adminMiddleware, (_req, res) => {
@@ -1406,7 +1740,7 @@ app.post('/admin/templates/upload', adminMiddleware, (req, res) => {
     const name = String(req.body?.name || '').trim()
     const version = String(req.body?.version || '').trim() || '1.0.0'
     const category = String(req.body?.category || 'image').trim() || 'image'
-    const tier = normalizeTier(req.body?.tier)
+    const tier = 'free'
     const description = String(req.body?.description || '').trim()
     const paramsSchema =
       req.body?.paramsSchema && typeof req.body.paramsSchema === 'object'
@@ -1460,7 +1794,7 @@ app.put('/admin/templates/:id', adminMiddleware, (req, res) => {
   const name = String(req.body?.name || current.name || '').trim()
   const version = String(req.body?.version || current.version || '').trim() || '1.0.0'
   const category = String(req.body?.category || current.category || 'image').trim() || 'image'
-  const tier = normalizeTier(req.body?.tier ?? current.tier)
+  const tier = 'free'
   const description =
     req.body?.description == null ? String(current.description || '') : String(req.body.description)
   const paramsSchema =
@@ -1520,7 +1854,257 @@ app.delete('/admin/templates/:id', adminMiddleware, (req, res) => {
   res.json({ ok: true, deleted: id })
 })
 
-app.listen(PORT, () => {
-  console.log(`[Flowid Auth] server running at http://127.0.0.1:${PORT}`)
-  console.log(`[Flowid Auth] admin secret: ${ADMIN_SECRET}`)
+app.get('/admin/inspiration-market', adminMiddleware, (_req, res) => {
+  const items = readInspirationMarketIndex()
+    .slice()
+    .sort((a, b) => Number(b.updatedAtMs || 0) - Number(a.updatedAtMs || 0))
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      description: item.description || '',
+      category: normalizeInspirationCategory(item.category),
+      imageFile: item.imageFile,
+      promptFile: item.promptFile,
+      createdAtMs: Number(item.createdAtMs) || 0,
+      updatedAtMs: Number(item.updatedAtMs) || 0,
+    }))
+  res.json({
+    categories: readInspirationCategories(),
+    total: items.length,
+    items,
+    serverTimeMs: Date.now(),
+  })
 })
+
+app.put('/admin/inspiration-market/categories', adminMiddleware, (req, res) => {
+  try {
+    const rawList = req.body?.categories
+    if (!Array.isArray(rawList)) {
+      res.status(400).json({ message: 'categories 须为非空字符串数组' })
+      return
+    }
+    const newCats = []
+    const seen = new Set()
+    for (const x of rawList) {
+      const s = String(x || '').trim()
+      if (!s || seen.has(s)) continue
+      seen.add(s)
+      newCats.push(s)
+    }
+    if (!newCats.length) {
+      res.status(400).json({ message: '至少保留一个分类标签' })
+      return
+    }
+
+    const renames = Array.isArray(req.body?.renames) ? req.body.renames : []
+    const now = Date.now()
+    let items = readInspirationMarketIndex()
+
+    for (const m of renames) {
+      const from = String(m?.from || '').trim()
+      const to = String(m?.to || '').trim()
+      if (!from || !to || from === to) continue
+      items = items.map((it) => {
+        const cur = String(it.category || '').trim()
+        if (cur !== from) return it
+        return { ...it, category: to, updatedAtMs: now }
+      })
+    }
+
+    const fallback = newCats.includes('其它') ? '其它' : newCats[0]
+    items = items.map((it) => {
+      const cat0 = String(it.category || '').trim()
+      if (newCats.includes(cat0)) return it
+      return { ...it, category: fallback, updatedAtMs: now }
+    })
+
+    writeInspirationCategories(newCats)
+    writeInspirationMarketIndex(items)
+    res.json({ ok: true, categories: readInspirationCategories(), serverTimeMs: Date.now() })
+  } catch (error) {
+    res.status(400).json({ message: String(error?.message || error || '更新分类失败') })
+  }
+})
+
+app.get('/admin/inspiration-market/:id', adminMiddleware, (req, res) => {
+  const id = String(req.params.id || '').trim()
+  const item = readInspirationMarketIndex().find((x) => x.id === id)
+  if (!item) {
+    res.status(404).json({ message: '条目不存在' })
+    return
+  }
+  const pp = inspirationItemPromptPath(item)
+  const promptText = pp && fs.existsSync(pp) ? fs.readFileSync(pp, 'utf8') : ''
+  res.json({
+    categories: readInspirationCategories(),
+    item: {
+      ...item,
+      category: normalizeInspirationCategory(item.category),
+      promptText,
+    },
+    serverTimeMs: Date.now(),
+  })
+})
+
+app.post('/admin/inspiration-market', adminMiddleware, (req, res) => {
+  try {
+    const idRaw = String(req.body?.id || '').trim()
+    const title = String(req.body?.title || '').trim()
+    const description = String(req.body?.description || '').trim()
+    const category = normalizeInspirationCategory(req.body?.category)
+    const promptText = String(req.body?.promptText || '').trim()
+    const id = idRaw || crypto.randomUUID()
+    if (!title) {
+      res.status(400).json({ message: 'title 不能为空' })
+      return
+    }
+    if (!promptText) {
+      res.status(400).json({ message: 'promptText 不能为空' })
+      return
+    }
+    const index = readInspirationMarketIndex()
+    if (index.some((x) => x.id === id)) {
+      res.status(409).json({ message: 'id 已存在' })
+      return
+    }
+    const { buf, ext } = parseInspirationImageBase64(req.body)
+    if (!buf) {
+      res.status(400).json({ message: '请上传封面图片（imageBase64）' })
+      return
+    }
+    const token = toSafeFileToken(id) || crypto.randomUUID()
+    const imageFile = `${token}.${ext}`
+    const promptFile = `${token}.prompt.txt`
+    ensureInspirationMarketIndex()
+    const imagePath = path.join(INSPIRATION_MARKET_DIR, imageFile)
+    const promptPath = path.join(INSPIRATION_MARKET_DIR, promptFile)
+    fs.writeFileSync(imagePath, buf)
+    fs.writeFileSync(promptPath, promptText, 'utf8')
+    const now = Date.now()
+    const row = {
+      id,
+      title,
+      description,
+      category,
+      imageFile,
+      promptFile,
+      createdAtMs: now,
+      updatedAtMs: now,
+    }
+    writeInspirationMarketIndex([row, ...index])
+    res.json({ ok: true, item: row })
+  } catch (error) {
+    res.status(400).json({ message: String(error?.message || error || '创建灵感条目失败') })
+  }
+})
+
+app.put('/admin/inspiration-market/:id', adminMiddleware, (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim()
+    const list = readInspirationMarketIndex()
+    const idx = list.findIndex((x) => x.id === id)
+    if (idx < 0) {
+      res.status(404).json({ message: '条目不存在' })
+      return
+    }
+    const cur = list[idx]
+    const titleRaw = req.body?.title
+    const title =
+      titleRaw != null ? String(titleRaw).trim() : String(cur.title || '').trim() || cur.id
+    const description =
+      req.body?.description != null ? String(req.body.description) : String(cur.description || '')
+    const category =
+      req.body?.category != null
+        ? normalizeInspirationCategory(req.body.category)
+        : normalizeInspirationCategory(cur.category)
+    const now = Date.now()
+    let imageFile = cur.imageFile
+    const promptFile = cur.promptFile
+
+    if (req.body?.promptText != null) {
+      const pt = String(req.body.promptText).trim()
+      if (!pt) {
+        res.status(400).json({ message: 'promptText 不能为空' })
+        return
+      }
+      const ppath = inspirationItemPromptPath(cur)
+      if (ppath) fs.writeFileSync(ppath, pt, 'utf8')
+    }
+
+    if (req.body?.imageBase64) {
+      const { buf, ext } = parseInspirationImageBase64(req.body)
+      if (buf) {
+        const token = toSafeFileToken(id) || id
+        const nextImg = `${token}.${ext}`
+        const imagePath = path.join(INSPIRATION_MARKET_DIR, nextImg)
+        const oldIp = inspirationItemImagePath(cur)
+        if (oldIp && fs.existsSync(oldIp) && path.basename(oldIp) !== nextImg) {
+          try {
+            fs.unlinkSync(oldIp)
+          } catch {
+            // ignore
+          }
+        }
+        fs.writeFileSync(imagePath, buf)
+        imageFile = nextImg
+      }
+    }
+
+    const next = {
+      ...cur,
+      title: title || cur.title,
+      description,
+      category,
+      imageFile,
+      promptFile,
+      updatedAtMs: now,
+    }
+    const nl = list.slice()
+    nl[idx] = next
+    writeInspirationMarketIndex(nl)
+    res.json({ ok: true, item: next })
+  } catch (error) {
+    res.status(400).json({ message: String(error?.message || error || '更新灵感条目失败') })
+  }
+})
+
+app.delete('/admin/inspiration-market/:id', adminMiddleware, (req, res) => {
+  const id = String(req.params.id || '').trim()
+  const list = readInspirationMarketIndex()
+  const item = list.find((x) => x.id === id)
+  if (!item) {
+    res.status(404).json({ message: '条目不存在' })
+    return
+  }
+  try {
+    const ip = inspirationItemImagePath(item)
+    if (ip && fs.existsSync(ip)) fs.unlinkSync(ip)
+  } catch {
+    // ignore
+  }
+  try {
+    const pp = inspirationItemPromptPath(item)
+    if (pp && fs.existsSync(pp)) fs.unlinkSync(pp)
+  } catch {
+    // ignore
+  }
+  writeInspirationMarketIndex(list.filter((x) => x.id !== id))
+  res.json({ ok: true, deleted: id })
+})
+
+const pointsBootUrl = pathToFileURL(path.join(__dirname, '..', 'src', 'backend', 'createPointsApp.mjs')).href
+import(pointsBootUrl)
+  .then(async ({ attachPointsRoutes }) => {
+    await attachPointsRoutes(app, { mountPrefix: '/pts' })
+    app.listen(PORT, () => {
+      console.log(`[Flowid Auth] server running at http://127.0.0.1:${PORT}`)
+      console.log(`[Flowid Auth] admin secret: ${ADMIN_SECRET}`)
+      console.log(`[Flowid Auth] SQLite 积分: /pts/api/* 与 /pts/admin/*（better-sqlite3 失败时 /pts 为降级说明页）`)
+    })
+  })
+  .catch((err) => {
+    console.error('[Flowid Auth] failed to load createPointsApp.mjs:', err)
+    app.listen(PORT, () => {
+      console.log(`[Flowid Auth] server running at http://127.0.0.1:${PORT} (without /pts — 检查路径与 Node ESM)`)
+    })
+  })

@@ -69,7 +69,6 @@ export async function fetchSystemPromptPresets(): Promise<SystemPromptPresetMeta
   const out: SystemPromptPresetMeta[] = []
   for (const g of groups) {
     const tier = String(g?.tier || '').trim() === 'pro' ? 'pro' : 'free'
-    const prefix = tier === 'pro' ? '会员' : '免费'
     const items = Array.isArray(g?.items) ? g.items : []
     for (const item of items) {
       const v = item as Record<string, unknown>
@@ -81,7 +80,7 @@ export async function fetchSystemPromptPresets(): Promise<SystemPromptPresetMeta
         id,
         name,
         version: String(v.version || '').trim(),
-        category: `${prefix}/${category}`,
+        category,
         description: String(v.description || '').trim(),
         tier,
       })

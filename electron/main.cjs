@@ -101,6 +101,10 @@ function createMainWindow() {
     },
   })
 
+  /** 开发态 Vite 偶发「端口已监听但尚未 accept HTTP」时 -102；短暂自动重试减轻竞态。 */
+  let devConnRetries = 0
+  const maxDevConnRetries = 45
+
   if (isDev) {
     win.loadURL('http://127.0.0.1:5173')
   } else {
@@ -111,7 +115,28 @@ function createMainWindow() {
     if (!win.isDestroyed()) win.show()
   })
 
-  win.webContents.on('did-fail-load', async (_event, code, desc, url) => {
+  win.webContents.on('did-finish-load', () => {
+    devConnRetries = 0
+  })
+
+  win.webContents.on('did-fail-load', async (_event, code, desc, url, isMainFrame) => {
+    if (!isMainFrame) return
+    const descStr = String(desc || '')
+    const connRefused =
+      code === -102 ||
+      code === -106 ||
+      descStr.includes('ERR_CONNECTION_REFUSED') ||
+      descStr.includes('ERR_CONNECTION_RESET')
+
+    if (isDev && connRefused && devConnRetries < maxDevConnRetries) {
+      devConnRetries++
+      const ms = Math.min(2000, 200 + devConnRetries * 80)
+      setTimeout(() => {
+        if (!win.isDestroyed() && isDev) void win.loadURL('http://127.0.0.1:5173')
+      }, ms)
+      return
+    }
+
     const detail = `${String(desc || 'unknown')} (code=${code})\n${String(url || '')}`
     const result = await dialog.showMessageBox(win, {
       type: 'error',
@@ -206,6 +231,60 @@ function setupAutoUpdate() {
 }
 
 ipcMain.handle('desktop:get-app-version', () => app.getVersion())
+
+const pointsDb = require('./pointsDb.cjs')
+
+ipcMain.handle('flowid:points-get', async (_event, payload) => {
+  try {
+    const code = String(payload?.licenseCode || '').trim()
+    if (!code) return { ok: false, error: 'missing_license_code' }
+    await pointsDb.ensureOpen(app.getPath('userData'))
+    const row = pointsDb.getLicense(code)
+    return { ok: true, row }
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err || 'points-get-failed') }
+  }
+})
+
+ipcMain.handle('flowid:points-bind', async (_event, payload) => {
+  try {
+    await pointsDb.ensureOpen(app.getPath('userData'))
+    return pointsDb.bindLicense(
+      String(payload?.licenseCode || '').trim(),
+      String(payload?.machineCode || '').trim(),
+      payload?.expireTimeIso,
+    )
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err || 'points-bind-failed') }
+  }
+})
+
+ipcMain.handle('flowid:points-adjust', async (_event, payload) => {
+  try {
+    await pointsDb.ensureOpen(app.getPath('userData'))
+    return pointsDb.adjustPoints(
+      String(payload?.licenseCode || '').trim(),
+      String(payload?.machineCode || '').trim(),
+      Number(payload?.amount),
+      String(payload?.type || '').trim(),
+      String(payload?.description || ''),
+    )
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err || 'points-adjust-failed') }
+  }
+})
+
+ipcMain.handle('flowid:points-log', async (_event, payload) => {
+  try {
+    const code = String(payload?.licenseCode || '').trim()
+    if (!code) return { ok: false, error: 'missing_license_code' }
+    await pointsDb.ensureOpen(app.getPath('userData'))
+    const rows = pointsDb.listPointsLog(code, Number(payload?.limit) || 100)
+    return { ok: true, rows }
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err || 'points-log-failed') }
+  }
+})
 
 /**
  * 获取稳定的机器标识（用于授权绑定）。

@@ -1,141 +1,308 @@
 ;(function () {
   const U = window.FlowidAdminUtil
   const api = window.FlowidAdminApi
-  const TIER = 'pro'
   const ALL = '全部'
+
+  /** 分类下拉展示名（option value 仍为列表中的规范化分类字符串） */
+  const CAT_LABEL = {
+    general: '通用',
+    professional: '专业',
+    custom: '自定义',
+  }
 
   window.FlowidAdminPanelPromptsPro = async function (root) {
     let selectedId = ''
     let list = []
 
     root.innerHTML = `
-      <p class="hint">此页仅管理「授权 Pro」系统提示词。前端需有效 License 且 <code>entitlements.proTemplates</code> 为真才可拉取正文。右侧支持<strong>分类筛选</strong>与<strong>搜索</strong>。</p>
-      <div class="admin-resource-grid">
-        <div class="admin-card admin-form-block">
-          <h3>编辑区 · 上传 / 修改</h3>
-          <label><span>提示词 ID（新建可留空）</span><input id="spp-id" type="text" autocomplete="off" /></label>
-          <label><span>名称</span><input id="spp-name" type="text" /></label>
-          <label><span>版本</span><input id="spp-version" value="1.0.0" /></label>
-          <label><span>分类 category</span><input id="spp-category" value="general" /></label>
-          <label><span>描述</span><textarea id="spp-desc"></textarea></label>
-          <label><span>正文 systemPromptText</span><textarea id="spp-body" class="tall"></textarea></label>
-          <div class="admin-form-actions">
-            <button type="button" class="btn" id="spp-clear">清空表单</button>
-            <button type="button" class="btn" id="spp-copy-id">复制引用 ID</button>
-            <button type="button" class="btn btn-primary" id="spp-new">上传新增 Pro</button>
-            <button type="button" class="btn btn-primary" id="spp-save">保存修改</button>
-            <button type="button" class="btn btn-danger" id="spp-del">删除 / 下架</button>
-          </div>
-          <p class="mono" id="spp-msg"></p>
-        </div>
-        <div class="admin-card">
-          <h3>Pro 提示词列表</h3>
-          <div class="admin-list-toolbar">
-            <label class="mono" style="margin:0;display:flex;align-items:center;gap:8px;">
-              <span style="font-size:11px;text-transform:uppercase;color:var(--text-soft);white-space:nowrap;">分类</span>
-              <select id="spp-cat" aria-label="按分类筛选"></select>
-            </label>
-            <input id="spp-q" class="admin-filter-input" type="search" placeholder="搜索名称、ID、描述…" autocomplete="off" />
-            <button type="button" class="btn btn-primary" id="spp-refresh">刷新</button>
-          </div>
-          <div class="admin-list" id="spp-list"></div>
-        </div>
-      </div>`
+<section class="spo-page" aria-label="系统提示词管理">
+  <header class="spo-crumb">
+    <span class="spo-crumb__main">系统提示词</span>
+    <span class="spo-crumb__sep">/</span>
+    <span class="spo-crumb__sub">系统提示词正文</span>
+  </header>
+  <p class="spo-banner hint">
+    列表：<code>GET /admin/system-prompts</code>；保存：<code>PUT /admin/system-prompts/:id</code> 会落盘正文并重算 <code>sha256</code> 与签名。
+    后端无独立「全局」字段：上方正文为<strong>当前选中条目</strong>的文件内容；产品侧可将固定 ID 作为全对话默认。
+  </p>
 
-    const q = (id) => root.querySelector(id)
+  <div class="spo-card spo-card--body">
+    <h3 class="spo-card__title">正文 · SYSTEM PROMPT TEXT</h3>
+    <textarea id="spo-body" class="spo-body-editor" spellcheck="false" autocomplete="off" autocorrect="off" data-gramm="false" placeholder="在此编辑系统提示词全文…"></textarea>
+    <p class="spo-body-foot">这是全局系统提示词，将影响所有 AI 对话行为</p>
+  </div>
+
+  <div class="spo-card spo-card--meta">
+    <h3 class="spo-card__title">当前条目属性</h3>
+    <div class="spo-meta-grid">
+      <label class="spo-field"><span class="spo-field__lab">提示词 ID（新建可留空）</span><input id="spo-id" class="spo-input" type="text" autocomplete="off" /></label>
+      <label class="spo-field"><span class="spo-field__lab">名称</span><input id="spo-name" class="spo-input" type="text" /></label>
+      <label class="spo-field"><span class="spo-field__lab">版本</span><input id="spo-version" class="spo-input" value="1.0.0" /></label>
+      <label class="spo-field"><span class="spo-field__lab">档位 tier</span>
+        <select id="spo-tier" class="spo-select" aria-label="档位">
+          <option value="pro">PRO</option>
+          <option value="free">基础 / 公开（free）</option>
+        </select>
+      </label>
+      <label class="spo-field"><span class="spo-field__lab">分类 category</span><input id="spo-category" class="spo-input" value="general" placeholder="general、建筑…" /></label>
+      <label class="spo-field spo-field--full"><span class="spo-field__lab">描述</span><textarea id="spo-desc" class="spo-textarea spo-textarea--sm" rows="2"></textarea></label>
+    </div>
+    <div class="spo-meta-actions">
+      <button type="button" class="btn btn-danger btn--sm" id="spo-del">删除 / 下架</button>
+    </div>
+  </div>
+
+  <div class="spo-card spo-card--list">
+    <h3 class="spo-card__title">提示词列表</h3>
+    <div class="spo-list-toolbar">
+      <label class="spo-filter">
+        <span class="spo-filter__lab">档位</span>
+        <select id="spo-tier-filter" class="spo-select spo-select--narrow" aria-label="按档位筛选">
+          <option value="all">全部</option>
+          <option value="pro">PRO</option>
+          <option value="free">基础 / 公开</option>
+        </select>
+      </label>
+      <label class="spo-filter">
+        <span class="spo-filter__lab">分类</span>
+        <select id="spo-cat" class="spo-select spo-select--narrow" aria-label="按分类筛选"></select>
+      </label>
+      <input id="spo-q" class="spo-input spo-input--search" type="search" placeholder="搜索名称、ID、描述…" autocomplete="off" />
+      <button type="button" class="btn btn-primary spo-refresh" id="spo-refresh">刷新</button>
+    </div>
+    <div class="spo-table-wrap">
+      <table class="spo-table" aria-label="系统提示词条目">
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>ID</th>
+            <th>描述</th>
+            <th>分类</th>
+            <th>档位</th>
+            <th class="spo-th-actions">操作</th>
+          </tr>
+        </thead>
+        <tbody id="spo-tbody"></tbody>
+      </table>
+      <div id="spo-empty" class="spo-empty" hidden>无匹配项（可调整分类 / 搜索词）</div>
+    </div>
+    <div class="spo-bottom-toolbar">
+      <button type="button" class="btn" id="spo-clear">清空表单</button>
+      <button type="button" class="btn" id="spo-copy-id">复制引用 ID</button>
+      <button type="button" class="btn" id="spo-import-json">导入 JSON</button>
+      <button type="button" class="btn" id="spo-blank">新增空白</button>
+      <button type="button" class="btn btn-primary" id="spo-post-new">上传新增</button>
+      <button type="button" class="btn btn-primary" id="spo-save">保存修改</button>
+    </div>
+    <input type="file" id="spo-import-file" class="spo-sr-only" accept=".json,application/json" tabindex="-1" aria-hidden="true" />
+    <p class="spo-msg mono" id="spo-msg"></p>
+  </div>
+</section>`
+
+    const q = (sel) => root.querySelector(sel)
+
+    function readFileAsText(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result || ''))
+        reader.onerror = () => reject(new Error('读取文件失败'))
+        reader.readAsText(file)
+      })
+    }
+
+    function pickDefaultEntry(items) {
+      const arr = items || []
+      const byGlobal =
+        arr.find((p) => /global/i.test(String(p.id || ''))) ||
+        arr.find((p) => String(p.category || '').trim().toLowerCase() === 'global')
+      return byGlobal || arr[0] || null
+    }
+
+    function truncateId(id) {
+      const s = String(id || '')
+      if (s.length <= 22) return s
+      return s.slice(0, 10) + '…' + s.slice(-8)
+    }
+
+    function truncateDesc(d, max) {
+      const n = max == null ? 56 : max
+      const s = String(d || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      if (s.length <= n) return s
+      return s.slice(0, n - 1) + '…'
+    }
+
+    function catOptionLabel(catKey) {
+      return CAT_LABEL[catKey] || catKey
+    }
+
+    function itemsForCategorySource() {
+      const tf = q('#spo-tier-filter').value
+      if (tf === 'all') return list
+      return list.filter((p) => U.normalizeTier(p.tier) === tf)
+    }
 
     function rebuildCategoryFilter() {
-      const sel = q('#spp-cat')
+      const sel = q('#spo-cat')
       const prev = sel.value || ALL
-      const cats = U.uniqueCategoriesForTier(list, TIER)
+      const cats = new Set()
+      for (const p of itemsForCategorySource()) cats.add(U.normalizeCategoryLabel(p.category))
+      const sorted = Array.from(cats).sort((a, b) => String(a).localeCompare(String(b), 'zh-CN'))
       sel.innerHTML = ''
       const opt0 = document.createElement('option')
       opt0.value = ALL
       opt0.textContent = ALL
       sel.appendChild(opt0)
-      for (const c of cats) {
+      for (const c of sorted) {
         const o = document.createElement('option')
         o.value = c
-        o.textContent = c
+        o.textContent = catOptionLabel(c)
         sel.appendChild(o)
       }
-      if ([ALL, ...cats].includes(prev)) sel.value = prev
+      if ([ALL, ...sorted].includes(prev)) sel.value = prev
       else sel.value = ALL
+    }
+
+    function clearFieldsOnly() {
+      q('#spo-id').value = ''
+      q('#spo-name').value = ''
+      q('#spo-version').value = '1.0.0'
+      q('#spo-tier').value = 'pro'
+      q('#spo-category').value = 'general'
+      q('#spo-desc').value = ''
+      q('#spo-body').value = ''
     }
 
     function clearForm() {
       selectedId = ''
-      q('#spp-id').value = ''
-      q('#spp-name').value = ''
-      q('#spp-version').value = '1.0.0'
-      q('#spp-category').value = 'general'
-      q('#spp-desc').value = ''
-      q('#spp-body').value = ''
-      q('#spp-msg').textContent = '已清空。'
+      clearFieldsOnly()
+      q('#spo-msg').textContent = '已清空。'
       renderList()
     }
 
     function visibleItems() {
-      const cat = q('#spp-cat').value || ALL
-      const search = q('#spp-q').value
+      const tf = q('#spo-tier-filter').value
+      const cat = q('#spo-cat').value || ALL
+      const search = q('#spo-q').value
       return list.filter((p) => {
-        if (U.normalizeTier(p.tier) !== TIER) return false
+        if (tf !== 'all' && U.normalizeTier(p.tier) !== tf) return false
         if (cat !== ALL && U.normalizeCategoryLabel(p.category) !== cat) return false
         if (!U.itemMatchesSearch(p, search, ['id', 'name', 'description'])) return false
         return true
       })
     }
 
+    function tierBadgeClass(tier) {
+      return U.normalizeTier(tier) === 'pro' ? 'spo-badge spo-badge--pro' : 'spo-badge spo-badge--free'
+    }
+
+    function tierLabel(tier) {
+      return U.normalizeTier(tier) === 'pro' ? 'PRO' : '基础'
+    }
+
     function renderList() {
-      const host = q('#spp-list')
-      host.innerHTML = ''
+      const tbody = q('#spo-tbody')
+      const emptyEl = q('#spo-empty')
+      const table = q('.spo-table')
       const filtered = visibleItems()
+      tbody.innerHTML = ''
       if (!filtered.length) {
-        host.innerHTML = '<div class="empty-state">无匹配项（可调整分类 / 搜索词）</div>'
+        table.hidden = true
+        emptyEl.hidden = false
         return
       }
+      table.hidden = false
+      emptyEl.hidden = true
       for (const p of filtered) {
-        const btn = document.createElement('button')
-        btn.type = 'button'
-        btn.className = 'admin-list-item' + (p.id === selectedId ? ' is-selected' : '')
-        btn.innerHTML = `<div class="title">${U.escapeHtml(p.name || p.id)} <span class="tag tag-bad">PRO</span></div><div class="meta">${U.escapeHtml(p.id)} · ${U.escapeHtml(U.normalizeCategoryLabel(p.category))}</div>`
-        btn.onclick = () => void selectOne(p.id)
-        host.appendChild(btn)
+        const tr = document.createElement('tr')
+        tr.className = p.id === selectedId ? 'is-selected' : ''
+        const desc = p.description || ''
+        const descShort = truncateDesc(desc, 56)
+        tr.innerHTML = `
+          <td class="spo-td-name">${U.escapeHtml(p.name || p.id)}</td>
+          <td class="mono spo-td-id" title="${U.escapeHtml(p.id)}">${U.escapeHtml(truncateId(p.id))}</td>
+          <td class="spo-td-desc" title="${U.escapeHtml(desc)}">${U.escapeHtml(descShort)}</td>
+          <td>${U.escapeHtml(U.normalizeCategoryLabel(p.category))}</td>
+          <td><span class="${tierBadgeClass(p.tier)}">${U.escapeHtml(tierLabel(p.tier))}</span></td>
+          <td class="spo-td-actions">
+            <button type="button" class="btn btn--sm btn-primary spo-row-edit">编辑</button>
+            <button type="button" class="btn btn--sm btn-danger spo-row-del">删除</button>
+          </td>`
+        tr.querySelector('.spo-row-edit').addEventListener('click', (e) => {
+          e.stopPropagation()
+          void selectOne(p.id)
+        })
+        tr.querySelector('.spo-row-del').addEventListener('click', (e) => {
+          e.stopPropagation()
+          void deleteOne(p.id)
+        })
+        tr.addEventListener('click', () => void selectOne(p.id))
+        tbody.appendChild(tr)
       }
     }
 
     async function loadList() {
+      const keep = selectedId
       const res = await api.get('/admin/system-prompts')
       list = res.prompts || []
       rebuildCategoryFilter()
-      renderList()
+      if (keep && list.some((p) => p.id === keep)) {
+        await selectOne(keep)
+      } else if (list.length) {
+        const def = pickDefaultEntry(list)
+        if (def) await selectOne(def.id)
+      } else {
+        selectedId = ''
+        clearFieldsOnly()
+        q('#spo-msg').textContent = '暂无提示词条目。'
+        renderList()
+      }
     }
 
     async function selectOne(id) {
       selectedId = id
-      q('#spp-msg').textContent = '加载详情…'
+      q('#spo-msg').textContent = '加载详情…'
       try {
         const d = await api.get('/admin/system-prompts/' + encodeURIComponent(id))
-        q('#spp-id').value = d.id || ''
-        q('#spp-name').value = d.name || ''
-        q('#spp-version').value = d.version || '1.0.0'
-        q('#spp-category').value = d.category || 'general'
-        q('#spp-desc').value = d.description || ''
-        q('#spp-body').value = d.systemPromptText || ''
-        q('#spp-msg').textContent = '已加载：' + id
+        q('#spo-id').value = d.id || ''
+        q('#spo-name').value = d.name || ''
+        q('#spo-version').value = d.version || '1.0.0'
+        q('#spo-tier').value = U.normalizeTier(d.tier)
+        q('#spo-category').value = d.category || 'general'
+        q('#spo-desc').value = d.description || ''
+        q('#spo-body').value = d.systemPromptText || ''
+        q('#spo-msg').textContent = '已加载：' + id
         renderList()
       } catch (e) {
-        q('#spp-msg').textContent = String(e.message || e)
-        window.FlowidAdminToast(q('#spp-msg').textContent, true)
+        q('#spo-msg').textContent = String(e.message || e)
+        window.FlowidAdminToast(q('#spo-msg').textContent, true)
       }
     }
 
-    q('#spp-cat').addEventListener('change', () => renderList())
-    q('#spp-q').addEventListener('input', () => renderList())
+    async function deleteOne(id) {
+      if (!id) return
+      if (!U.confirmDanger('确定删除该提示词？')) return
+      try {
+        await api.delete('/admin/system-prompts/' + encodeURIComponent(id))
+        window.FlowidAdminToast('已删除')
+        await loadList()
+      } catch (e) {
+        window.FlowidAdminToast(String(e.message || e), true)
+      }
+    }
 
-    q('#spp-clear').onclick = () => clearForm()
-    q('#spp-copy-id').onclick = async () => {
-      const id = q('#spp-id').value.trim()
+    q('#spo-tier-filter').addEventListener('change', () => {
+      rebuildCategoryFilter()
+      renderList()
+    })
+    q('#spo-cat').addEventListener('change', () => renderList())
+    q('#spo-q').addEventListener('input', () => renderList())
+
+    q('#spo-clear').onclick = () => clearForm()
+
+    q('#spo-copy-id').onclick = async () => {
+      const id = q('#spo-id').value.trim()
       if (!id) {
         window.FlowidAdminToast('无 ID 可复制', true)
         return
@@ -147,7 +314,52 @@
         window.alert(id)
       }
     }
-    q('#spp-refresh').onclick = async () => {
+
+    q('#spo-import-json').onclick = () => q('#spo-import-file').click()
+    q('#spo-import-file').addEventListener('change', async () => {
+      const inp = q('#spo-import-file')
+      const file = inp.files && inp.files[0]
+      inp.value = ''
+      if (!file) return
+      try {
+        const text = await readFileAsText(file)
+        let data
+        try {
+          data = JSON.parse(String(text || '').trim())
+        } catch {
+          throw new Error('JSON 解析失败')
+        }
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('JSON 应为单个对象')
+        if (data.id != null) q('#spo-id').value = String(data.id).trim()
+        if (data.name != null) q('#spo-name').value = String(data.name).trim()
+        if (data.version != null) q('#spo-version').value = String(data.version).trim() || '1.0.0'
+        if (data.category != null) q('#spo-category').value = String(data.category).trim() || 'general'
+        if (data.tier != null) q('#spo-tier').value = U.normalizeTier(data.tier)
+        if (data.description != null) q('#spo-desc').value = String(data.description)
+        if (data.systemPromptText != null) q('#spo-body').value = String(data.systemPromptText)
+        selectedId = ''
+        q('#spo-msg').textContent = '已从「' + file.name + '」导入，请检查后「上传新增」或先选择条目再保存。'
+        window.FlowidAdminToast('已导入 JSON')
+        renderList()
+      } catch (e) {
+        window.FlowidAdminToast(String(e.message || e), true)
+      }
+    })
+
+    q('#spo-blank').onclick = () => {
+      selectedId = ''
+      q('#spo-id').value = ''
+      q('#spo-name').value = '未命名提示词'
+      q('#spo-version').value = '1.0.0'
+      q('#spo-tier').value = 'pro'
+      q('#spo-category').value = 'general'
+      q('#spo-desc').value = ''
+      q('#spo-body').value = ''
+      q('#spo-msg').textContent = '已准备空白条目：编辑正文后点「上传新增」。'
+      renderList()
+    }
+
+    q('#spo-refresh').onclick = async () => {
       try {
         await loadList()
         window.FlowidAdminToast('列表已刷新')
@@ -156,21 +368,21 @@
       }
     }
 
-    q('#spp-new').onclick = async () => {
+    q('#spo-post-new').onclick = async () => {
       try {
-        const text = q('#spp-body').value.trim()
-        if (!q('#spp-name').value.trim()) throw new Error('名称不能为空')
+        const text = q('#spo-body').value.trim()
+        if (!q('#spo-name').value.trim()) throw new Error('名称不能为空')
         if (!text) throw new Error('正文不能为空')
         await api.post('/admin/system-prompts/upload', {
-          id: q('#spp-id').value.trim() || undefined,
-          name: q('#spp-name').value.trim(),
-          version: q('#spp-version').value.trim() || '1.0.0',
-          category: q('#spp-category').value.trim() || 'general',
-          tier: TIER,
-          description: q('#spp-desc').value.trim(),
+          id: q('#spo-id').value.trim() || undefined,
+          name: q('#spo-name').value.trim(),
+          version: q('#spo-version').value.trim() || '1.0.0',
+          category: q('#spo-category').value.trim() || 'general',
+          tier: U.normalizeTier(q('#spo-tier').value),
+          description: q('#spo-desc').value.trim(),
           systemPromptText: text,
         })
-        window.FlowidAdminToast('已新增 Pro 提示词')
+        window.FlowidAdminToast('已新增提示词')
         clearForm()
         await loadList()
       } catch (e) {
@@ -178,46 +390,37 @@
       }
     }
 
-    q('#spp-save').onclick = async () => {
-      const id = q('#spp-id').value.trim()
+    q('#spo-save').onclick = async () => {
+      const id = q('#spo-id').value.trim()
       if (!id) {
-        window.FlowidAdminToast('请先选择条目', true)
+        window.FlowidAdminToast('请先选择列表中的条目，或导入/新建后使用「上传新增」', true)
         return
       }
       try {
         const body = {
-          name: q('#spp-name').value.trim(),
-          version: q('#spp-version').value.trim() || '1.0.0',
-          category: q('#spp-category').value.trim() || 'general',
-          tier: TIER,
-          description: q('#spp-desc').value.trim(),
+          name: q('#spo-name').value.trim(),
+          version: q('#spo-version').value.trim() || '1.0.0',
+          category: q('#spo-category').value.trim() || 'general',
+          tier: U.normalizeTier(q('#spo-tier').value),
+          description: q('#spo-desc').value.trim(),
         }
-        const t = q('#spp-body').value
+        const t = q('#spo-body').value
         if (t.trim()) body.systemPromptText = t
         await api.put('/admin/system-prompts/' + encodeURIComponent(id), body)
         window.FlowidAdminToast('已保存（后端已重算签名）')
-        await selectOne(id)
         await loadList()
       } catch (e) {
         window.FlowidAdminToast(String(e.message || e), true)
       }
     }
 
-    q('#spp-del').onclick = async () => {
-      const id = q('#spp-id').value.trim()
+    q('#spo-del').onclick = () => {
+      const id = q('#spo-id').value.trim()
       if (!id) {
         window.FlowidAdminToast('无选中项', true)
         return
       }
-      if (!U.confirmDanger('确定删除该 Pro 提示词？')) return
-      try {
-        await api.delete('/admin/system-prompts/' + encodeURIComponent(id))
-        window.FlowidAdminToast('已删除')
-        clearForm()
-        await loadList()
-      } catch (e) {
-        window.FlowidAdminToast(String(e.message || e), true)
-      }
+      void deleteOne(id)
     }
 
     try {

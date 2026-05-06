@@ -16,6 +16,7 @@ export function NodeChrome({
   showStatusBadge = false,
   selected,
   children,
+  footer,
 }: {
   icon: ReactNode
   title: string
@@ -32,6 +33,8 @@ export function NodeChrome({
   showStatusBadge?: boolean
   selected?: boolean
   children: ReactNode
+  /** 节点主体下方的附加区（如输出缩略图条） */
+  footer?: ReactNode
 }) {
   const [isEditingTitle, setIsEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(title)
@@ -110,11 +113,13 @@ export function NodeChrome({
             {title}
           </button>
         )}
-        {showStatusBadge ? (
-          <span className={`studio-node__status studio-node__status--${status}`}>
-            {status === 'idle' ? null : status}
-          </span>
-        ) : null}
+        <div className="studio-node__headTrail">
+          {showStatusBadge ? (
+            <span className={`studio-node__status studio-node__status--${status}`}>
+              {status === 'idle' ? null : status}
+            </span>
+          ) : null}
+        </div>
       </header>
       {showProgress ? (
         <div
@@ -135,6 +140,7 @@ export function NodeChrome({
         </div>
       ) : null}
       <div className="studio-node__body">{children}</div>
+      {footer}
     </div>
   )
 }

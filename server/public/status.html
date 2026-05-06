@@ -1,0 +1,629 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlowID 服务状态</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --card: #1e293b;
+        --border: rgba(51, 65, 85, 0.9);
+        --text: #e2e8f0;
+        --text-strong: #f8fafc;
+        --muted: #94a3b8;
+        --brand: #ea580c;
+        --ok: #22c55e;
+        --err: #ef4444;
+        --radius-card: 16px;
+        --radius-btn: 10px;
+        --shadow-card: 0 14px 40px rgba(0, 0, 0, 0.35);
+        --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: var(--font);
+        font-size: 15px;
+        background:
+          radial-gradient(1000px 560px at 92% -8%, rgba(139, 92, 246, 0.12), transparent 52%),
+          radial-gradient(820px 480px at 0% 0%, rgba(234, 88, 12, 0.1), transparent 48%),
+          radial-gradient(700px 420px at 40% 100%, rgba(51, 65, 85, 0.35), transparent 55%),
+          var(--bg);
+        color: var(--text);
+        line-height: 1.55;
+      }
+      .st-wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 28px 18px 48px;
+      }
+      .st-head {
+        margin-bottom: 28px;
+      }
+      .st-title {
+        margin: 0 0 6px;
+        font-size: 1.65rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        color: var(--text-strong);
+      }
+      .st-sub {
+        margin: 0;
+        font-size: 1.05rem;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .st-hero {
+        margin-top: 22px;
+        padding: 22px 24px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 20px 32px;
+        box-shadow: var(--shadow-card);
+      }
+      .st-hero__icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        flex-shrink: 0;
+      }
+      .st-hero__icon.ok {
+        background: rgba(34, 197, 94, 0.15);
+        color: var(--ok);
+      }
+      .st-hero__icon.err {
+        background: rgba(239, 68, 68, 0.15);
+        color: var(--err);
+      }
+      .st-hero__main {
+        flex: 1;
+        min-width: 200px;
+      }
+      .st-status-line {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .st-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+      .st-dot.ok {
+        background: var(--ok);
+        box-shadow: 0 0 12px rgba(34, 197, 94, 0.55);
+      }
+      .st-dot.err {
+        background: var(--err);
+        box-shadow: 0 0 12px rgba(239, 68, 68, 0.55);
+      }
+      .st-status-text {
+        font-size: 1.25rem;
+        font-weight: 800;
+      }
+      .st-status-text.ok {
+        color: var(--ok);
+      }
+      .st-status-text.err {
+        color: var(--err);
+      }
+      .st-times {
+        margin-top: 10px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .st-times strong {
+        color: #cbd5e1;
+        font-weight: 600;
+      }
+      .st-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px 18px;
+        margin-bottom: 20px;
+      }
+      .st-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 9px 16px;
+        border-radius: var(--radius-btn);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid rgba(251, 146, 60, 0.55);
+        background: linear-gradient(135deg, #ea580c 0%, #c2410c 55%, #9a3412 100%);
+        color: #fffbeb;
+        box-shadow: 0 6px 20px rgba(234, 88, 12, 0.28);
+        transition:
+          border-color 0.15s,
+          filter 0.15s,
+          box-shadow 0.15s,
+          transform 0.15s;
+      }
+      .st-btn:hover:not(:disabled) {
+        filter: brightness(1.05);
+        box-shadow: 0 8px 26px rgba(234, 88, 12, 0.36);
+      }
+      .st-btn:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      .st-btn .st-spin {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(226, 232, 240, 0.25);
+        border-top-color: #e2e8f0;
+        border-radius: 50%;
+        animation: st-spin 0.65s linear infinite;
+      }
+      @keyframes st-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .st-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        color: var(--muted);
+        cursor: pointer;
+        user-select: none;
+      }
+      .st-check input {
+        width: 1rem;
+        height: 1rem;
+        accent-color: var(--brand);
+        cursor: pointer;
+      }
+      .st-banner {
+        padding: 10px 14px;
+        border-radius: 10px;
+        font-size: 14px;
+        margin-bottom: 16px;
+        border: 1px solid var(--border);
+      }
+      .st-banner.err {
+        background: rgba(127, 29, 29, 0.35);
+        color: #fecaca;
+        border-color: rgba(239, 68, 68, 0.35);
+      }
+      .st-banner.ok {
+        background: rgba(20, 83, 45, 0.25);
+        color: #bbf7d0;
+        border-color: rgba(34, 197, 94, 0.35);
+      }
+      .st-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 16px;
+      }
+      .st-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        padding: 16px 18px;
+        transition:
+          transform 0.18s ease,
+          box-shadow 0.18s ease,
+          border-color 0.18s ease;
+      }
+      .st-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+        border-color: rgba(249, 115, 22, 0.4);
+      }
+      .st-card__label {
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .st-card__value {
+        font-size: 16px;
+        font-weight: 700;
+        color: var(--text-strong);
+        word-break: break-word;
+      }
+      .st-card__value.mono,
+      .st-card .mono {
+        font-family: var(--mono);
+        font-size: 14px;
+      }
+      .st-card a {
+        color: #fb923c;
+        text-decoration: none;
+      }
+      .st-card a:hover {
+        color: #fdba74;
+        text-decoration: underline;
+      }
+      .st-extra {
+        margin-top: 22px;
+        padding: 18px 20px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+      }
+      .st-extra h2 {
+        margin: 0 0 14px;
+        font-size: 1.1rem;
+        font-weight: 800;
+        color: var(--text-strong);
+      }
+      .st-extra dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 8px 20px;
+        font-size: 14px;
+      }
+      .st-extra dt {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .st-extra dd {
+        margin: 0;
+        font-family: var(--mono);
+        color: #cbd5e1;
+      }
+      .st-foot {
+        margin-top: 22px;
+        font-size: 14px;
+        color: #94a3b8;
+      }
+      .st-foot a {
+        color: #fb923c;
+      }
+      .st-foot a:hover {
+        color: #fdba74;
+      }
+      .st-skel .st-card__label,
+      .st-skel .st-card__value {
+        height: 12px;
+        border-radius: 6px;
+        background: linear-gradient(90deg, #334155 25%, #475569 40%, #334155 65%);
+        background-size: 200% 100%;
+        animation: st-pulse 1.2s ease-in-out infinite;
+      }
+      .st-skel .st-card__value {
+        height: 20px;
+        margin-top: 4px;
+      }
+      @keyframes st-pulse {
+        0% {
+          background-position: 100% 0;
+        }
+        100% {
+          background-position: -100% 0;
+        }
+      }
+      .st-skel .st-card__label {
+        width: 40%;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="st-wrap">
+      <header class="st-head">
+        <h1 class="st-title">FlowID 服务状态</h1>
+        <p class="st-sub">FlowID Auth Server</p>
+      </header>
+
+      <div id="banner" class="st-banner" hidden role="alert"></div>
+
+      <section class="st-hero" id="hero" aria-live="polite">
+        <div class="st-hero__icon ok" id="heroIcon" aria-hidden="true">●</div>
+        <div class="st-hero__main">
+          <div class="st-status-line">
+            <span class="st-dot ok" id="heroDot"></span>
+            <span class="st-status-text ok" id="heroText">加载中…</span>
+          </div>
+          <div class="st-times" id="heroTimes"></div>
+        </div>
+      </section>
+
+      <div class="st-toolbar" style="margin-top: 22px">
+        <button type="button" class="st-btn" id="btnRefresh">
+          <span id="btnRefreshLabel">手动刷新</span>
+        </button>
+        <label class="st-check">
+          <input type="checkbox" id="autoRefresh" checked />
+          自动刷新（30 秒）
+        </label>
+      </div>
+
+      <section class="st-grid" id="grid" aria-busy="true"></section>
+
+      <section class="st-extra" id="extra" hidden>
+        <h2>附加信息</h2>
+        <dl id="extraDl"></dl>
+      </section>
+
+      <p class="st-foot">
+        原始 JSON：<a href="/healthz" target="_blank" rel="noopener">GET /healthz</a>
+        · 详细 JSON：<a href="/healthz/detailed" target="_blank" rel="noopener">GET /healthz/detailed</a>
+      </p>
+    </div>
+
+    <script>
+      ;(function () {
+        const AUTO_KEY = 'flowid.status.autorefresh.v1'
+        const grid = document.getElementById('grid')
+        const banner = document.getElementById('banner')
+        const heroIcon = document.getElementById('heroIcon')
+        const heroDot = document.getElementById('heroDot')
+        const heroText = document.getElementById('heroText')
+        const heroTimes = document.getElementById('heroTimes')
+        const extra = document.getElementById('extra')
+        const extraDl = document.getElementById('extraDl')
+        const btnRefresh = document.getElementById('btnRefresh')
+        const btnRefreshLabel = document.getElementById('btnRefreshLabel')
+        const autoEl = document.getElementById('autoRefresh')
+
+        try {
+          const saved = localStorage.getItem(AUTO_KEY)
+          if (saved === '0') autoEl.checked = false
+        } catch (_) {}
+
+        autoEl.addEventListener('change', () => {
+          try {
+            localStorage.setItem(AUTO_KEY, autoEl.checked ? '1' : '0')
+          } catch (_) {}
+          scheduleAuto()
+        })
+
+        let timer = null
+        function scheduleAuto() {
+          if (timer) clearInterval(timer)
+          timer = null
+          if (!autoEl.checked) return
+          timer = setInterval(() => void load(false), 30000)
+        }
+
+        function setHealthy(ok) {
+          const good = Boolean(ok)
+          heroIcon.className = 'st-hero__icon ' + (good ? 'ok' : 'err')
+          heroIcon.textContent = good ? '✓' : '!'
+          heroDot.className = 'st-dot ' + (good ? 'ok' : 'err')
+          heroText.className = 'st-status-text ' + (good ? 'ok' : 'err')
+          heroText.textContent = good ? '正常' : '异常'
+        }
+
+        function fmtZh(isoOrMs) {
+          if (isoOrMs == null || isoOrMs === '') return '—'
+          try {
+            const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(String(isoOrMs))
+            if (Number.isNaN(d.getTime())) return String(isoOrMs)
+            return d.toLocaleString('zh-CN', { hour12: false })
+          } catch {
+            return String(isoOrMs)
+          }
+        }
+
+        function absUrl(path) {
+          const p = String(path || '').trim() || '/'
+          const base = location.origin.replace(/\/+$/, '')
+          return base + (p.startsWith('/') ? p : '/' + p)
+        }
+
+        function skeleton() {
+          grid.classList.add('st-skel')
+          grid.innerHTML = ''
+          for (let i = 0; i < 6; i++) {
+            const el = document.createElement('article')
+            el.className = 'st-card'
+            el.innerHTML = '<div class="st-card__label"></div><div class="st-card__value"></div>'
+            grid.appendChild(el)
+          }
+        }
+
+        function card(label, innerHtml) {
+          const el = document.createElement('article')
+          el.className = 'st-card'
+          el.innerHTML = '<div class="st-card__label">' + label + '</div><div class="st-card__value">' + innerHtml + '</div>'
+          return el
+        }
+
+        function showBanner(text, kind) {
+          if (!text) {
+            banner.hidden = true
+            banner.textContent = ''
+            banner.className = 'st-banner'
+            return
+          }
+          banner.hidden = false
+          banner.textContent = text
+          banner.className = 'st-banner ' + (kind || 'err')
+        }
+
+        async function fetchJson(url) {
+          const res = await fetch(url, { method: 'GET', cache: 'no-store' })
+          const text = await res.text()
+          let data = {}
+          try {
+            data = JSON.parse(text)
+          } catch {
+            data = { ok: false, message: '响应不是 JSON' }
+          }
+          return { res, data }
+        }
+
+        async function load(isManual) {
+          if (isManual) {
+            btnRefresh.disabled = true
+            btnRefreshLabel.innerHTML = '<span class="st-spin" aria-hidden="true"></span> 刷新中…'
+          }
+          if (!grid.querySelector('.st-card') || grid.classList.contains('st-skel')) skeleton()
+
+          try {
+            let payload = null
+            let usedDetailed = false
+            /** @type {Response | null} */
+            let lastRes = null
+            const d1 = await fetchJson(location.origin + '/healthz/detailed').catch(() => null)
+            if (d1 && d1.res.ok && d1.data && typeof d1.data === 'object') {
+              payload = d1.data
+              usedDetailed = true
+              lastRes = d1.res
+            } else {
+              const d0 = await fetchJson(location.origin + '/healthz')
+              lastRes = d0.res
+              payload = d0.data
+              if (!d0.res.ok) {
+                setHealthy(false)
+                showBanner('GET /healthz 失败：HTTP ' + d0.res.status, 'err')
+                grid.classList.remove('st-skel')
+                grid.innerHTML = ''
+                return
+              }
+            }
+
+            const ok = payload.ok !== false
+            setHealthy(ok)
+            showBanner('', '')
+
+            const httpDate = lastRes && lastRes.headers ? lastRes.headers.get('date') : null
+            let serverLine = ''
+            if (usedDetailed) {
+              if (payload.serverTimeIso) {
+                serverLine = '<strong>服务器（ISO）</strong> ' + escapeHtml(fmtZh(payload.serverTimeIso))
+              } else if (payload.serverTimeMs != null) {
+                serverLine = '<strong>服务器时间戳</strong> ' + escapeHtml(fmtZh(Number(payload.serverTimeMs)))
+              }
+            }
+            if (!serverLine && httpDate) {
+              serverLine = '<strong>HTTP Date</strong> ' + escapeHtml(fmtZh(httpDate))
+            }
+            if (!serverLine) {
+              serverLine =
+                '<strong>服务器时间</strong> ' +
+                (usedDetailed ? '（无 ISO/时间戳字段）' : '（仅 /healthz 时无 JSON 时间，可改用 /healthz/detailed）')
+            }
+
+            const clientNow = '<strong>本页时间</strong> ' + escapeHtml(fmtZh(Date.now()))
+            heroTimes.innerHTML = [clientNow, serverLine].filter(Boolean).join('<br />')
+
+            renderCards(payload, ok)
+            renderExtra(payload, usedDetailed)
+          } catch (e) {
+            setHealthy(false)
+            showBanner(String(e && e.message ? e.message : e), 'err')
+            grid.classList.remove('st-skel')
+            grid.innerHTML = ''
+          } finally {
+            grid.classList.remove('st-skel')
+            grid.removeAttribute('aria-busy')
+            if (isManual) {
+              btnRefresh.disabled = false
+              btnRefreshLabel.textContent = '手动刷新'
+            }
+          }
+        }
+
+        function escapeHtml(s) {
+          return String(s ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+        }
+
+        function renderCards(data, ok) {
+          grid.classList.remove('st-skel')
+          grid.innerHTML = ''
+          const service = escapeHtml(data.service || '—')
+          const okLabel = ok ? '✅ 正常' : '❌ 异常'
+          const mountPath = String(data.pointsMount || '/pts').trim() || '/pts'
+          const adminPath = String(data.pointsAdmin || '/pts/admin').trim() || '/pts/admin'
+          const apiPath = String(data.pointsApi || '/pts/api').trim() || '/pts/api'
+
+          grid.appendChild(card('服务标识 <span style="font-weight:500">service</span>', '<span class="mono">' + service + '</span>'))
+          grid.appendChild(card('健康状态 <span style="font-weight:500">ok</span>', okLabel))
+          grid.appendChild(
+            card(
+              '积分服务挂载 <span style="font-weight:500">pointsMount</span>',
+              '<a class="mono" href="' + escapeHtml(absUrl(mountPath)) + '">' + escapeHtml(mountPath) + '</a>',
+            ),
+          )
+          grid.appendChild(
+            card(
+              '积分管理页 <span style="font-weight:500">pointsAdmin</span>',
+              '<a class="mono" href="' + escapeHtml(absUrl(adminPath)) + '">' + escapeHtml(adminPath) + '</a>',
+            ),
+          )
+          grid.appendChild(
+            card(
+              '积分 API <span style="font-weight:500">pointsApi</span>',
+              '<a class="mono" href="' + escapeHtml(absUrl(apiPath)) + '">' + escapeHtml(apiPath) + '</a>',
+            ),
+          )
+          const st =
+            data.serverTimeIso != null
+              ? fmtZh(data.serverTimeIso)
+              : data.serverTimeMs != null
+                ? fmtZh(Number(data.serverTimeMs))
+                : '—'
+          grid.appendChild(card('时间参考 <span style="font-weight:500">serverTime</span>', '<span class="mono">' + escapeHtml(st) + '</span>'))
+        }
+
+        function renderExtra(data, usedDetailed) {
+          if (!usedDetailed) {
+            extra.hidden = true
+            extraDl.innerHTML = ''
+            return
+          }
+          const rows = []
+          if (data.listenPort != null) rows.push(['监听端口', String(data.listenPort)])
+          if (data.nodeEnv != null && data.nodeEnv !== '') rows.push(['NODE_ENV', String(data.nodeEnv)])
+          if (typeof data.authDbOk === 'boolean') {
+            rows.push(['Auth 数据库（JSON）', data.authDbOk ? '可读 ✓' : '不可用 ✗'])
+          }
+          if (!rows.length) {
+            extra.hidden = true
+            return
+          }
+          extra.hidden = false
+          extraDl.innerHTML = rows
+            .map(
+              ([k, v]) =>
+                '<dt>' +
+                escapeHtml(k) +
+                '</dt><dd>' +
+                escapeHtml(v) +
+                '</dd>',
+            )
+            .join('')
+        }
+
+        btnRefresh.addEventListener('click', () => void load(true))
+
+        skeleton()
+        void load(false)
+        scheduleAuto()
+      })()
+    </script>
+  </body>
+</html>

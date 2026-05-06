@@ -79,6 +79,54 @@ declare global {
         basePath: string,
         childName: string,
       ) => Promise<{ ok: boolean; path?: string; error?: string }>
+      /** 查询本机积分行（无记录时 row 为 null） */
+      pointsGet?: (licenseCode: string) => Promise<{
+        ok: boolean
+        row?: {
+          code: string
+          machine_code: string | null
+          points: number
+          total_earned: number
+          total_spent: number
+          bind_time: string | null
+          expire_time: string | null
+          status: string
+          created_at: string | null
+        } | null
+        error?: string
+      }>
+      pointsBind?: (payload: {
+        licenseCode: string
+        machineCode: string
+        expireTimeIso?: string | null
+      }) => Promise<{ ok: boolean; error?: string }>
+      pointsAdjust?: (payload: {
+        licenseCode: string
+        machineCode: string
+        amount: number
+        type: string
+        description?: string
+      }) => Promise<
+        | { ok: true; before_points: number; after_points: number }
+        | { ok: false; error: string; before_points?: number }
+      >
+      pointsLog?: (payload: {
+        licenseCode: string
+        limit?: number
+      }) => Promise<{
+        ok: boolean
+        rows?: Array<{
+          id: number
+          license_code: string
+          amount: number
+          type: string
+          description: string
+          before_points: number
+          after_points: number
+          created_at: string
+        }>
+        error?: string
+      }>
     }
   }
 }

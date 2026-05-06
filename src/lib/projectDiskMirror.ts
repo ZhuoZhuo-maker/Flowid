@@ -20,6 +20,16 @@ function toSafeFileStem(name: string): string {
   return cleaned || 'flowid-project'
 }
 
+/** 与 `mirrorProjectSnapshotTo*` 写入的「按项目名」JSON 文件名一致（仅文件名，不含目录）。 */
+export function flowidMirrorNamedProjectJsonFile(projectDisplayName: string): string {
+  return `${toSafeFileStem(projectDisplayName)}.json`
+}
+
+/** 工程目录内「当前快照」固定文件名。 */
+export function flowidMirrorCurrentJsonFile(): typeof FLOWID_CURRENT_FILE {
+  return FLOWID_CURRENT_FILE
+}
+
 function projectNamedFile(snapshot: ProjectSnapshot): string {
   return `${toSafeFileStem(snapshot.name)}.json`
 }

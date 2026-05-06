@@ -4,48 +4,55 @@
     overview: window.FlowidAdminPanelOverview,
     licenses: window.FlowidAdminPanelLicenses,
     'cloud-models': window.FlowidAdminPanelCloudModels,
-    'templates-free': window.FlowidAdminPanelTemplatesFree,
-    'templates-pro': window.FlowidAdminPanelTemplatesPro,
-    'prompts-free': window.FlowidAdminPanelPromptsFree,
-    'prompts-pro': window.FlowidAdminPanelPromptsPro,
+    'cloud-comfyui': window.FlowidAdminPanelCloudComfyui,
+    templates: window.FlowidAdminPanelTemplatesPro,
+    'inspiration-market': window.FlowidAdminPanelInspirationMarket,
+    prompts: window.FlowidAdminPanelPromptsPro,
     'user-agreement': window.FlowidAdminPanelUserAgreement,
+  }
+
+  const LEGACY_NAV = {
+    'templates-free': 'templates',
+    'templates-pro': 'templates',
+    'prompts-free': 'prompts',
+    'prompts-pro': 'prompts',
   }
 
   const NAV = [
     {
       id: 'overview',
-      title: '服务总览',
+      title: 'FlowID Auth 控制台',
       sub: '健康检查、端口、环境变量说明、代理状态',
     },
     {
       id: 'licenses',
       title: 'License 授权',
-      sub: '授权码、绑定、冻结、续期、权益、用户账号',
+      sub: 'JWT 会员列表、服务状态与授权码录入',
     },
     {
       id: 'cloud-models',
       title: '云端模型（辅助模式）',
-      sub: '维护 Token + 代理 baseUrl + 模型列表（供用户端“辅助模式”拉取）',
+      sub: 'Token、Provider、模型路由与 API 表；ComfyUI 见独立页',
     },
     {
-      id: 'templates-free',
-      title: '基础免费预设模板',
-      sub: '对应前端预设模板 · free · 独立维护',
+      id: 'cloud-comfyui',
+      title: '云端 ComfyUI 工作流',
+      sub: '官方工作流 JSON、列表与保存',
     },
     {
-      id: 'templates-pro',
-      title: '授权 Pro 预设模板',
-      sub: '对应前端预设模板 · pro · 会员可见',
+      id: 'templates',
+      title: '预设模板',
+      sub: '项目预设模板 JSON',
     },
     {
-      id: 'prompts-free',
-      title: '基础免费提示词',
-      sub: '仅 free 系统提示词',
+      id: 'inspiration-market',
+      title: '灵感市集',
+      sub: '提示词模板 · 分类 · 封面与正文',
     },
     {
-      id: 'prompts-pro',
-      title: '授权 Pro 提示词',
-      sub: '仅 pro 系统提示词',
+      id: 'prompts',
+      title: '系统提示词',
+      sub: '系统提示词正文',
     },
     {
       id: 'user-agreement',
@@ -92,6 +99,11 @@
     await mountPanel(id)
   }
 
+  /** 供 License 页等模块跳转到其它管理面板（与侧栏点击一致） */
+  window.FlowidAdminNavigate = function (id) {
+    return navigate(String(id || '').trim() || 'overview', true)
+  }
+
   function initSidebar() {
     const nav = document.getElementById('admin-nav-root')
     if (!nav) return
@@ -120,8 +132,16 @@
   window.addEventListener('DOMContentLoaded', async () => {
     initSidebar()
     initTokenUi()
-    const saved = state.getSavedNav()
+    let fromUrl = ''
+    try {
+      const sp = new URLSearchParams(window.location.search)
+      fromUrl = String(sp.get('panel') || sp.get('nav') || '').trim()
+    } catch (_) {
+      fromUrl = ''
+    }
+    const rawSaved = fromUrl || state.getSavedNav()
+    const saved = LEGACY_NAV[rawSaved] || rawSaved
     const initial = panels[saved] ? saved : 'overview'
-    await navigate(initial, true)
+    await navigate(initial, !fromUrl)
   })
 })()

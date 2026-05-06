@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FlowID — Confirm 死信队列</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --card: #1e293b;
+        --row-hover: rgba(51, 65, 85, 0.45);
+        --border: rgba(51, 65, 85, 0.9);
+        --text: #e2e8f0;
+        --text-strong: #f8fafc;
+        --muted: #94a3b8;
+        --brand: #ea580c;
+        --accent-violet: #8b5cf6;
+        --input-bg: rgba(0, 0, 0, 0.32);
+        --input-border: rgba(255, 255, 255, 0.12);
+        --radius: 10px;
+        --radius-card: 14px;
+        --radius-input: 10px;
+        --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        --card-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: var(--font);
+        font-size: 15px;
+        background:
+          radial-gradient(1000px 560px at 92% -8%, rgba(139, 92, 246, 0.12), transparent 52%),
+          radial-gradient(820px 480px at 0% 0%, rgba(234, 88, 12, 0.1), transparent 48%),
+          radial-gradient(700px 420px at 40% 100%, rgba(51, 65, 85, 0.35), transparent 55%),
+          var(--bg);
+        color: var(--text);
+        line-height: 1.55;
+      }
+      a {
+        color: #fb923c;
+        text-decoration: none;
+      }
+      a:hover {
+        color: #fdba74;
+        text-decoration: underline;
+      }
+      .cf-wrap {
+        max-width: 1480px;
+        margin: 0 auto;
+        padding: 22px 16px 40px;
+      }
+      .cf-crumb {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 10px;
+        align-items: center;
+        font-size: 14px;
+        color: var(--muted);
+        margin-bottom: 10px;
+      }
+      .cf-crumb__sep {
+        color: #64748b;
+      }
+      .cf-title {
+        margin: 0 0 16px;
+        font-size: 1.55rem;
+        font-weight: 800;
+        color: var(--text-strong);
+      }
+      .cf-card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        padding: 18px 20px;
+        margin-bottom: 16px;
+        box-shadow: var(--card-shadow);
+      }
+      .cf-card__title {
+        margin: 0 0 10px;
+        font-size: 16px;
+        font-weight: 800;
+        color: var(--text-strong);
+      }
+      .cf-card__body {
+        margin: 0;
+        font-size: 15px;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+      .cf-card__body code {
+        font-family: var(--mono);
+        font-size: 13px;
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: rgba(15, 23, 42, 0.65);
+        border: 1px solid var(--border);
+        color: #cbd5e1;
+      }
+      .cf-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .cf-toolbar__left,
+      .cf-toolbar__right {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: center;
+      }
+      .cf-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 9px 16px;
+        border-radius: var(--radius);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.5);
+        color: var(--text-strong);
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .cf-btn:hover:not(:disabled) {
+        border-color: rgba(249, 115, 22, 0.4);
+        background: rgba(234, 88, 12, 0.1);
+      }
+      .cf-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+      .cf-btn--primary {
+        border: 1px solid rgba(251, 146, 60, 0.55);
+        background: linear-gradient(135deg, #ea580c 0%, #c2410c 55%, #9a3412 100%);
+        color: #fffbeb;
+        box-shadow: 0 6px 20px rgba(234, 88, 12, 0.28);
+      }
+      .cf-btn--primary:hover:not(:disabled) {
+        filter: brightness(1.05);
+        box-shadow: 0 8px 26px rgba(234, 88, 12, 0.36);
+      }
+      .cf-btn--danger {
+        border-color: rgba(239, 68, 68, 0.45);
+        color: #fecaca;
+        background: rgba(239, 68, 68, 0.08);
+      }
+      .cf-btn--danger:hover:not(:disabled) {
+        background: rgba(239, 68, 68, 0.16);
+      }
+      .cf-input,
+      .cf-select {
+        padding: 9px 11px;
+        border-radius: var(--radius-input);
+        border: 1px solid var(--input-border);
+        background: var(--input-bg);
+        color: var(--text-strong);
+        font-size: 14px;
+      }
+      .cf-input:focus,
+      .cf-select:focus {
+        outline: none;
+        border-color: rgba(249, 115, 22, 0.55);
+        box-shadow: 0 0 0 3px rgba(234, 88, 12, 0.14);
+      }
+      .cf-input--token {
+        width: 200px;
+        max-width: 40vw;
+        font-family: var(--mono);
+        font-size: 13px;
+      }
+      .cf-filters details {
+        border: 0;
+      }
+      .cf-filters summary {
+        cursor: pointer;
+        font-weight: 700;
+        font-size: 15px;
+        color: var(--text-strong);
+        list-style: none;
+      }
+      .cf-filters summary::-webkit-details-marker {
+        display: none;
+      }
+      .cf-filters summary::before {
+        content: '▸ ';
+        color: var(--muted);
+      }
+      .cf-filters details[open] summary::before {
+        content: '▾ ';
+      }
+      .cf-filter-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 12px 16px;
+        margin-top: 14px;
+      }
+      .cf-field label {
+        display: block;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .cf-field--wide {
+        grid-column: 1 / -1;
+      }
+      .cf-msg {
+        font-size: 15px;
+        margin: 0 0 12px;
+        min-height: 1.2em;
+      }
+      .cf-msg--err {
+        color: #fca5a5;
+      }
+      .cf-msg--ok {
+        color: #86efac;
+      }
+      .cf-result {
+        margin-bottom: 14px;
+        padding: 12px 14px;
+        border-radius: var(--radius-card);
+        border: 1px solid var(--border);
+        background: rgba(15, 23, 42, 0.45);
+        font-size: 15px;
+        color: var(--muted);
+      }
+      .cf-result[hidden] {
+        display: none !important;
+      }
+      .cf-result summary {
+        cursor: pointer;
+        font-weight: 700;
+        color: var(--text);
+      }
+      .cf-result pre {
+        margin: 10px 0 0;
+        padding: 10px;
+        border-radius: var(--radius-input);
+        background: #0f172a;
+        border: 1px solid var(--border);
+        font-size: 13px;
+        overflow: auto;
+        max-height: 220px;
+        color: #cbd5e1;
+      }
+      .cf-table-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        overflow: hidden;
+        background: var(--card);
+      }
+      .cf-scroll {
+        overflow-x: auto;
+      }
+      .cf-scroll.is-loading {
+        opacity: 0.55;
+        pointer-events: none;
+      }
+      table.cf-table {
+        width: 100%;
+        min-width: 1240px;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      .cf-table th,
+      .cf-table td {
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--border);
+        vertical-align: top;
+        text-align: left;
+      }
+      .cf-table th {
+        background: var(--card);
+        color: var(--text-strong);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+      .cf-table tbody tr:hover {
+        background: var(--row-hover);
+      }
+      .cf-table tbody tr:last-child td {
+        border-bottom: none;
+      }
+      .cf-mono {
+        font-family: var(--mono);
+        word-break: break-all;
+      }
+      .cf-err-cell {
+        max-width: 220px;
+        cursor: default;
+      }
+      .cf-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .cf-actions .cf-btn {
+        padding: 7px 14px;
+        font-size: 13px;
+        min-height: 34px;
+      }
+      .cf-badge {
+        display: inline-flex;
+        padding: 4px 11px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .cf-badge--pending {
+        background: rgba(234, 179, 8, 0.15);
+        color: #eab308;
+      }
+      .cf-badge--resolved {
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+      }
+      .cf-badge--ignored {
+        background: rgba(107, 114, 128, 0.15);
+        color: #9ca3af;
+      }
+      .cf-pager {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+        border-top: 1px solid var(--border);
+        font-size: 14px;
+        color: var(--muted);
+      }
+    </style>
+    <link rel="stylesheet" href="/pts/admin/static/pts-admin-shared.css" />
+  </head>
+  <body>
+    <div class="cf-wrap">
+      <nav class="cf-crumb" aria-label="面包屑">
+        <a href="/pts/admin">首页</a>
+        <span class="cf-crumb__sep">›</span>
+        <a href="/pts/admin/licenses">授权码管理</a>
+        <span class="cf-crumb__sep">›</span>
+        <span>confirm 死信队列</span>
+      </nav>
+      <h1 class="cf-title">Confirm 死信队列</h1>
+
+      <section class="cf-card" aria-labelledby="hintTitle">
+        <h2 id="hintTitle" class="cf-card__title">说明</h2>
+        <p class="cf-card__body">
+          <strong>死信定义：</strong>预扣（<code>reserve</code>）后确认（<code>confirm</code>）失败而写入 <code>points_confirm_failures</code> 的记录。<br />
+          <strong>处理方式：</strong>对仍为 <code>reserve</code> 的流水<strong>重放确认</strong>（等价客户端 confirm）；或<strong>标为 resolved</strong> /
+          <strong>标为 ignored</strong>（不自动改积分流水，仅更新死信状态）。<br />
+          <strong>提示：</strong><code>pending</code> 行的 <code>resolved_at</code> / <code>ignored_at</code> 为空，<strong>不受下方时间区间筛选约束</strong>（与后端查询逻辑一致）。
+        </p>
+      </section>
+
+      <div class="cf-toolbar">
+        <div class="cf-toolbar__left">
+          <a class="cf-btn" href="/pts/admin">← 返回总览</a>
+          <a class="cf-btn" href="/pts/admin/batch-refund">批量补偿</a>
+        </div>
+        <div class="cf-toolbar__right">
+          <input type="password" id="token" class="cf-input cf-input--token" placeholder="x-admin-token" autocomplete="off" />
+          <button type="button" class="cf-btn cf-btn--primary" id="btnRefresh">刷新</button>
+          <button type="button" class="cf-btn cf-btn--primary" id="bulkResolved" disabled>批量标为 resolved</button>
+          <button type="button" class="cf-btn cf-btn--danger" id="bulkIgnored" disabled>批量标为 ignored</button>
+        </div>
+      </div>
+
+      <section class="cf-card cf-filters">
+        <details open>
+          <summary>筛选条件</summary>
+          <div class="cf-filter-grid">
+            <div class="cf-field">
+              <label for="status">状态</label>
+              <select id="status" class="cf-select">
+                <option value="all">全部</option>
+                <option value="pending" selected>pending</option>
+                <option value="resolved">resolved</option>
+                <option value="ignored">ignored</option>
+              </select>
+            </div>
+            <div class="cf-field">
+              <label for="resolvedFrom">resolved_at 从</label>
+              <input type="datetime-local" id="resolvedFrom" class="cf-input" style="width: 100%" />
+            </div>
+            <div class="cf-field">
+              <label for="resolvedTo">resolved_at 到</label>
+              <input type="datetime-local" id="resolvedTo" class="cf-input" style="width: 100%" />
+            </div>
+            <div class="cf-field">
+              <label for="ignoredFrom">ignored_at 从</label>
+              <input type="datetime-local" id="ignoredFrom" class="cf-input" style="width: 100%" />
+            </div>
+            <div class="cf-field">
+              <label for="ignoredTo">ignored_at 到</label>
+              <input type="datetime-local" id="ignoredTo" class="cf-input" style="width: 100%" />
+            </div>
+            <div class="cf-field">
+              <label for="resolvedBy">resolved_by 含</label>
+              <input type="text" id="resolvedBy" class="cf-input" style="width: 100%" placeholder="子串" />
+            </div>
+            <div class="cf-field">
+              <label for="ignoredBy">ignored_by 含</label>
+              <input type="text" id="ignoredBy" class="cf-input" style="width: 100%" placeholder="子串" />
+            </div>
+            <div class="cf-field cf-field--wide">
+              <label for="actor">处理人 / 备注（批量与手动标状态时写入 resolved_by / ignored_by；重放成功为 replay）</label>
+              <input type="text" id="actor" class="cf-input" style="width: 100%; max-width: 640px" maxlength="200" placeholder="可选" />
+            </div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px">
+            <button type="button" class="cf-btn cf-btn--primary" id="btnApply">应用筛选</button>
+            <button type="button" class="cf-btn" id="resetFilters">重置筛选</button>
+          </div>
+        </details>
+      </section>
+
+      <p id="msg" class="cf-msg"></p>
+
+      <div id="bulkResult" class="cf-result" hidden>
+        <details>
+          <summary id="bulkResultSummary">批量操作结果</summary>
+          <pre id="bulkResultBody"></pre>
+        </details>
+      </div>
+
+      <div class="cf-table-card">
+        <div class="cf-scroll" id="tableScroll">
+          <table class="cf-table" id="tbl" hidden>
+            <thead>
+              <tr>
+                <th style="width: 40px"><input type="checkbox" id="cbAll" title="全选本页" aria-label="全选本页" /></th>
+                <th style="width: 56px">ID</th>
+                <th style="width: 140px">dedupe_key</th>
+                <th style="width: 140px">license_code</th>
+                <th style="width: 88px">状态</th>
+                <th>error</th>
+                <th style="width: 140px">resolved_at</th>
+                <th style="width: 100px">resolved_by</th>
+                <th style="width: 140px">ignored_at</th>
+                <th style="width: 100px">ignored_by</th>
+                <th style="width: 200px">操作</th>
+              </tr>
+            </thead>
+            <tbody id="body"></tbody>
+          </table>
+        </div>
+        <div class="cf-pager" id="pager" hidden>
+          <span id="pageInfo"></span>
+          <label style="display: inline-flex; align-items: center; gap: 6px; margin: 0">
+            每页
+            <select id="pageSize" class="cf-select" style="min-width: 88px">
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+          <button type="button" class="cf-btn" id="prevPage">上一页</button>
+          <button type="button" class="cf-btn" id="nextPage">下一页</button>
+          <label style="display: inline-flex; align-items: center; gap: 6px; margin: 0">
+            跳转
+            <input type="number" id="gotoPage" class="cf-input" style="width: 72px" min="1" step="1" />
+            <button type="button" class="cf-btn" id="btnGoto">前往</button>
+          </label>
+        </div>
+      </div>
+      <p class="cf-card__body" style="margin-top: 14px; font-size: 12px">
+        当前接口单次最多返回 <strong>500</strong> 条；分页在浏览器内对本次结果切片。若需更大结果集请后续扩展 API。
+      </p>
+    </div>
+
+    <script src="/pts/admin/static/pts-admin-token.js"></script>
+    <script>
+      const apiBase = (() => {
+        const o = String(location.origin || '')
+        if (!o || o === 'null' || o.startsWith('file:')) return 'http://127.0.0.1:3721/pts'
+        return o.replace(/\/+$/, '') + '/pts'
+      })()
+
+      let allRows = []
+      let page = 1
+      let pageSize = 20
+
+      const hdr = () => ({ 'x-admin-token': document.getElementById('token').value.trim() })
+
+      function escapeHtml(s) {
+        return String(s ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+      }
+
+      function maskLicense(code) {
+        const s = String(code || '').trim()
+        if (!s) return '—'
+        const parts = s.split('-').filter(Boolean)
+        if (parts.length >= 2) {
+          const head = (parts[0] || '').slice(0, 4)
+          const tail = (parts[parts.length - 1] || '').slice(-4)
+          if (head.length >= 2 && tail.length >= 2) return `${head}-****-****-${tail}`
+        }
+        if (s.length <= 8) return '****'
+        return `${s.slice(0, 4)}-****-****-${s.slice(-4)}`
+      }
+
+      function truncDedupe(d) {
+        const s = String(d || '')
+        if (s.length <= 28) return s
+        return s.slice(0, 14) + '…' + s.slice(-10)
+      }
+
+      function truncErr(t, max) {
+        const s = String(t || '')
+        const n = max == null ? 100 : max
+        if (s.length <= n) return { short: s, full: s }
+        return { short: s.slice(0, n) + '…', full: s }
+      }
+
+      function badgeFor(st) {
+        const v = String(st || '').toLowerCase()
+        const cls =
+          v === 'pending' ? 'cf-badge cf-badge--pending' : v === 'resolved' ? 'cf-badge cf-badge--resolved' : 'cf-badge cf-badge--ignored'
+        return `<span class="${cls}">${escapeHtml(v || '—')}</span>`
+      }
+
+      function getActor() {
+        return document.getElementById('actor').value.trim().slice(0, 200)
+      }
+
+      function setMsg(text, kind) {
+        const el = document.getElementById('msg')
+        el.textContent = text || ''
+        el.className = 'cf-msg' + (kind === 'err' ? ' cf-msg--err' : kind === 'ok' ? ' cf-msg--ok' : '')
+      }
+
+      function confirmDanger(msg) {
+        if (!confirm(msg)) return false
+        if (!confirm('请再次确认。')) return false
+        return true
+      }
+
+      async function parseJsonBody(res) {
+        const text = await res.text()
+        if (!text) return {}
+        try {
+          return JSON.parse(text)
+        } catch {
+          return {}
+        }
+      }
+
+      function applyApiFailure(res, data) {
+        let msg = (data && data.message) || res.statusText || '请求失败'
+        if (data && data.currentStatus) msg += ' [当前状态: ' + data.currentStatus + ']'
+        setMsg(msg + (res.ok ? '' : ' (' + res.status + ')'), 'err')
+        return false
+      }
+
+      function buildListQuery() {
+        const q = new URLSearchParams()
+        q.set('status', document.getElementById('status').value)
+        const rf = document.getElementById('resolvedFrom').value
+        const rt = document.getElementById('resolvedTo').value
+        const igf = document.getElementById('ignoredFrom').value
+        const igt = document.getElementById('ignoredTo').value
+        if (rf) q.set('resolvedFrom', rf.replace('T', ' '))
+        if (rt) q.set('resolvedTo', rt.replace('T', ' '))
+        if (igf) q.set('ignoredFrom', igf.replace('T', ' '))
+        if (igt) q.set('ignoredTo', igt.replace('T', ' '))
+        const rby = document.getElementById('resolvedBy').value.trim()
+        const iby = document.getElementById('ignoredBy').value.trim()
+        if (rby) q.set('resolvedBy', rby)
+        if (iby) q.set('ignoredBy', iby)
+        return q.toString()
+      }
+
+      function getSelectedIds() {
+        const ids = []
+        document.querySelectorAll('.dlq-cb:checked').forEach((c) => {
+          const id = Math.trunc(Number(c.getAttribute('data-id')))
+          if (Number.isFinite(id) && id > 0) ids.push(id)
+        })
+        return ids
+      }
+
+      function updateBulkButtons() {
+        const n = getSelectedIds().length
+        document.getElementById('bulkResolved').disabled = n === 0
+        document.getElementById('bulkIgnored').disabled = n === 0
+      }
+
+      function showBulkResult(data) {
+        const box = document.getElementById('bulkResult')
+        const sum = document.getElementById('bulkResultSummary')
+        const body = document.getElementById('bulkResultBody')
+        const updated = Number(data.updated || 0)
+        const miss = data.missingIds || []
+        const fail = data.failedIds || []
+        sum.textContent =
+          '批量结果：成功写入 ' + updated + ' 条' + (miss.length ? '；未找到 ' + miss.length + ' 条' : '') + (fail.length ? '；失败 ' + fail.length + ' 条' : '')
+        body.textContent = JSON.stringify({ updated, missingIds: miss, failedIds: fail }, null, 2)
+        box.hidden = false
+      }
+
+      function hideBulkResult() {
+        document.getElementById('bulkResult').hidden = true
+      }
+
+      async function postDlqStatus(rowId, nextStatus, onSuccessLabel) {
+        setMsg('', '')
+        const body = { id: rowId, status: nextStatus }
+        const a = getActor()
+        if (a) body.actor = a
+        const res = await fetch(apiBase + '/api/admin/confirm-failures/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...hdr() },
+          body: JSON.stringify(body),
+        })
+        const data = await parseJsonBody(res)
+        if (!res.ok || data.ok === false) {
+          applyApiFailure(res, data)
+          return false
+        }
+        setMsg(onSuccessLabel, 'ok')
+        await fetchList(false)
+        return true
+      }
+
+      async function postBulkDlqStatus(ids, nextStatus) {
+        setMsg('', '')
+        hideBulkResult()
+        const body = { ids, status: nextStatus }
+        const a = getActor()
+        if (a) body.actor = a
+        const res = await fetch(apiBase + '/api/admin/confirm-failures/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...hdr() },
+          body: JSON.stringify(body),
+        })
+        const data = await parseJsonBody(res)
+        if (!res.ok || data.ok === false) {
+          applyApiFailure(res, data)
+          return false
+        }
+        showBulkResult(data)
+        if (data.failedIds && data.failedIds.length) setMsg('部分记录未更新，见下方「批量操作结果」。', 'err')
+        else setMsg('批量更新完成。', 'ok')
+        document.getElementById('cbAll').checked = false
+        await fetchList(false)
+        return true
+      }
+
+      function pagerMeta() {
+        pageSize = Math.min(100, Math.max(1, Math.trunc(Number(document.getElementById('pageSize').value) || 20)))
+        const total = allRows.length
+        const maxPage = Math.max(1, Math.ceil(total / pageSize) || 1)
+        page = Math.min(maxPage, Math.max(1, page))
+        const start = (page - 1) * pageSize
+        return { slice: allRows.slice(start, start + pageSize), total, maxPage }
+      }
+
+      function renderPage() {
+        const body = document.getElementById('body')
+        const tbl = document.getElementById('tbl')
+        const pager = document.getElementById('pager')
+        body.innerHTML = ''
+        const { slice, total, maxPage } = pagerMeta()
+        if (total === 0) {
+          tbl.hidden = true
+          pager.hidden = true
+          updateBulkButtons()
+          return
+        }
+        document.getElementById('pageInfo').textContent =
+          '第 ' + page + ' / ' + maxPage + ' 页 · 本页 ' + slice.length + ' 条 · 共 ' + total + ' 条（接口最多 500）'
+        document.getElementById('gotoPage').value = String(page)
+        document.getElementById('prevPage').disabled = page <= 1
+        document.getElementById('nextPage').disabled = page >= maxPage
+
+        for (const r of slice) {
+          const dedupe = String(r.dedupe_key || '')
+          const err = truncErr(r.error_text, 100)
+          const tr = document.createElement('tr')
+          tr.innerHTML =
+            `<td><input type="checkbox" class="dlq-cb" data-id="${r.id}" aria-label="选择 ${r.id}" /></td>` +
+            `<td>${escapeHtml(String(r.id))}</td>` +
+            `<td class="cf-mono" title="${escapeHtml(dedupe)}">${escapeHtml(truncDedupe(dedupe))}</td>` +
+            `<td class="cf-mono" title="${escapeHtml(String(r.license_code || ''))}">${escapeHtml(maskLicense(r.license_code))}</td>` +
+            `<td>${badgeFor(r.status)}</td>` +
+            `<td class="cf-mono cf-err-cell" title="${escapeHtml(err.full)}">${escapeHtml(err.short)}</td>` +
+            `<td class="cf-mono">${escapeHtml(String(r.resolved_at || ''))}</td>` +
+            `<td class="cf-mono">${escapeHtml(String(r.resolved_by || ''))}</td>` +
+            `<td class="cf-mono">${escapeHtml(String(r.ignored_at || ''))}</td>` +
+            `<td class="cf-mono">${escapeHtml(String(r.ignored_by || ''))}</td>` +
+            `<td class="cf-actions"></td>`
+          tr.querySelector('.dlq-cb').addEventListener('change', () => {
+            updateBulkButtons()
+            syncCbAll()
+          })
+          const cell = tr.querySelector('.cf-actions')
+          const b1 = document.createElement('button')
+          b1.type = 'button'
+          b1.className = 'cf-btn cf-btn--primary'
+          b1.textContent = '重放确认'
+          b1.onclick = async () => {
+            const msg =
+              '将对 dedupe_key 执行等价 confirm（仍为 reserve 的流水记为 consume）。\n\n' +
+              dedupe +
+              '\n\n误操作可能影响对账，确定？'
+            if (!confirm(msg)) return
+            setMsg('重放中…', '')
+            b1.disabled = true
+            const res2 = await fetch(apiBase + '/api/admin/replay-confirm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...hdr() },
+              body: JSON.stringify({ dedupeKey: dedupe }),
+            })
+            const j = await parseJsonBody(res2)
+            b1.disabled = false
+            if (!res2.ok || j.ok === false) {
+              applyApiFailure(res2, j)
+              return
+            }
+            setMsg(j.idempotent ? String(j.message || '已处理') : '成功，remainingPoints=' + (j.remainingPoints ?? ''), 'ok')
+            await fetchList(false)
+          }
+          cell.appendChild(b1)
+          const bR = document.createElement('button')
+          bR.type = 'button'
+          bR.className = 'cf-btn'
+          bR.textContent = '标为 resolved'
+          bR.onclick = async () => {
+            bR.disabled = true
+            await postDlqStatus(r.id, 'resolved', '已标为 resolved')
+            bR.disabled = false
+          }
+          cell.appendChild(bR)
+          const bI = document.createElement('button')
+          bI.type = 'button'
+          bI.className = 'cf-btn cf-btn--danger'
+          bI.textContent = '标为 ignored'
+          bI.onclick = async () => {
+            if (!confirm('将 id ' + r.id + ' 标为 ignored？')) return
+            bI.disabled = true
+            await postDlqStatus(r.id, 'ignored', '已标为 ignored')
+            bI.disabled = false
+          }
+          cell.appendChild(bI)
+          body.appendChild(tr)
+        }
+        tbl.hidden = false
+        pager.hidden = false
+        document.getElementById('cbAll').checked = false
+        updateBulkButtons()
+      }
+
+      function syncCbAll() {
+        const all = document.querySelectorAll('.dlq-cb')
+        const chk = document.querySelectorAll('.dlq-cb:checked')
+        document.getElementById('cbAll').checked = all.length > 0 && chk.length === all.length
+      }
+
+      async function fetchList(resetPage) {
+        const scroll = document.getElementById('tableScroll')
+        const tok = document.getElementById('token').value.trim()
+        if (!tok) {
+          setMsg('请先填写 x-admin-token。', 'err')
+          return
+        }
+        if (resetPage) page = 1
+        hideBulkResult()
+        setMsg('加载中…', '')
+        scroll.classList.add('is-loading')
+        try {
+          const qs = buildListQuery()
+          const res = await fetch(apiBase + '/api/admin/confirm-failures?' + qs, { headers: hdr() })
+          const data = await parseJsonBody(res)
+          if (!res.ok || data.ok === false) {
+            applyApiFailure(res, data)
+            allRows = []
+            document.getElementById('tbl').hidden = true
+            document.getElementById('pager').hidden = true
+            return
+          }
+          if (window.flowidPtsAdminToken) window.flowidPtsAdminToken.save('token')
+          allRows = Array.isArray(data.rows) ? data.rows : []
+          setMsg('已加载 ' + allRows.length + ' 条。', 'ok')
+          renderPage()
+        } finally {
+          scroll.classList.remove('is-loading')
+        }
+      }
+
+      document.getElementById('cbAll').addEventListener('change', (e) => {
+        const on = e.target.checked
+        document.querySelectorAll('.dlq-cb').forEach((c) => {
+          c.checked = on
+        })
+        updateBulkButtons()
+      })
+
+      document.getElementById('btnRefresh').onclick = () => void fetchList(false)
+      document.getElementById('btnApply').onclick = () => void fetchList(true)
+      document.getElementById('resetFilters').onclick = () => {
+        document.getElementById('status').value = 'all'
+        document.getElementById('resolvedFrom').value = ''
+        document.getElementById('resolvedTo').value = ''
+        document.getElementById('ignoredFrom').value = ''
+        document.getElementById('ignoredTo').value = ''
+        document.getElementById('resolvedBy').value = ''
+        document.getElementById('ignoredBy').value = ''
+        void fetchList(true)
+      }
+
+      document.getElementById('pageSize').addEventListener('change', () => {
+        page = 1
+        renderPage()
+      })
+      document.getElementById('prevPage').onclick = () => {
+        if (page > 1) {
+          page--
+          renderPage()
+        }
+      }
+      document.getElementById('nextPage').onclick = () => {
+        pageSize = Math.min(100, Math.max(1, Math.trunc(Number(document.getElementById('pageSize').value) || 20)))
+        const maxPage = Math.max(1, Math.ceil(allRows.length / pageSize) || 1)
+        if (page < maxPage) {
+          page++
+          renderPage()
+        }
+      }
+      document.getElementById('btnGoto').onclick = () => {
+        pageSize = Math.min(100, Math.max(1, Math.trunc(Number(document.getElementById('pageSize').value) || 20)))
+        const maxPage = Math.max(1, Math.ceil(allRows.length / pageSize) || 1)
+        const g = Math.trunc(Number(document.getElementById('gotoPage').value) || 1)
+        page = Math.min(maxPage, Math.max(1, g))
+        renderPage()
+      }
+
+      document.getElementById('bulkResolved').onclick = async () => {
+        const ids = getSelectedIds()
+        if (!ids.length) return
+        if (!confirmDanger('将 ' + ids.length + ' 条标为 resolved（不执行重放），确定？')) return
+        await postBulkDlqStatus(ids, 'resolved')
+      }
+      document.getElementById('bulkIgnored').onclick = async () => {
+        const ids = getSelectedIds()
+        if (!ids.length) return
+        if (!confirmDanger('将 ' + ids.length + ' 条标为 ignored，确定？')) return
+        await postBulkDlqStatus(ids, 'ignored')
+      }
+
+      if (window.flowidPtsAdminToken) {
+        window.flowidPtsAdminToken.load('token')
+        window.flowidPtsAdminToken.bind('token')
+        if (document.getElementById('token').value.trim()) void fetchList(true)
+      }
+    </script>
+  </body>
+</html>

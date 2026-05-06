@@ -2,7 +2,6 @@ import type { Node } from '@xyflow/react'
 import { useEffect, useMemo, useState } from 'react'
 import { motion } from 'motion/react'
 import type { StudioNodeData } from '../../types'
-import { computeAccessState, loadLicenseSnapshotV2 } from '../../lib/licenseAccess'
 import { PresetTemplateCoverImage } from '../PresetTemplateCoverImage'
 import {
   FLOWID_PRESET_TEMPLATE_DRAG_MIME,
@@ -113,8 +112,6 @@ export function DownloadPanel({
     return () => window.removeEventListener('flowid:license-changed', onLic as EventListener)
   }, [])
 
-  const access = useMemo(() => computeAccessState(loadLicenseSnapshotV2()), [licenseTick])
-
   useEffect(() => {
     let cancelled = false
     ;(async () => {
@@ -135,18 +132,15 @@ export function DownloadPanel({
     [catalog],
   )
 
-  const categoryTabs = useMemo(
-    () => buildPresetTemplateCategoryTabs(baseList, access === 'valid'),
-    [baseList, access],
-  )
+  const categoryTabs = useMemo(() => buildPresetTemplateCategoryTabs(baseList, true), [baseList])
 
   useEffect(() => {
     setSelectedCategory((cur) => (categoryTabs.includes(cur) ? cur : '全部'))
   }, [categoryTabs])
 
   const filtered = useMemo(
-    () => filterPresetTemplatesByCategory(baseList, selectedCategory, access === 'valid'),
-    [baseList, selectedCategory, access],
+    () => filterPresetTemplatesByCategory(baseList, selectedCategory, true),
+    [baseList, selectedCategory],
   )
 
   const emptyHint = useMemo(() => {

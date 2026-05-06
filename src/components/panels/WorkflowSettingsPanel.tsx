@@ -9,6 +9,7 @@ import {
   FileText,
   HardDrive,
   Image as ImageIconLucide,
+  KeyRound,
   Mic,
   Music,
   Server,
@@ -45,6 +46,7 @@ import type {
 } from '../../types'
 import type { AiAssistantConfig } from '../../lib/aiAssistantAgent'
 import { USER_AGREEMENT_TEXT, fetchRemoteUserAgreement } from '../../lib/userAgreement'
+import { LicenseActivationPanel } from './LicenseActivationPanel'
 import { loadLicenseServerConfig } from '../../lib/licenseAccess'
 import { loadCloudCallLogs, type CloudCallLogEntry } from '../../lib/cloudCallLogs'
 import {
@@ -121,13 +123,14 @@ function asProviderId(x: string): CloudProviderId {
   return (x === 'doubao' || x === 'gemini' || x === 'openai' ? x : 'doubao') as CloudProviderId
 }
 
-type SettingsTab =
+export type SettingsTab =
   | 'comfy'
   | 'cloud-models'
   | 'ai-assistant'
   | StudioNodeKind
   | 'shortcuts'
   | 'local-storage'
+  | 'device-activation'
   | 'user-agreement'
 
 const SETTINGS_SIDEBAR: Array<{ id: SettingsTab; label: string; icon: LucideIcon }> = [
@@ -141,11 +144,13 @@ const SETTINGS_SIDEBAR: Array<{ id: SettingsTab; label: string; icon: LucideIcon
   { id: 'ai-assistant', label: 'AI 助手', icon: Terminal },
   { id: 'shortcuts', label: '快捷键', icon: Command },
   { id: 'local-storage', label: '本地存储', icon: HardDrive },
+  { id: 'device-activation', label: '授权码', icon: KeyRound },
   { id: 'user-agreement', label: '用户协议', icon: FileText },
 ]
 
 /** 与 @flowid (2) SettingsPanel 一致：侧栏文案 + 「核心参数」 */
 function settingsMainTitle(tab: SettingsTab): string {
+  if (tab === 'device-activation') return '授权码 核心参数'
   if (tab === 'user-agreement') return '用户协议'
   if (tab === 'cloud-models') return '云端模型'
   const row = SETTINGS_SIDEBAR.find((i) => i.id === tab)
@@ -193,6 +198,7 @@ function looksLikeEndsWithDir(pathText: string, dirName: string): boolean {
  * 工作流设置面板：管理本地/云端配置、模板导入、节点类型绑定。
  */
 export function WorkflowSettingsPanel({
+  canvasDayMode = false,
   executionMode,
   executionProvider,
   randomizeKsamplerSeedsOnRun,
@@ -225,6 +231,8 @@ export function WorkflowSettingsPanel({
   onAiAssistantConfigChange,
   onSaveAiAssistantConfig,
   onClose,
+  settingsFocusTab = null,
+  onSettingsFocusTabConsumed,
 }: {
   executionMode: WorkflowExecutionMode
   executionProvider: WorkflowProviderType
@@ -280,8 +288,18 @@ export function WorkflowSettingsPanel({
   onAiAssistantConfigChange: (patch: Partial<AiAssistantConfig>) => void
   onSaveAiAssistantConfig: () => void
   onClose: () => void
+  /** 与画布日间模式一致：弹窗白底 #262626 文案 */
+  canvasDayMode?: boolean
+  /** 外部请求打开指定侧栏（如首页「授权码」）；应用后由 onSettingsFocusTabConsumed 清掉 */
+  settingsFocusTab?: SettingsTab | null
+  onSettingsFocusTabConsumed?: () => void
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('comfy')
+  useEffect(() => {
+    if (!settingsFocusTab) return
+    setActiveTab(settingsFocusTab)
+    onSettingsFocusTabConsumed?.()
+  }, [settingsFocusTab, onSettingsFocusTabConsumed])
   const [bindingCommand, setBindingCommand] = useState<ShortcutCommandId | null>(null)
   const aiCloneAudioInputRef = useRef<HTMLInputElement | null>(null)
   const [diskPaths, setDiskPaths] = useState<LocalDiskPathsSettings>(() => loadLocalDiskPathsSettings())
@@ -1341,7 +1359,9 @@ export function WorkflowSettingsPanel({
       | 'workflowPath'
       | 'flowidProjectJsonPath'
       | 'materialLibraryPath'
-      | 'systemPromptCoverPath',
+      | 'systemPromptCoverPath'
+      | 'mlSharpRootPath'
+      | 'mlSharpCliPath',
   ) => {
     if (field === 'flowidProjectJsonPath') {
       await unbindFlowidProjectJsonBrowser()
@@ -1358,6 +1378,16 @@ export function WorkflowSettingsPanel({
     if (field === 'systemPromptCoverPath') {
       setDiskPaths((p) => ({ ...p, systemPromptCoverPath: '' }))
       saveLocalDiskPathsSettings({ systemPromptCoverPath: '' })
+      return
+    }
+    if (field === 'mlSharpRootPath') {
+      setDiskPaths((p) => ({ ...p, mlSharpRootPath: '' }))
+      saveLocalDiskPathsSettings({ mlSharpRootPath: '' })
+      return
+    }
+    if (field === 'mlSharpCliPath') {
+      setDiskPaths((p) => ({ ...p, mlSharpCliPath: '' }))
+      saveLocalDiskPathsSettings({ mlSharpCliPath: '' })
       return
     }
     if (!isElectronDesktop) {
@@ -1435,6 +1465,46 @@ export function WorkflowSettingsPanel({
   }
 
   /**
+   * 选择 Apple ml-sharp 仓库根目录（桌面端）；网页版请手填绝对路径。
+   */
+  const pickMlSharpRootPath = async () => {
+    if (!isElectronDesktop) {
+      window.alert(
+        '网页版「选文件夹」无法得到本机绝对路径供开发服务器使用。请在下方输入框填写 ml-sharp 根目录（例如 E:\\\\ml-sharp-main），或改用桌面版点「选择」。',
+      )
+      return
+    }
+    const desk = window.flowidDesktop
+    if (!desk?.pickDirectory) {
+      window.alert('当前桌面端能力异常，请重启 Flowid 桌面进程后再试。')
+      return
+    }
+    const res = await desk.pickDirectory({
+      defaultPath:
+        String(diskPaths.mlSharpRootPath || '').trim() ||
+        String(diskPaths.flowidProjectJsonPath || '').trim() ||
+        diskPaths.workflowPath,
+    })
+    if (!res.ok) {
+      window.alert(res.error || '选择失败')
+      return
+    }
+    if (res.canceled || !res.path) return
+    if (desk.ensureDirectory) {
+      const ensured = await desk.ensureDirectory(res.path)
+      if (!ensured.ok || !ensured.path) {
+        window.alert(ensured.error || '目录不可用')
+        return
+      }
+      setDiskPaths((p) => ({ ...p, mlSharpRootPath: ensured.path! }))
+      saveLocalDiskPathsSettings({ mlSharpRootPath: ensured.path! })
+      return
+    }
+    setDiskPaths((p) => ({ ...p, mlSharpRootPath: res.path! }))
+    saveLocalDiskPathsSettings({ mlSharpRootPath: res.path! })
+  }
+
+  /**
    * 将路径配置写入 localStorage。
    */
   const commitDiskPaths = () => {
@@ -1471,6 +1541,7 @@ export function WorkflowSettingsPanel({
   return (
     <motion.section
       data-studio-settings-modal="1"
+      data-canvas-day={canvasDayMode ? '1' : undefined}
       role="dialog"
       aria-modal="true"
       aria-label="工作流设置"
@@ -1580,6 +1651,12 @@ export function WorkflowSettingsPanel({
                     </span>
                   </label>
                 </div>
+                <p className="m-0 text-[13px] leading-relaxed text-white/45 border-t border-white/5 pt-4">
+                  <span className="font-bold text-white/55">说明：</span>
+                  「本地 / 云端」只决定<strong className="text-white/65">执行</strong>时连哪一台 Comfy（地址与鉴权），
+                  <strong className="text-white/65">不会</strong>自动把你在各节点里维护的「自定义工作流」列表换成远端 Comfy 上的文件名——该列表保存在本应用本地配置中。
+                  Auth 上的<strong className="text-white/65">官方模板</strong>来自授权服务的模板目录，与这里的云端 Comfy 地址是两套数据；仅在「官方模板」执行模式下才会出现对应下拉框（默认多为自定义工作流模式）。
+                </p>
               </div>
 
               <div className="bg-[#111114] border border-white/5 rounded-2xl p-6 space-y-4">
@@ -2051,6 +2128,64 @@ export function WorkflowSettingsPanel({
                         type="button"
                         className={`${WF_BTN_CAPSULE_MUTED} text-[11px]`}
                         onClick={() => void clearPathField('workflowPath')}
+                      >
+                        清除
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+                    <div className="w-24 shrink-0 px-1">
+                      <div className="text-[14px] font-black uppercase text-white/80">ml-sharp</div>
+                      <div className="font-mono text-[11px] uppercase text-white/25">伪3D</div>
+                    </div>
+                    <input
+                      className={`${WF_INPUT} min-w-0 flex-1`}
+                      value={diskPaths.mlSharpRootPath}
+                      placeholder={
+                        isElectronDesktop
+                          ? '例如 E:\\ml-sharp-main（Apple ml-sharp 仓库根目录）'
+                          : '填写本机绝对路径（与 Comfy 的 input/output 无关）'
+                      }
+                      onChange={(e) => setDiskPaths((p) => ({ ...p, mlSharpRootPath: e.target.value }))}
+                      aria-label="ml-sharp 仓库根目录"
+                    />
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <button
+                        type="button"
+                        title="选择 ml-sharp 根目录（桌面端）"
+                        className={`${WF_BTN_CAPSULE_DARK} text-[11px]`}
+                        onClick={() => void pickMlSharpRootPath()}
+                      >
+                        选择
+                      </button>
+                      <button
+                        type="button"
+                        className={`${WF_BTN_CAPSULE_MUTED} text-[11px]`}
+                        onClick={() => void clearPathField('mlSharpRootPath')}
+                      >
+                        清除
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+                    <div className="w-24 shrink-0 px-1">
+                      <div className="text-[14px] font-black uppercase text-white/80">SHARP 命令</div>
+                      <div className="font-mono text-[11px] uppercase text-white/25">CLI</div>
+                    </div>
+                    <input
+                      className={`${WF_INPUT} min-w-0 flex-1`}
+                      value={diskPaths.mlSharpCliPath}
+                      placeholder="默认可留空（使用 sharp）；或填 python / 可执行文件绝对路径"
+                      onChange={(e) => setDiskPaths((p) => ({ ...p, mlSharpCliPath: e.target.value }))}
+                      aria-label="ml-sharp CLI 可执行文件"
+                    />
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className={`${WF_BTN_CAPSULE_MUTED} text-[11px]`}
+                        onClick={() => void clearPathField('mlSharpCliPath')}
                       >
                         清除
                       </button>
@@ -3078,7 +3213,7 @@ export function WorkflowSettingsPanel({
                     {cloudAssistConfig?.providers?.length ? (
                       <div className="space-y-3">
                         <div className={WF_SECTION_TITLE}>可用模型（点测试后加入节点下拉）</div>
-                        <div className="overflow-hidden rounded-2xl border border-white/5 bg-black/20">
+                        <div className="wf-cloud-models-shell overflow-hidden rounded-2xl border border-white/5 bg-black/20">
                           <div className="grid grid-cols-[120px_1fr_140px] gap-2 border-b border-white/5 bg-black/40 px-4 py-3 text-[12px] font-black uppercase tracking-[0.2em] text-white/20">
                             <span>Provider</span>
                             <span>模型</span>
@@ -3192,6 +3327,10 @@ export function WorkflowSettingsPanel({
             </div>
           ) : null}
 
+          {activeTab === 'device-activation' ? (
+            <LicenseActivationPanel active layout="embedded" />
+          ) : null}
+
           {activeTab === 'user-agreement' ? (
             <div className={`${WF_CARD} p-6`}>
               <div className="space-y-4">
@@ -3216,7 +3355,15 @@ export function WorkflowSettingsPanel({
           {lastExecutionMessage ? (
             <div className={`${WF_CARD} space-y-3 p-6`}>
               <div className={WF_SECTION_TITLE}>最近执行</div>
-              <p className="m-0 text-[14px] leading-relaxed text-white/40">{lastExecutionMessage}</p>
+              <p
+                className={`m-0 text-[14px] leading-relaxed ${
+                  lastExecutionMessage.includes('积分已自动退还')
+                    ? 'text-red-300/95'
+                    : 'text-white/40'
+                }`}
+              >
+                {lastExecutionMessage}
+              </p>
             </div>
           ) : null}
           </div>

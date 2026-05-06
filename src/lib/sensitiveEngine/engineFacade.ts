@@ -1,0 +1,108 @@
+import { SENSITIVE_CORE } from '../../data/sensitiveCore'
+import { AhoCorasick } from './acEngine'
+import {
+  fetchLexiconJson,
+  fetchLexiconMeta,
+  loadLexiconFromCache,
+  persistFetchedLexicon,
+} from './lexiconLoader'
+import type { SensitiveLevel, SensitiveWord } from './types'
+
+let engineReady = false
+let loadPromise: Promise<void> | null = null
+let fullEngine: AhoCorasick | null = null
+
+const fallbackEngine = new AhoCorasick(SENSITIVE_CORE)
+
+/** 让出主线程，避免 `alert()` 刚关闭或用户刚点击输入框时立刻跑大词表 AC 构建把 UI 卡死数秒 */
+function yieldToMainForAcBuild(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setTimeout(resolve, 0)
+      })
+    })
+  })
+}
+
+function currentEngine(): AhoCorasick {
+  return fullEngine ?? fallbackEngine
+}
+
+function startBackgroundLoad(): void {
+  if (loadPromise) return
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/?$/, '/')
+  loadPromise = (async () => {
+    try {
+      let cacheBust: string | undefined
+      try {
+        const meta = await fetchLexiconMeta(base)
+        cacheBust = meta.version
+        const cached = await loadLexiconFromCache(meta.version)
+        if (cached && cached.length > 0) {
+          await yieldToMainForAcBuild()
+          fullEngine = new AhoCorasick(cached)
+          engineReady = true
+          return
+        }
+      } catch {
+        cacheBust = undefined
+      }
+      const data = await fetchLexiconJson(base, cacheBust)
+      const words = await persistFetchedLexicon(data)
+      await yieldToMainForAcBuild()
+      fullEngine = new AhoCorasick(words)
+      engineReady = true
+    } catch {
+      /* 无 lexicon 文件或 fetch 失败：仅用 fallback */
+    }
+  })()
+}
+
+export function ensureLexiconLoading(): void {
+  if (engineReady || loadPromise) return
+  startBackgroundLoad()
+}
+
+export function isLexiconReady(): boolean {
+  return engineReady
+}
+
+/**
+ * 等待后台主词库加载尝试结束（成功切换全量 AC，或失败仍用内置小表）。
+ * 在「发送/执行」等异步入口先 await 再 `canSend`，可避免首屏仅用 fallback 时漏拦主词库词条。
+ */
+export async function awaitSensitiveLexiconSettled(): Promise<void> {
+  ensureLexiconLoading()
+  if (loadPromise) await loadPromise
+}
+
+export function checkSensitiveWordsSync(text: string): ReturnType<AhoCorasick['check']> {
+  ensureLexiconLoading()
+  return currentEngine().check(text)
+}
+
+export function replaceSensitiveWordsSync(text: string, replaceChar: string): string {
+  ensureLexiconLoading()
+  return currentEngine().replaceByLevels(text, new Set<SensitiveLevel>(['block', 'warning']), replaceChar)
+}
+
+export function replaceSensitiveWordsByLevelSync(
+  text: string,
+  levels: ReadonlyArray<SensitiveLevel>,
+  replaceChar: string,
+): string {
+  ensureLexiconLoading()
+  return currentEngine().replaceByLevels(text, new Set(levels), replaceChar)
+}
+
+export function __resetEnginesForTest(): void {
+  engineReady = false
+  loadPromise = null
+  fullEngine = null
+}
+
+export function __installFullEngineForTest(words: SensitiveWord[]): void {
+  fullEngine = new AhoCorasick(words)
+  engineReady = true
+}

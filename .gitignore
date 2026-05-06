@@ -16,6 +16,8 @@ release-analyzer
 deliverables
 dist-ssr
 *.local
+.env
+data/*.db
 
 # Editor directories and files
 .vscode/*

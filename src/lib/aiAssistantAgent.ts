@@ -194,7 +194,7 @@ export async function planActionsWithModel(
     .map((n) => ({ id: n.id, title: String(n.data.title || ''), kind: n.data.kind }))
   const systemPrompt =
     '你是 Flowid 助手。你只能输出 JSON：{"actions":[...]}，不要输出其它文字。动作 type 仅允许 create_node/connect_nodes/run_node。'
-  const userPrompt = `用户需求：${text}\n当前节点列表：${JSON.stringify(nodeBrief)}`
+  const userPrompt = `用户需求：${text}\n当前画布节点列表：${JSON.stringify(nodeBrief)}\n若需求末尾含 [FlowID·@引用解析] 段，必须按其中对 uuid 的归类决定是否允许 run_node。`
   try {
     const res = await fetchOpenAICompat(endpoint, {
       method: 'POST',
@@ -223,11 +223,13 @@ export async function planActionsWithModel(
   }
 }
 
+export type AssistantChatTurn = { role: 'user' | 'assistant'; content: string }
+
 /**
- * 通过 OpenAI 兼容接口生成普通对话回复（非动作 JSON）。
+ * 多轮对话：与 `chatReplyWithModel` 使用同一套 endpoint / model / API Key（设置面板「AI 虚拟助手」）。
  */
-export async function chatReplyWithModel(
-  text: string,
+export async function chatMessagesWithModel(
+  turns: AssistantChatTurn[],
   config: AiAssistantConfig,
 ): Promise<string> {
   const rawEndpoint =
@@ -241,9 +243,7 @@ export async function chatReplyWithModel(
   const model = config.model.trim()
   if (!endpoint || !model) return ''
   if (config.provider === 'cloud' && !apiKey) return ''
-  /**
-   * 清理推理模型可能输出的 think 标签，避免泄露中间思考。
-   */
+
   const sanitizeChatText = (raw: string): string =>
     raw
       .replace(/<think[\s\S]*?<\/think>/gi, '')
@@ -256,9 +256,24 @@ export async function chatReplyWithModel(
       .replace(/<\|eot_id\|>/gi, '')
       .replace(/\s{2,}/g, ' ')
       .trim()
-  /**
-   * 闲聊优先使用更小的本地模型，提升响应速度；失败后再回退用户主模型。
-   */
+
+  const mapped = turns
+    .map((t) => ({ role: t.role, content: String(t.content ?? '').trim() }))
+    .filter((t) => t.content.length > 0)
+  if (!mapped.length) return ''
+
+  const presetId = loadActiveSystemPromptPresetId()
+  const presetSystemPrompt = presetId ? await fetchSystemPromptPresetText(presetId) : ''
+  const messages: Array<{ role: string; content: string }> = [
+    ...(presetSystemPrompt ? [{ role: 'system', content: presetSystemPrompt }] : []),
+    {
+      role: 'system',
+      content:
+        '你是 Flowid 的中文 AI 助手。当前用户可能在闲聊，也可能在咨询工作流。请直接自然回复，简洁、友好、可执行，不要输出 JSON，也不要输出思考过程。',
+    },
+    ...mapped,
+  ]
+
   const getChatModelCandidates = (): string[] => {
     if (config.provider !== 'ollama') return [model]
     const preferred = ['yi:latest', 'qwen3:8b', 'deepseek-r1:1.5b']
@@ -270,9 +285,8 @@ export async function chatReplyWithModel(
     }
     return Array.from(dedup)
   }
-  const requestReply = async (chatModel: string): Promise<string> => {
-    const presetId = loadActiveSystemPromptPresetId()
-    const presetSystemPrompt = presetId ? await fetchSystemPromptPresetText(presetId) : ''
+
+  const requestOnce = async (chatModel: string): Promise<string> => {
     const res = await fetchOpenAICompat(endpoint, {
       method: 'POST',
       headers: {
@@ -282,15 +296,7 @@ export async function chatReplyWithModel(
       json: {
         model: chatModel,
         temperature: 0.4,
-        messages: [
-          ...(presetSystemPrompt ? [{ role: 'system', content: presetSystemPrompt }] : []),
-          {
-            role: 'system',
-            content:
-              '你是 Flowid 的中文 AI 助手。当前用户可能在闲聊，也可能在咨询工作流。请直接自然回复，简洁、友好、可执行，不要输出 JSON，也不要输出思考过程。',
-          },
-          { role: 'user', content: text },
-        ],
+        messages,
       },
     })
     if (!res.ok) return ''
@@ -299,19 +305,29 @@ export async function chatReplyWithModel(
     }
     return sanitizeChatText(String(data.choices?.[0]?.message?.content || ''))
   }
+
   try {
-    const candidates = getChatModelCandidates()
-    for (const chatModel of candidates) {
+    for (const chatModel of getChatModelCandidates()) {
       try {
-        const reply = await requestReply(chatModel)
+        const reply = await requestOnce(chatModel)
         if (reply) return reply
       } catch {
-        // 单个候选模型失败时继续尝试下一个候选。
+        /* 下一候选模型 */
       }
     }
     return ''
   } catch {
     return ''
   }
+}
+
+/**
+ * 通过 OpenAI 兼容接口生成普通对话回复（非动作 JSON）。
+ */
+export async function chatReplyWithModel(
+  text: string,
+  config: AiAssistantConfig,
+): Promise<string> {
+  return chatMessagesWithModel([{ role: 'user', content: text }], config)
 }
 

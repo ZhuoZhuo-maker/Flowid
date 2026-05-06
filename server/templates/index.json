@@ -1,16 +1,6 @@
 {
   "templates": [
     {
-      "id": "dc5ddb86-fb4d-4b0b-9767-f559c0a7d4d5",
-      "name": "pro测试",
-      "version": "1.0.0",
-      "category": "image",
-      "tier": "pro",
-      "description": "",
-      "workflowFile": "dc5ddb86-fb4d-4b0b-9767-f559c0a7d4d5.workflow.json",
-      "paramsSchema": {}
-    },
-    {
       "id": "d73590a7-2041-4ccb-8a92-dfabf359e060",
       "name": "image-2提示词模板示例",
       "version": "1.0.0",

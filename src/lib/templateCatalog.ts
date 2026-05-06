@@ -90,9 +90,10 @@ export const PRESET_TEMPLATE_MOCKS: PresetTemplate[] = [
 
 export function buildPresetTemplateCategoryTabs(
   templates: PresetTemplate[],
-  accessValid: boolean,
+  /** @deprecated 已不再按会员过滤，保留参数以兼容旧调用 */
+  _accessValid?: boolean,
 ): string[] {
-  const visible = accessValid ? templates : templates.filter((t) => t.tier !== 'pro')
+  const visible = templates
   const set = new Set<string>()
   for (const t of visible) {
     const c = String(t.category || '').trim()
@@ -104,12 +105,12 @@ export function buildPresetTemplateCategoryTabs(
 export function filterPresetTemplatesByCategory(
   templates: PresetTemplate[],
   category: string,
-  accessValid: boolean,
+  /** @deprecated 已不再按会员过滤 */
+  _accessValid?: boolean,
 ): PresetTemplate[] {
   const byCat =
     category === '全部' ? templates : templates.filter((t) => t.category === category)
-  if (accessValid) return byCat
-  return byCat.filter((t) => t.tier !== 'pro')
+  return byCat
 }
 
 export async function fetchPresetTemplatesFromServer(): Promise<{ ok: true; items: PresetTemplate[] } | null> {

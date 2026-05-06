@@ -12,7 +12,7 @@ import { PresetTemplateCoverImage } from './components/PresetTemplateCoverImage'
 import { loadLocalDiskPathsSettings } from './lib/localDiskPathsSettings'
 import { parseProjectFile } from './lib/persistence'
 import { computeAccessState, loadLicenseSnapshotV2 } from './lib/licenseAccess'
-import { LicenseModal } from './components/panels/LicenseModal'
+import { openStudioSettingsDeviceActivation } from './lib/studioSettingsOpen'
 import {
   USER_AGREEMENT_TEXT,
   USER_AGREEMENT_VERSION,
@@ -34,6 +34,10 @@ import {
   joinDiskPath,
 } from './lib/systemPromptCoverPaths'
 import { saveCoverReplaceByTitle } from './lib/coverDisk'
+import {
+  InspirationMarketDetailPage,
+  InspirationMarketGrid,
+} from './components/home/InspirationMarketPages'
 
 function isDesktopCoverIo(): boolean {
   return Boolean(
@@ -47,7 +51,7 @@ function isDesktopCoverIo(): boolean {
 const COVER_UPLOAD_TRIGGER_CLASS =
   'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white/65 backdrop-blur hover:border-orange-400/45 hover:bg-orange-600/22 hover:text-white transition-colors disabled:opacity-40'
 
-type View = 'archive' | 'templates' | 'workspace'
+type View = 'archive' | 'templates' | 'inspiration' | 'inspiration-detail' | 'workspace'
 
 interface Project {
   id: string
@@ -171,6 +175,16 @@ function Navigation({
               }`}
             >
               预设模板
+            </button>
+            <button
+              onClick={() => setView('inspiration')}
+              className={`text-[14px] font-bold uppercase tracking-widest px-4 py-1.5 rounded-full transition-all ${
+                activeView === 'inspiration' || activeView === 'inspiration-detail'
+                  ? 'text-orange-500 bg-orange-500/10'
+                  : 'text-white/50 hover:text-white'
+              }`}
+            >
+              灵感市集
             </button>
           </div>
         </div>
@@ -390,15 +404,13 @@ function TemplateCard({
   coverUploadBusy?: boolean
   onUploadCover?: () => void
 }) {
-  const access = computeAccessState(loadLicenseSnapshotV2())
-  const locked = template.tier === 'pro' && access !== 'valid'
   return (
     <motion.div
       layout
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       whileHover={{ y: -10 }}
-      className={`group bg-[#0A0A0B] border border-white/5 overflow-hidden transition-all duration-500 hover:border-orange-500/30 ${locked ? 'opacity-75' : ''}`}
+      className="group bg-[#0A0A0B] border border-white/5 overflow-hidden transition-all duration-500 hover:border-orange-500/30"
     >
       <div className="aspect-[16/10] relative overflow-hidden">
         <PresetTemplateCoverImage
@@ -413,11 +425,6 @@ function TemplateCard({
           </div>
         </div>
         <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
-          {locked ? (
-            <div className="bg-black/60 backdrop-blur px-3 py-1 border border-white/10 rounded text-[13px] font-mono uppercase tracking-widest text-white/60">
-              PRO
-            </div>
-          ) : null}
           {onUploadCover ? (
             <button
               type="button"
@@ -450,11 +457,10 @@ function TemplateCard({
           <button
             type="button"
             className="w-full py-3 bg-white/5 hover:bg-orange-600 hover:text-white transition-all text-[14px] font-black uppercase tracking-widest border border-white/10 group-hover:border-orange-500 disabled:opacity-50 disabled:pointer-events-none"
-            disabled={locked || busy}
-            title={locked ? '会员模板：请先输入机器授权码' : undefined}
+            disabled={busy}
             onClick={() => void onInvoke(template)}
           >
-            {locked ? '需要授权' : busy ? '加载中…' : '调用预设'}
+            {busy ? '加载中…' : '调用预设'}
           </button>
         </div>
       </div>
@@ -507,6 +513,7 @@ function App() {
   const [agreementShowFull, setAgreementShowFull] = useState(false)
 
   const [view, setView] = useState<View>('archive')
+  const [inspirationDetailId, setInspirationDetailId] = useState<string | null>(null)
   const [selectedCategory, setSelectedCategory] = useState<string>('全部')
   const [projectQuery, setProjectQuery] = useState('')
   const [projectPage, setProjectPage] = useState(0)
@@ -514,7 +521,6 @@ function App() {
   const [projects, setProjects] = useState<Project[]>(MOCK_PROJECTS)
   const [projectsLoading, setProjectsLoading] = useState(false)
   const [licenseSnap, setLicenseSnap] = useState(() => loadLicenseSnapshotV2())
-  const [licenseModalOpen, setLicenseModalOpen] = useState(false)
   const [templateCatalogFromServer, setTemplateCatalogFromServer] = useState<{
     ok: true
     items: Template[]
@@ -532,9 +538,6 @@ function App() {
   const accessState = computeAccessState(licenseSnap)
 
   const openTemplateAsProject = useCallback(async (template: Template) => {
-    if (template.tier === 'pro' && computeAccessState(loadLicenseSnapshotV2()) !== 'valid') {
-      return
-    }
     setTemplateInvokeBusyId(template.id)
     try {
       const text = await fetchPresetTemplateWorkflowText(template.id)
@@ -555,7 +558,9 @@ function App() {
     } catch (e) {
       const msg = String(e instanceof Error ? e.message : e)
       if (msg === 'MEMBER_ONLY') {
-        window.alert('该模板为会员内容，请先激活授权。')
+        window.alert('该模板为会员内容，请在设置 → 授权码中完成授权。')
+        setView('workspace')
+        openStudioSettingsDeviceActivation()
         return
       }
       window.alert(msg)
@@ -574,8 +579,8 @@ function App() {
   }, [templateCatalogFromServer])
 
   const templateCategoryOptions = useMemo(
-    () => buildPresetTemplateCategoryTabs(baseTemplateSource, accessState === 'valid'),
-    [baseTemplateSource, accessState],
+    () => buildPresetTemplateCategoryTabs(baseTemplateSource, true),
+    [baseTemplateSource],
   )
 
   useEffect(() => {
@@ -587,13 +592,12 @@ function App() {
       selectedCategory === '全部'
         ? baseTemplateSource
         : baseTemplateSource.filter((t) => t.category === selectedCategory)
-    if (accessState === 'valid') return byCat
-    return byCat.filter((t) => t.tier !== 'pro')
-  }, [baseTemplateSource, accessState, selectedCategory])
+    return byCat
+  }, [baseTemplateSource, selectedCategory])
 
   useEffect(() => {
     setTemplatePage(0)
-  }, [selectedCategory, accessState])
+  }, [selectedCategory])
 
   const pagedTemplates = useMemo(() => {
     // 参考 @flowid (2)：三列网格时一页两行更舒适（6 个）
@@ -1086,8 +1090,25 @@ function App() {
         activeView={view}
         setView={setView}
         accessState={accessState}
-        onOpenLicense={() => setLicenseModalOpen(true)}
+        onOpenLicense={() => {
+          setView('workspace')
+          openStudioSettingsDeviceActivation()
+        }}
       />
+
+      {view === 'inspiration-detail' && inspirationDetailId ? (
+        <InspirationMarketDetailPage
+          id={inspirationDetailId}
+          onBackHome={() => {
+            setInspirationDetailId(null)
+            setView('archive')
+          }}
+          onBackMarket={() => {
+            setInspirationDetailId(null)
+            setView('inspiration')
+          }}
+        />
+      ) : null}
 
       <main className="relative z-10 pt-32 px-16 md:px-32 pb-40">
         <AnimatePresence mode="wait">
@@ -1245,7 +1266,7 @@ function App() {
                 </div>
               ) : null}
             </motion.div>
-          ) : (
+          ) : view === 'templates' ? (
             <motion.div
               key="templates"
               initial={{ opacity: 0, x: 20 }}
@@ -1344,11 +1365,25 @@ function App() {
                 </div>
               ) : null}
             </motion.div>
-          )}
+          ) : view === 'inspiration' ? (
+            <motion.div
+              key="inspiration"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="max-w-6xl mx-auto"
+            >
+              <InspirationMarketGrid
+                onOpenDetail={(itemId) => {
+                  setInspirationDetailId(itemId)
+                  setView('inspiration-detail')
+                }}
+              />
+            </motion.div>
+          ) : null}
         </AnimatePresence>
       </main>
       </div>
-      <LicenseModal open={licenseModalOpen} onClose={() => setLicenseModalOpen(false)} />
     </>
   )
 }

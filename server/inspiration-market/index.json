@@ -1,0 +1,24 @@
+{
+  "items": [
+    {
+      "id": "ecf33fa1-fc22-4024-a755-01e6c697032f",
+      "title": "画廊",
+      "description": "画廊的网站界面UI",
+      "category": "UI",
+      "imageFile": "ecf33fa1-fc22-4024-a755-01e6c697032f.png",
+      "promptFile": "ecf33fa1-fc22-4024-a755-01e6c697032f.prompt.txt",
+      "createdAtMs": 1778057781966,
+      "updatedAtMs": 1778057781966
+    },
+    {
+      "id": "af8aa178-3f24-4388-a55a-41fa796aad34",
+      "title": "日系手游商店",
+      "description": "柔和系",
+      "category": "UI",
+      "imageFile": "af8aa178-3f24-4388-a55a-41fa796aad34.png",
+      "promptFile": "af8aa178-3f24-4388-a55a-41fa796aad34.prompt.txt",
+      "createdAtMs": 1778057571862,
+      "updatedAtMs": 1778057571862
+    }
+  ]
+}
