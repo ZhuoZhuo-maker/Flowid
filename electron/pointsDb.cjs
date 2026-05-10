@@ -124,14 +124,29 @@ function bindLicense(code, machineCode, expireTimeIso) {
       return { ok: false, error: 'license_machine_mismatch' }
     }
 
-    const conflict = db.prepare('SELECT code FROM licenses WHERE machine_code = ? AND code != ?')
-    conflict.bind([m, c])
-    if (conflict.step()) {
-      conflict.free()
-      db.run('ROLLBACK')
-      return { ok: false, error: 'machine_already_bound' }
+    const conflictStmt = db.prepare(
+      'SELECT code, status, expire_time FROM licenses WHERE machine_code = ? AND code != ?',
+    )
+    conflictStmt.bind([m, c])
+    if (conflictStmt.step()) {
+      const conflictRow = conflictStmt.getAsObject()
+      conflictStmt.free()
+      const otherSt = String(conflictRow.status || '').trim().toLowerCase()
+      const oex = conflictRow.expire_time != null ? String(conflictRow.expire_time).trim() : ''
+      let otherExpired = false
+      if (oex) {
+        const ot = Date.parse(oex.replace(' ', 'T'))
+        otherExpired = Number.isFinite(ot) && Date.now() > ot
+      }
+      const canRelease = otherSt === 'revoked' || otherExpired
+      if (!canRelease) {
+        db.run('ROLLBACK')
+        return { ok: false, error: 'machine_already_bound' }
+      }
+      db.run(`UPDATE licenses SET machine_code = NULL, bind_time = NULL WHERE code = ?`, [conflictRow.code])
+    } else {
+      conflictStmt.free()
     }
-    conflict.free()
 
     const exp =
       expireTimeIso === undefined || expireTimeIso === null || expireTimeIso === ''

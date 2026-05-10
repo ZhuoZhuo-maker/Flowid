@@ -1,4 +1,5 @@
 import type {
+  CloudWorkflowOverrideEntry,
   NodeWorkflowConfig,
   ShortcutCommandId,
   WorkflowExecutionMode,
@@ -67,6 +68,7 @@ export function getDefaultWorkflowConfig(): WorkflowConfigSnapshot {
       audio: { ...defaultNodeConfig },
       music: { ...defaultNodeConfig },
       panorama: { ...defaultNodeConfig },
+      imageCompare: { ...defaultNodeConfig },
     },
     shortcuts: {
       enableGlobalHotkeys: true,
@@ -83,6 +85,8 @@ export function getDefaultWorkflowConfig(): WorkflowConfigSnapshot {
         redo: 'Ctrl+Y',
         fitView: 'Ctrl+1',
         resetZoom: 'Ctrl+0',
+        /** 仅支持 Shift / Alt：Ctrl、Cmd 保留给「追加多选」 */
+        marqueeSelect: 'Shift',
       },
     },
     /** 默认开启：避免工作流 JSON 里长期固定 seed 导致风格锁死（如旧动漫 seed + 新写实图仍偏动漫） */
@@ -102,6 +106,71 @@ function normalizeNodeWorkflows(config: NodeWorkflowConfig): NodeWorkflowConfig[
     resultNodeId: item.resultNodeId || '',
     resultFieldPath: item.resultFieldPath || '',
   }))
+}
+
+function normalizeCloudWorkflowOverrides(
+  raw: unknown,
+): Record<string, CloudWorkflowOverrideEntry> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const out: Record<string, CloudWorkflowOverrideEntry> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const id = String(k || '').trim()
+    if (!id) continue
+    if (typeof v === 'string') {
+      const jsonText = v.trim()
+      if (jsonText) out[id] = { jsonText }
+      continue
+    }
+    if (v && typeof v === 'object') {
+      const jsonText = String((v as { jsonText?: unknown }).jsonText || '').trim()
+      if (!jsonText) continue
+      const rn = String((v as { resultNodeId?: unknown }).resultNodeId || '').trim()
+      const rf = String((v as { resultFieldPath?: unknown }).resultFieldPath || '').trim()
+      const ua = (v as { updatedAt?: unknown }).updatedAt
+      out[id] = {
+        jsonText,
+        resultNodeId: rn || undefined,
+        resultFieldPath: rf || undefined,
+        updatedAt: typeof ua === 'number' ? ua : undefined,
+      }
+    }
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function normalizeCloudWorkflowSystemPrompts(
+  raw: unknown,
+): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const id = String(k || '').trim()
+    if (!id) continue
+    if (typeof v !== 'string') continue
+    out[id] = v
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+function mergeLoadedNodeConfig(
+  fallback: NodeWorkflowConfig,
+  partial: Partial<NodeWorkflowConfig> | undefined,
+): NodeWorkflowConfig {
+  const merged = { ...fallback, ...(partial ?? {}) }
+  const st = merged.settingsEditTarget
+  const settingsEditTarget: 'local' | 'cloud' | undefined =
+    st === 'cloud' || st === 'local' ? st : undefined
+  return {
+    ...merged,
+    settingsEditTarget,
+    cloudSettingsSelectedWorkflowId:
+      typeof merged.cloudSettingsSelectedWorkflowId === 'string'
+        ? merged.cloudSettingsSelectedWorkflowId
+        : undefined,
+    workflows: normalizeNodeWorkflows(merged),
+    cloudWorkflowOverrides: normalizeCloudWorkflowOverrides(merged.cloudWorkflowOverrides),
+    cloudWorkflowSystemPrompts: normalizeCloudWorkflowSystemPrompts(merged.cloudWorkflowSystemPrompts),
+  }
 }
 
 /**
@@ -136,34 +205,17 @@ export function loadWorkflowConfig(): WorkflowConfigSnapshot {
           enabled: item.enabled !== false,
         })) ?? fallback.cloudEndpoints,
       nodeConfigs: {
-        text: (() => {
-          const merged = { ...fallback.nodeConfigs.text, ...(parsed.nodeConfigs?.text ?? {}) }
-          return { ...merged, workflows: normalizeNodeWorkflows(merged) }
-        })(),
-        script: (() => {
-          const merged = { ...fallback.nodeConfigs.script, ...(parsed.nodeConfigs?.script ?? {}) }
-          return { ...merged, workflows: normalizeNodeWorkflows(merged) }
-        })(),
-        image: (() => {
-          const merged = { ...fallback.nodeConfigs.image, ...(parsed.nodeConfigs?.image ?? {}) }
-          return { ...merged, workflows: normalizeNodeWorkflows(merged) }
-        })(),
-        video: (() => {
-          const merged = { ...fallback.nodeConfigs.video, ...(parsed.nodeConfigs?.video ?? {}) }
-          return { ...merged, workflows: normalizeNodeWorkflows(merged) }
-        })(),
-        audio: (() => {
-          const merged = { ...fallback.nodeConfigs.audio, ...(parsed.nodeConfigs?.audio ?? {}) }
-          return { ...merged, workflows: normalizeNodeWorkflows(merged) }
-        })(),
-        music: (() => {
-          const merged = { ...fallback.nodeConfigs.music, ...(parsed.nodeConfigs?.music ?? {}) }
-          return { ...merged, workflows: normalizeNodeWorkflows(merged) }
-        })(),
-        panorama: (() => {
-          const merged = { ...fallback.nodeConfigs.panorama, ...(parsed.nodeConfigs?.panorama ?? {}) }
-          return { ...merged, workflows: normalizeNodeWorkflows(merged) }
-        })(),
+        text: mergeLoadedNodeConfig(fallback.nodeConfigs.text, parsed.nodeConfigs?.text),
+        script: mergeLoadedNodeConfig(fallback.nodeConfigs.script, parsed.nodeConfigs?.script),
+        image: mergeLoadedNodeConfig(fallback.nodeConfigs.image, parsed.nodeConfigs?.image),
+        video: mergeLoadedNodeConfig(fallback.nodeConfigs.video, parsed.nodeConfigs?.video),
+        audio: mergeLoadedNodeConfig(fallback.nodeConfigs.audio, parsed.nodeConfigs?.audio),
+        music: mergeLoadedNodeConfig(fallback.nodeConfigs.music, parsed.nodeConfigs?.music),
+        panorama: mergeLoadedNodeConfig(fallback.nodeConfigs.panorama, parsed.nodeConfigs?.panorama),
+        imageCompare: mergeLoadedNodeConfig(
+          fallback.nodeConfigs.imageCompare,
+          parsed.nodeConfigs?.imageCompare,
+        ),
       },
       shortcuts: {
         ...fallback.shortcuts,

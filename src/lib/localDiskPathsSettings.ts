@@ -1,6 +1,9 @@
 /**
  * 用户自定义「本地存储路径」配置。
  *
+ * 桌面端首次未配置时，由 `applyDesktopDefaultFlowidZyPathsIfNeeded` 在 `{安装盘}:\flowid-zy`（macOS/Linux 为 `~/flowid-zy`）
+ * 下创建 `input` / `output` / `workflow` / `flowid` / `sucaiku` / `fenmian` 并写入；可用环境变量 `FLOWID_ZY_ROOT` 覆盖根目录。
+ *
  * 说明：
  * - 浏览器无法仅凭 `F:\...` 这类字符串直接写盘；桌面端（Electron）可对工程目录与 input/output/workflow 做真实读写。
  * - `flowidProjectJsonPath`：Flowid 工程目录（历史字段名）；桌面端写入 `flowid.current.json` 与 `项目名.json`；网页端为目录句柄绑定。

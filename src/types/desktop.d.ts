@@ -74,6 +74,22 @@ declare global {
       }) => Promise<{ ok: boolean; canceled?: boolean; path?: string; error?: string }>
       /** 确保目录存在（递归创建） */
       ensureDirectory?: (dirPath: string) => Promise<{ ok: boolean; path?: string; error?: string }>
+      /** 默认数据根目录及六项路径（桌面端；与 `flowid-zy` 安装约定一致） */
+      getDefaultLocalStoragePaths?: () => Promise<
+        | {
+            ok: true
+            root: string
+            paths: {
+              inputPath: string
+              outputPath: string
+              workflowPath: string
+              flowidProjectJsonPath: string
+              materialLibraryPath: string
+              systemPromptCoverPath: string
+            }
+          }
+        | { ok: false; error?: string }
+      >
       /** 确保子目录存在（basePath/childName） */
       ensureSubdirectory?: (
         basePath: string,

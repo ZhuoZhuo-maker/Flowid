@@ -247,7 +247,6 @@ https://auth.example.com/admin.html
 | `templates/` | 预设模板索引与 `.workflow.json` |
 | `system-prompts/` | 系统提示词 |
 | `user-agreement.json` | 用户协议 |
-| `cloud-models.json` | 云端模型配置 |
 
 升级代码时注意不要覆盖这些文件；建议先备份再部署。
 

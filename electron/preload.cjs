@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('flowidDesktop', {
   saveJsonFile: (opts) => ipcRenderer.invoke('flowid:dialog-save-json-file', opts),
   pickDirectory: (opts) => ipcRenderer.invoke('flowid:dialog-pick-directory', opts),
   ensureDirectory: (dirPath) => ipcRenderer.invoke('flowid:fs-ensure-directory', dirPath),
+  /** 默认 `{盘符或用户目录}/flowid-zy` 下六项本地存储绝对路径（与安装包约定） */
+  getDefaultLocalStoragePaths: () => ipcRenderer.invoke('flowid:get-default-local-storage-paths'),
   ensureSubdirectory: (basePath, childName) =>
     ipcRenderer.invoke('flowid:fs-ensure-subdirectory', basePath, childName),
   /** 本地积分 SQLite（userData/flowid-points.sqlite3） */

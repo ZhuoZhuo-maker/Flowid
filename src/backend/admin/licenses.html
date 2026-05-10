@@ -104,6 +104,31 @@
         align-items: center;
         gap: 12px;
       }
+      .lic-toolbar__purge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0;
+        padding: 6px 10px;
+        border-radius: var(--radius);
+        border: 1px dashed var(--border);
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--muted);
+        cursor: pointer;
+        user-select: none;
+      }
+      .lic-toolbar__purge:hover {
+        border-color: rgba(234, 88, 12, 0.45);
+        color: var(--text);
+      }
+      .lic-toolbar__purge input {
+        margin: 0;
+        cursor: pointer;
+      }
+      .lic-toolbar__purge span {
+        cursor: pointer;
+      }
       .lic-btn {
         display: inline-flex;
         align-items: center;
@@ -280,6 +305,19 @@
       .lic-msg--ok {
         color: #86efac;
       }
+      .lic-hint {
+        margin: 0 0 12px;
+        padding: 10px 14px;
+        border-radius: var(--radius);
+        border: 1px dashed rgba(234, 88, 12, 0.35);
+        font-size: 13px;
+        color: #fdba74;
+        background: rgba(234, 88, 12, 0.08);
+        line-height: 1.5;
+      }
+      .lic-code-cell {
+        cursor: copy;
+      }
       .modal-backdrop {
         position: fixed;
         inset: 0;
@@ -337,7 +375,10 @@
         管理 API 需请求头 <code>x-admin-token</code>；未单独配置 <code>ADMIN_TOKEN</code> 时开发默认与 Auth 一致为
         <code>flowid-admin-dev</code>。<br />
         <strong>路径：</strong>请使用含 <code>/pts</code> 的地址（如 <code>http://127.0.0.1:3721/pts/admin/licenses</code>）。口令保存在浏览器
-        <code>localStorage</code>（<code>flowid.pts.admin.token.v1</code>），<strong>勿在公共电脑</strong>使用本页。
+        <code>localStorage</code>（<code>flowid.pts.admin.token.v1</code>），<strong>勿在公共电脑</strong>使用本页。<br />
+        <strong>测试清库：</strong>有积分流水时默认不能删授权码。勾选「删码时清除积分流水」后删除，会在<strong>非 production</strong>（常见本地默认）或已设置
+        <code>FLOWID_ALLOW_LICENSE_PURGE=1</code> 时先删流水与相关死信再删码。正式环境若 <code>NODE_ENV=production</code>，需显式设置
+        <code>FLOWID_ALLOW_LICENSE_PURGE=1</code> 才允许该选项。
       </div>
 
       <div class="lic-toolbar">
@@ -357,6 +398,10 @@
             <span>刷新</span>
           </button>
           <button type="button" class="lic-btn lic-btn--primary" id="openGen">生成授权码</button>
+          <label class="lic-toolbar__purge" title="仅用于本地/测试库清理；会删除该授权码在 points_log 与 confirm 死信表中的记录">
+            <input type="checkbox" id="chkPurgeLogs" />
+            <span>删码时清除积分流水</span>
+          </label>
           <input type="text" id="fSearch" class="lic-input lic-input--search" placeholder="授权码 / 机器码" autocomplete="off" />
           <button type="button" class="lic-btn" id="btnSearch">搜索</button>
           <select id="fStatus" class="lic-select" aria-label="状态">
@@ -374,6 +419,7 @@
       </div>
 
       <p id="msg" class="lic-msg"></p>
+      <p id="serverHintsBar" class="lic-hint" style="display: none" role="status"></p>
 
       <div class="lic-table-card">
         <div class="lic-table-scroll" id="tableScroll">
@@ -476,6 +522,48 @@
 
       const hdr = () => ({ 'x-admin-token': document.getElementById('token').value.trim() })
 
+      const PURGE_LOGS_LS = 'flowid.pts.admin.purgeLogsOnDelete.v1'
+
+      function adminLicenseDeleteUrl(code) {
+        const base = apiBase + '/api/admin/licenses/' + encodeURIComponent(code)
+        const purge = document.getElementById('chkPurgeLogs').checked
+        return purge ? base + '?purgeLogs=1' : base
+      }
+
+      async function refreshServerHints() {
+        const hintEl = document.getElementById('serverHintsBar')
+        const tok = document.getElementById('token').value.trim()
+        if (!tok || !hintEl) {
+          if (hintEl) hintEl.style.display = 'none'
+          return
+        }
+        try {
+          const res = await fetch(apiBase + '/api/admin/server-hints', { headers: hdr() })
+          const j = await parseJson(res)
+          if (!res.ok || j.ok === false) {
+            hintEl.style.display = 'none'
+            return
+          }
+          const purgeOk = Boolean(j.purgeLogsDeleteAllowed)
+          const ne = String(j.nodeEnv || '')
+          const chkOn = document.getElementById('chkPurgeLogs').checked
+          if (!purgeOk && chkOn) {
+            hintEl.textContent =
+              '服务端当前不允许「清除流水后删除」（多为 NODE_ENV=production 且未设置 FLOWID_ALLOW_LICENSE_PURGE=1）。勾选此项时删除仍会失败，请改环境变量或取消勾选后仅删无流水的新码。'
+            hintEl.style.display = 'block'
+          } else if (ne === 'production' && !purgeOk) {
+            hintEl.textContent =
+              '当前为 production：删除含积分流水的授权码须在进程环境设置 FLOWID_ALLOW_LICENSE_PURGE=1，并勾选「删码时清除积分流水」。'
+            hintEl.style.display = 'block'
+          } else {
+            hintEl.style.display = 'none'
+            hintEl.textContent = ''
+          }
+        } catch {
+          hintEl.style.display = 'none'
+        }
+      }
+
       function escapeHtml(s) {
         return String(s ?? '')
           .replace(/&/g, '&amp;')
@@ -564,6 +652,40 @@
         el.className = 'lic-msg' + (kind === 'err' ? ' lic-msg--err' : kind === 'ok' ? ' lic-msg--ok' : '')
       }
 
+      /** 生成后把明文码交给运营；失败时回退到隐藏 textarea（部分环境无 Clipboard API）。 */
+      function copyTextSyncFallback(text) {
+        try {
+          const ta = document.createElement('textarea')
+          ta.value = text
+          ta.setAttribute('readonly', '')
+          ta.style.position = 'fixed'
+          ta.style.top = '0'
+          ta.style.left = '-9999px'
+          document.body.appendChild(ta)
+          ta.focus()
+          ta.select()
+          const ok = document.execCommand('copy')
+          document.body.removeChild(ta)
+          return ok
+        } catch {
+          return false
+        }
+      }
+
+      async function copyTextToClipboard(text) {
+        const t = String(text || '')
+        if (!t) return false
+        try {
+          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+            await navigator.clipboard.writeText(t)
+            return true
+          }
+        } catch {
+          /* fall through */
+        }
+        return copyTextSyncFallback(t)
+      }
+
       function getSelectedCodes() {
         const codes = []
         document.querySelectorAll('#body input.lic-row-chk:checked').forEach((inp) => {
@@ -634,7 +756,7 @@
             const eff = rowEffectiveStatus(r)
             tr.innerHTML =
               `<td><input type="checkbox" class="lic-row-chk" data-code="${escapeHtml(code)}" aria-label="选择" /></td>` +
-              `<td class="mono">${escapeHtml(maskLicenseCode(code))}</td>` +
+              `<td class="mono lic-code-cell" title="双击复制完整授权码">${escapeHtml(maskLicenseCode(code))}</td>` +
               `<td class="mono">${escapeHtml(maskMachineCode(r.machine_code))}</td>` +
               `<td class="num">${escapeHtml(r.points)}</td>` +
               `<td class="num">${escapeHtml(r.total_spent)}</td>` +
@@ -644,6 +766,15 @@
               `<td class="mono">${escapeHtml(formatExpireCell(r.expire_time))}</td>` +
               `<td class="lic-actions"></td>`
             tr.querySelector('.lic-row-chk').addEventListener('change', updateBatchUi)
+
+            const codeCell = tr.querySelector('.lic-code-cell')
+            if (codeCell) {
+              codeCell.addEventListener('dblclick', async (ev) => {
+                ev.preventDefault()
+                const okCopy = await copyTextToClipboard(code)
+                setMsg(okCopy ? '已复制完整授权码。' : '复制失败，请打开「详情」从 JSON 中复制。', okCopy ? 'ok' : 'err')
+              })
+            }
 
             const act = tr.querySelector('.lic-actions')
             const bDet = document.createElement('button')
@@ -674,6 +805,7 @@
             body.appendChild(tr)
           })
           setMsg('已加载。', 'ok')
+          void refreshServerHints()
         } finally {
           scroll.classList.remove('is-loading')
           updateBatchUi()
@@ -698,18 +830,24 @@
       }
 
       async function doDelete(code) {
-        if (!confirmDanger('确定删除该授权码？不可恢复。')) return
+        const purge = document.getElementById('chkPurgeLogs').checked
+        const warn = purge
+          ? '确定删除该授权码？将先永久删除其积分流水与相关 confirm 死信，再删授权码，不可恢复。'
+          : '确定删除该授权码？不可恢复。'
+        if (!confirmDanger(warn)) return
         setMsg('删除中…', '')
-        const res = await fetch(apiBase + '/api/admin/licenses/' + encodeURIComponent(code), {
+        const res = await fetch(adminLicenseDeleteUrl(code), {
           method: 'DELETE',
           headers: hdr(),
         })
         const j = await parseJson(res)
         if (!res.ok || j.ok === false) {
-          setMsg((j && j.message) || '删除失败', 'err')
+          const base = (j && j.message) || '删除失败'
+          setMsg(base + (res.status ? '（HTTP ' + res.status + '）' : ''), 'err')
+          void refreshServerHints()
           return
         }
-        setMsg('已删除。', 'ok')
+        setMsg(j.purgedLogs ? '已删除（已清除该码的积分流水与相关死信）。' : '已删除。', 'ok')
         await loadList(false)
       }
 
@@ -769,23 +907,36 @@
           return row && canDeleteRow(row)
         })
         if (!okList.length) {
-          setMsg('所选条目均不符合删除条件：已绑定且未过期的 active 不可删；未绑定、已过期 active 或 revoked 可删（有积分流水时服务端会拒绝）。', 'err')
+          setMsg(
+            '所选条目均不符合删除条件：已绑定且未过期的 active 不可删；未绑定、已过期 active 或 revoked 可删。有积分流水时请勾选「删码时清除积分流水」后再删。',
+            'err',
+          )
           return
         }
-        if (!confirmDanger('将永久删除 ' + okList.length + ' 条授权码（存在流水引用的将失败）。')) return
+        const purge = document.getElementById('chkPurgeLogs').checked
+        const batchWarn = purge
+          ? '将永久删除 ' + okList.length + ' 条授权码，并清除各自的积分流水与相关死信（不可恢复）。'
+          : '将永久删除 ' + okList.length + ' 条授权码（存在流水引用的将失败）。'
+        if (!confirmDanger(batchWarn)) return
+        let anyPurge = false
         for (const code of okList) {
-          const res = await fetch(apiBase + '/api/admin/licenses/' + encodeURIComponent(code), {
+          const res = await fetch(adminLicenseDeleteUrl(code), {
             method: 'DELETE',
             headers: hdr(),
           })
           const j = await parseJson(res)
           if (!res.ok || j.ok === false) {
-            setMsg('批量删除中断：' + ((j && j.message) || code), 'err')
+            setMsg(
+              '批量删除中断：' + ((j && j.message) || code) + (res.status ? '（HTTP ' + res.status + '）' : ''),
+              'err',
+            )
+            void refreshServerHints()
             await loadList(false)
             return
           }
+          if (j.purgedLogs) anyPurge = true
         }
-        setMsg('批量删除完成。', 'ok')
+        setMsg(anyPurge ? '批量删除完成（已清除流水/死信）。' : '批量删除完成。', 'ok')
         await loadList(false)
       }
 
@@ -846,7 +997,10 @@
         genModal.setAttribute('aria-hidden', 'true')
       }
       genModal.addEventListener('click', (e) => {
-        if (e.target === genModal) genModal.classList.remove('show')
+        if (e.target === genModal) {
+          genModal.classList.remove('show')
+          genModal.setAttribute('aria-hidden', 'true')
+        }
       })
       document.getElementById('closeDet').onclick = closeDetail
       document.getElementById('detailModal').addEventListener('click', (e) => {
@@ -876,12 +1030,44 @@
           setMsg((data && data.message) || '生成失败', 'err')
           return
         }
+        const codes = Array.isArray(data.created) ? data.created.map((r) => (r && r.code ? String(r.code).trim() : '')).filter(Boolean) : []
+        const clipText = codes.join('\n')
+        const copied = clipText ? await copyTextToClipboard(clipText) : false
         genModal.classList.remove('show')
-        setMsg('已生成 ' + (data.count || 0) + ' 条。', 'ok')
+        genModal.setAttribute('aria-hidden', 'true')
+        if (copied && clipText) {
+          setMsg('已生成 ' + (data.count || 0) + ' 条；明文授权码已复制到剪贴板（多条时为换行分隔）。', 'ok')
+        } else if (clipText) {
+          setMsg(
+            '已生成 ' +
+              (data.count || 0) +
+              ' 条；剪贴板复制未成功（可能被浏览器策略拦截）。请按 F12 在控制台查找日志 generated，或从服务端/数据库导出。',
+            'ok',
+          )
+        } else {
+          setMsg('已生成 ' + (data.count || 0) + ' 条。', 'ok')
+        }
         page = 1
         await loadList(false)
         console.info('generated', data.created)
       }
+
+      ;(() => {
+        const el = document.getElementById('chkPurgeLogs')
+        try {
+          el.checked = localStorage.getItem(PURGE_LOGS_LS) === '1'
+        } catch {
+          el.checked = false
+        }
+        el.addEventListener('change', () => {
+          try {
+            localStorage.setItem(PURGE_LOGS_LS, el.checked ? '1' : '0')
+          } catch {
+            /* ignore */
+          }
+          void refreshServerHints()
+        })
+      })()
 
       if (window.flowidPtsAdminToken) {
         window.flowidPtsAdminToken.load('token')

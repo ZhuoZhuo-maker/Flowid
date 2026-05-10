@@ -5,7 +5,7 @@ import type { HistoryItem } from './types'
 import { loadLocalDiskPathsSettings } from '../../lib/localDiskPathsSettings'
 import { sanitizeFileStem } from '../../lib/localAssetDiskMirror'
 
-/** 与 `mirrorComfyOutputToDisk` 的 `${stem}-${isoStamp}.ext` 命名一致，用于从展示名还原 stem。 */
+/** 与 `mirrorComfyOutputToDisk` 的 `{标题}_{节点id}-${isoStamp}.ext` 命名一致，用于从展示名还原 stem。 */
 function hasOutputMirrorTimestampSuffix(leaf: string): boolean {
   return /-\d{4}-\d{2}-\d{2}T[\d-]+Z$/i.test(String(leaf || '').trim())
 }

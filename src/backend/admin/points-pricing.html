@@ -338,8 +338,8 @@
             <li>
               <strong>遗留 <code>base:*</code>：</strong>在「全部」列表里若仍可见，可逐条删除；服务端已不再用其计价。
             </li>
-            <li><strong>云端 Comfy 工作流：</strong><code>workflow:{slug}</code>，slug 为画布上该工作流<strong>显示名</strong>规范化（小写、空格→下划线），须与 Auth「云端 ComfyUI 工作流」里的<strong>名称一字不差</strong>（否则命中不到规则、扣 0）。</li>
-            <li><strong>云端模型：</strong><code>model:{slug}</code>，与 Auth「云端模型」配置中的<strong>模型名</strong>一致。</li>
+            <li><strong>云端 Comfy 工作流：</strong><code>workflow:{slug}</code>，slug 为画布上该工作流<strong>显示名</strong>规范化（小写、空格→下划线），须与 Auth 控制台「云端」中 ComfyUI 工作流列表里的<strong>名称一字不差</strong>（否则命中不到规则、扣 0）。</li>
+            <li><strong>云端模型：</strong><code>model:{slug}</code>，与画布上实际调用的<strong>模型名</strong>一致（手填 rule_key）。</li>
           </ul>
           <strong>后端接口说明：</strong>列表为 <code>GET /pts/api/admin/points-pricing</code>；新增与更新统一使用
           <code>PUT /pts/api/admin/points-pricing</code>（Upsert），删除为 <code>DELETE</code> 且 JSON body 带
@@ -363,16 +363,9 @@
       <section class="pp-card" aria-labelledby="authCatTitle">
         <h2 id="authCatTitle" class="pp-card__title">从 Auth 云端目录快速绑定</h2>
         <p class="pp-card__body">
-          从本机 Auth 根路径拉取（无需积分口令）：<code class="mono">GET /cloud-models</code>、<code class="mono">GET /cloud-workflows</code>。选择后点击按钮自动填入
-          <code>rule_key</code> 与描述，再点「保存」即可。
+          从本机 Auth 根路径拉取（无需积分口令）：<code class="mono">GET /cloud-workflows</code>。选择官方工作流后点击按钮自动填入
+          <code>rule_key</code> 与描述；<code>model:…</code> 规则请直接在下方表单手填。
         </p>
-        <div class="pp-field" style="margin-top: 12px">
-          <label for="ppSelModel">云端模型（model:…）</label>
-          <div class="pp-catalog-row">
-            <select id="ppSelModel" class="pp-input" style="flex: 1; min-width: 240px"></select>
-            <button type="button" class="pp-btn pp-btn--primary" id="ppApplyModel">填入表单</button>
-          </div>
-        </div>
         <div class="pp-field" style="margin-top: 12px">
           <label for="ppSelWf">云端 Comfy 官方工作流（workflow:…）</label>
           <div class="pp-catalog-row">
@@ -448,7 +441,6 @@
       let editingRuleKey = ''
       let allRules = []
       let listFilterCat = 'all'
-      let catalogModels = []
       let catalogWfs = []
 
       function authOrigin() {
@@ -480,18 +472,7 @@
       }
 
       function fillCatalogSelects() {
-        const sm = document.getElementById('ppSelModel')
         const sw = document.getElementById('ppSelWf')
-        if (sm) {
-          sm.innerHTML =
-            '<option value="">— 选择模型 —</option>' +
-            catalogModels
-              .map(
-                (x, i) =>
-                  `<option value="${i}">${escapeHtml(x.label)}</option>`,
-              )
-              .join('')
-        }
         if (sw) {
           sw.innerHTML =
             '<option value="">— 选择官方工作流 —</option>' +
@@ -506,33 +487,8 @@
 
       async function loadAuthCatalog() {
         setCatalogMsg('正在拉取 Auth 云端目录…', '')
-        catalogModels = []
         catalogWfs = []
         const root = authOrigin()
-        try {
-          const rm = await fetch(root + '/cloud-models', { cache: 'no-store' })
-          const jm = await rm.json().catch(() => ({}))
-          if (rm.ok && jm && Array.isArray(jm.providers)) {
-            for (const p of jm.providers) {
-              const pid = String(p.id || p.provider || '').trim() || 'provider'
-              const models = Array.isArray(p.models) ? p.models : []
-              for (const mm of models) {
-                const name =
-                  typeof mm === 'string' ? String(mm).trim() : String(mm?.name || mm?.model || '').trim()
-                if (!name) continue
-                catalogModels.push({
-                  label: pid + ' · ' + name,
-                  modelName: name,
-                  ruleKey: 'model:' + slugPart(name),
-                })
-              }
-            }
-          }
-        } catch (e) {
-          setCatalogMsg('cloud-models 拉取失败：' + String(e && e.message ? e.message : e), 'err')
-          fillCatalogSelects()
-          return
-        }
         try {
           const rw = await fetch(root + '/cloud-workflows', { cache: 'no-store' })
           const jw = await rw.json().catch(() => ({}))
@@ -554,10 +510,7 @@
           return
         }
         fillCatalogSelects()
-        setCatalogMsg(
-          '已加载云端模型 ' + catalogModels.length + ' 条、官方工作流 ' + catalogWfs.length + ' 条。',
-          'ok',
-        )
+        setCatalogMsg('已加载官方工作流 ' + catalogWfs.length + ' 条。', 'ok')
       }
 
       function renderRuleRows() {
@@ -741,24 +694,6 @@
         await loadList()
       }
 
-      document.getElementById('ppApplyModel')?.addEventListener('click', () => {
-        const sm = document.getElementById('ppSelModel')
-        const v = sm && 'value' in sm ? String(sm.value) : ''
-        if (v === '') {
-          setCatalogMsg('请先在下拉框中选择云端模型。', 'err')
-          return
-        }
-        const hit = catalogModels[Number(v)]
-        if (!hit) {
-          setCatalogMsg('请先在下拉框中选择云端模型。', 'err')
-          return
-        }
-        document.getElementById('nKey').value = hit.ruleKey
-        document.getElementById('nLabel').value = hit.label.slice(0, 200)
-        editingRuleKey = ''
-        updateEditBanner()
-        setCatalogMsg('已填入：' + hit.ruleKey, 'ok')
-      })
       document.getElementById('ppApplyWf')?.addEventListener('click', () => {
         const sw = document.getElementById('ppSelWf')
         const v = sw && 'value' in sw ? String(sw.value) : ''

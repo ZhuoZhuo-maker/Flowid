@@ -32,9 +32,10 @@ export function ScriptNode({
         <label className="studio-field">
           <span className="studio-field__label">剧本</span>
           <textarea
-            className="studio-textarea"
+            className="studio-textarea nodrag nopan nowheel"
             rows={10}
             value={data.body}
+            onWheel={(e) => e.stopPropagation()}
             onChange={(e) => updateNodeData(id, { body: e.target.value, kind: 'script' })}
           />
         </label>

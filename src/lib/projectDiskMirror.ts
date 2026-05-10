@@ -6,6 +6,21 @@ import { clearBrowserFolderHandle, loadBrowserFolderHandle, saveBrowserFolderHan
 
 const FLOWID_CURRENT_FILE = 'flowid.current.json'
 
+/** 与 AI 助手配置镜像 `aiAssistantConfigMirror.ts` 一致；非画布工程，勿列入「项目档案」 */
+const AI_ASSISTANT_CONFIG_MIRROR_FILE = 'flowid.ai-assistant.config.v1.json'
+
+/**
+ * 工程目录下的 JSON 是否应出现在首页「项目档案」列表。
+ * 排除当前快照与各类设置镜像，避免误点进非工程文件后画布不切换。
+ */
+export function isListableArchiveProjectJsonName(fileName: string): boolean {
+  const n = String(fileName || '').trim().toLowerCase()
+  if (!n.endsWith('.json')) return false
+  if (n === FLOWID_CURRENT_FILE.toLowerCase()) return false
+  if (n === AI_ASSISTANT_CONFIG_MIRROR_FILE) return false
+  return true
+}
+
 /**
  * 将项目名转换为安全文件名片段。
  */

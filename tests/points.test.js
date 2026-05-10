@@ -128,11 +128,11 @@ async function run() {
   assert.ok(String(meta.error || '').includes('超时'))
   assert.equal(meta.workflowName, '单元流')
 
-  const fr = await fetch(
+  const failRes = await fetch(
     `${base}/failures?licenseCode=${encodeURIComponent(TEST_CODE)}&machineCode=${encodeURIComponent(MACHINE)}`,
   )
-  const fj = await fr.json()
-  assert.equal(fr.status, 200)
+  const fj = await failRes.json()
+  assert.equal(failRes.status, 200)
   assert.equal(fj.success, true)
   assert.ok(Array.isArray(fj.failures) && fj.failures.length >= 1)
   assert.ok(fj.failures.some((x) => String(x.dedupe_key || '').includes('dedupe-r3:void')))
@@ -229,6 +229,32 @@ async function run() {
   assert.equal(fr.res.status, 200)
   assert.equal(fr.j.ok, true)
   assert.ok((fr.j.licenses || []).some((row) => String(row.code) === batchCode))
+
+  /** 旧码已过期仍占 machine_code 时，verify 新码应自动解绑旧码并绑定本机 */
+  const rebindMachine = 'e2e-rebind-machine-xx'
+  const oldExpiredCode = 'REBD-OLD1-OLD1-OLD1'
+  const newFreshCode = 'REBD-NEW1-NEW1-NEW1'
+  db.prepare(`DELETE FROM licenses WHERE code IN (?, ?)`).run(oldExpiredCode, newFreshCode)
+  db.prepare(
+    `INSERT INTO licenses (code, machine_code, points, total_earned, total_spent, bind_time, expire_time, status)
+     VALUES (?, ?, 0, 0, 0, datetime('now'), ?, 'active')`,
+  ).run(oldExpiredCode, rebindMachine, new Date(Date.now() - 2 * 864e5).toISOString())
+  db.prepare(
+    `INSERT INTO licenses (code, machine_code, points, total_earned, total_spent, bind_time, expire_time, status)
+     VALUES (?, NULL, 1000, 1000, 0, NULL, NULL, 'active')`,
+  ).run(newFreshCode)
+
+  fr = await fetch(`${origin}${mount}/api/license/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ licenseCode: newFreshCode, machineCode: rebindMachine }),
+  }).then(async (res) => ({ res, j: await res.json().catch(() => ({})) }))
+  assert.equal(fr.res.status, 200)
+  assert.equal(fr.j.valid, true, JSON.stringify(fr.j))
+  const oldRow = db.prepare(`SELECT machine_code FROM licenses WHERE code = ?`).get(oldExpiredCode)
+  assert.equal(oldRow.machine_code, null)
+  const boundNew = db.prepare(`SELECT machine_code FROM licenses WHERE code = ?`).get(newFreshCode)
+  assert.equal(boundNew.machine_code, rebindMachine)
 
   await new Promise((resolve, reject) => {
     fullServer.close((err) => (err ? reject(err) : resolve()))

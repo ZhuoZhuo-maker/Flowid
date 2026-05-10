@@ -199,6 +199,13 @@ export function AgentFloatingChatWindow({
       setSendPointsQuotePending(false)
       return
     }
+    const executionTarget = parseMode === 'llm' ? 'model' : 'workflow'
+    /** 与画布一致：LLM 走云端模型时不参与积分 quote */
+    if (executionTarget === 'model') {
+      setSendPointsQuote(null)
+      setSendPointsQuotePending(false)
+      return
+    }
     const lic = loadLicenseSnapshotV2()
     const lc = String(lic?.licenseCode || '').trim()
     const mc = String(lic?.machineId || '').trim()
@@ -207,12 +214,7 @@ export function AgentFloatingChatWindow({
       setSendPointsQuotePending(false)
       return
     }
-    const executionTarget = parseMode === 'llm' ? 'model' : 'workflow'
-    const metaName = String(assistantModelName || '').trim()
-    const metadata =
-      executionTarget === 'model' && metaName
-        ? { cloudModelName: metaName, pointsBillingKind: 'cloud_model' as const }
-        : {}
+    const metadata = {}
     let cancelled = false
     setSendPointsQuotePending(true)
     void apiPointsQuote({
@@ -230,7 +232,7 @@ export function AgentFloatingChatWindow({
     return () => {
       cancelled = true
     }
-  }, [open, parseMode, assistantModelName])
+  }, [open, parseMode])
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [profilePanelOpen, setProfilePanelOpen] = useState(false)

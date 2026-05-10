@@ -27,18 +27,37 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  memo,
   useRef,
   useState,
   type ClipboardEvent as ReactClipboardEvent,
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
+  type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { Box, Map as MapIcon, Moon, Plus, Settings, Sun, Zap } from 'lucide-react'
+import {
+  Box,
+  Camera,
+  Frame,
+  Map as MapIcon,
+  Moon,
+  Plus,
+  Settings,
+  Sun,
+  Zap,
+} from 'lucide-react'
 import type {
   AudioNodeData,
+  ComfyTdRefAudioRoleRow,
+  ComfyVoiceTableRow,
+  CloudImageAspectKey,
+  CloudImageResolutionTier,
+  ImageCompareNodeData,
   ImageNodeData,
   NodeResultThumbnail,
+  NodeWorkflowConfig,
   PanoramaNodeData,
   ProjectSnapshot,
   ScriptNodeData,
@@ -56,17 +75,34 @@ import {
   replaceSensitiveWords,
 } from '../lib/sensitiveWords'
 import { alertSensitiveWordBlocked } from '../lib/sensitiveWordUi'
+import {
+  insertTextAtCaret,
+  readDraggedPlainText,
+  readDraggedPlainTextSync,
+} from '../lib/textareaInsertAtCaret'
 import { loadCloudSelfPresets } from '../lib/cloudSelfPresets'
+import {
+  emptyCloudAssistCatalog,
+  encodeCloudAssistModelPick,
+  fetchCloudAssistModelCatalog,
+  findAssistEndpoint,
+  getAssistApiKey,
+  studioNodeKindToAssistKind,
+  tryDecodeCloudAssistModelPick,
+  type CloudAssistCatalog,
+} from '../lib/cloudAssistModelCatalog'
 import { CanvasProvider } from '../context/CanvasContext'
 import { AudioNode } from './nodes/AudioNode'
 import { GhostNode } from './nodes/GhostNode'
 import { GroupNode } from './nodes/GroupNode'
 import { ImageNode } from './nodes/ImageNode'
+import { ImageCompareNode } from './nodes/ImageCompareNode'
 import { PanoramaNode } from './nodes/PanoramaNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { TextNode } from './nodes/TextNode'
 import { VideoNode } from './nodes/VideoNode'
 import { AddNodePanel } from './panels/AddNodePanel'
+import { MultiangleControlPanel } from './panels/MultiangleControlPanel'
 import { DownloadPanel } from './panels/DownloadPanel'
 import { FlowidMark } from './FlowidMark'
 import { RightPanel, type RightPanelTab } from './panels/RightPanel'
@@ -77,7 +113,51 @@ import { estimateSceneBatchFromText } from '../lib/agentPointsExample'
 import { subscribePointsTaskFailure } from '../lib/pointsService'
 import { apiPointsQuote } from '../lib/licensePointsApi'
 import { buildPointsReserveParams } from '../lib/pointsReserveMetadata'
-import { fetchCloudWorkflowsMeta, type CloudWorkflowMeta } from '../lib/cloudWorkflowsApi'
+import {
+  clampMultiangleHV,
+  clampMultiangleZoom,
+  FLOWID_MULTIANGLE_DEFAULT_H,
+  FLOWID_MULTIANGLE_DEFAULT_V,
+  FLOWID_MULTIANGLE_DEFAULT_ZOOM,
+} from '../lib/comfyMultianglePlaceholders'
+import {
+  audioDataPatchFromMusicFineTuneDraft,
+  DEFAULT_MUSIC_FINE_TUNE_DRAFT,
+  MUSIC_DURATION_MINUTES_OPTIONS,
+  MUSIC_KEYSCALE_OPTIONS,
+  MUSIC_LANGUAGE_OPTIONS,
+  MUSIC_TIMESIGNATURE_OPTIONS,
+  type MusicFineTuneDraft,
+  musicFineTuneDraftFromAudioData,
+} from '../lib/musicWorkflowFineTune'
+import {
+  alignComfySpatialDimension,
+  COMFY_WORKFLOW_ASPECT_PANEL_OPTIONS,
+  COMFY_WORKFLOW_STYLE_TONE_PANEL_OPTIONS,
+  isLegacyComfyWorkflowPixelOnly,
+  resolveComfyWorkflowWidthHeight,
+  workflowJsonSupportsComfySizePlaceholders,
+  workflowJsonSupportsComfyStyleTonePlaceholder,
+} from '../lib/comfyWorkflowOutputSize'
+import {
+  COMFY_VOICE_TABLE_LANGUAGE_OPTIONS,
+  workflowJsonSupportsVoiceTable8Slots,
+} from '../lib/comfyVoiceTable8'
+import { parseVoiceTableBulkPaste, voiceTableRowsPaddedForUi } from '../lib/parseVoiceTableBulkPaste'
+import {
+  buildTdRefAudioRoleMatchSlotLabels,
+  workflowJsonSupportsTdRefAudioRoleMap,
+} from '../lib/comfyTdRefAudioRoleMap'
+import { buildMultianglePreviewLine } from '../lib/multianglePresets'
+import { fetchCloudWorkflowJson, fetchCloudWorkflowsMeta, type CloudWorkflowMeta } from '../lib/cloudWorkflowsApi'
+import { workflowJsonUsesSystemPromptPlaceholder } from '../lib/cloudWorkflowUserGuides'
+import {
+  listCloudWorkflowExamples,
+  pinCloudWorkflowExample,
+  removeCloudWorkflowExample,
+  type CloudWorkflowExampleEntry,
+} from '../lib/cloudWorkflowExampleProjects'
+import { nodeSupportsMultiangleAngleControl } from '../lib/workflowMultiangleSupport'
 import {
   registerAgentCanvasTasksProvider,
   registerAgentNavigateToNode,
@@ -85,6 +165,10 @@ import {
 import { registerAgentProjectContextProvider } from '../lib/agentProjectContextBridge'
 import { registerAgentOpenCanvasSettings } from '../lib/agentStudioUiBridge'
 import { callLLM } from '../lib/agentLlmStub'
+import {
+  runFlowidAgentToolLoop,
+  type AgentCanvasBriefNode,
+} from '../lib/flowidAgentToolLoop'
 import type { AgentParseMode } from '../lib/agentParseMode'
 import {
   invokeStudioAgentExecution,
@@ -115,7 +199,13 @@ import type {
   AssetItem,
   LeftPanelType,
 } from './panels/types'
-import { createGroupNode, createStudioNode, defaultStudioNodeTitle } from '../lib/nodeFactory'
+import {
+  createGroupNode,
+  createImageCompareStudioNode,
+  createStudioNode,
+  defaultStudioNodeTitle,
+} from '../lib/nodeFactory'
+import { getPrimaryImageDisplayUrlForCompare } from '../lib/imageCompareNodeUtils'
 import {
   findWorkflowEntryByPreferredName,
   matchStudioNodeWorkflow,
@@ -151,6 +241,7 @@ import {
 } from '../lib/aiAssistantConfigMirror'
 import {
   chatReplyWithModel,
+  isAiAssistantCreatableNodeKind,
   loadAiAssistantConfig,
   planActionsWithModel,
   planActionsWithRules,
@@ -169,8 +260,10 @@ import {
 import { fetchOpenAICompat } from '../lib/openaiProxy'
 import {
   buildMentionToken,
+  collectMentionAudioResolvedEntries,
   collectMentionImageSources,
   listMentionImageAttachments,
+  listMentionAudioRefLabelsForNote,
   mentionAlreadyReferencesNodeId,
   parseDefaultNodeTitleIndex,
   parseMentionRefs,
@@ -180,11 +273,15 @@ import {
 } from '../lib/nodeMentions'
 import { DEFAULT_WORKSPACE_LIBRARY_ID, writeLibraryProject } from '../lib/localProjectLibrary'
 import {
+  getDesktopDiskFileObjectUrl,
   getLocalImageAssetObjectUrl,
-  getDesktopMirroredOutputObjectUrlByStem,
+  getDesktopMirroredOutputObjectUrlByNode,
+  isBlobUrlHeldInLocalAssetObjectUrlCache,
   saveLocalImageAsset,
 } from '../lib/localImageAssetStore'
-import { mirrorComfyOutputToDisk } from '../lib/localAssetDiskMirror'
+import { mirrorComfyOutputToDisk, mirrorUploadToInputDir } from '../lib/localAssetDiskMirror'
+import { resolveComfyAudioPlaybackSrc } from '../lib/comfyAudioPlayback'
+import { partitionMediaFilesByKind } from '../lib/mediaDropPartition'
 import {
   ICON_NODE_AUDIO,
   ICON_NODE_IMAGE,
@@ -198,11 +295,22 @@ const nodeTypes = {
   text: TextNode,
   script: ScriptNode,
   image: ImageNode,
+  imageCompare: ImageCompareNode,
   video: VideoNode,
   audio: AudioNode,
   panorama: PanoramaNode,
   ghost: GhostNode,
   group: GroupNode,
+}
+
+/** 与 `createStudioNode` 默认 height 一致；拖入多文件时竖排，节点底到下一节点顶 20px */
+const FLOWID_CANVAS_DROP_STACK_H = 340
+const FLOWID_CANVAS_DROP_STACK_GAP_Y = 20
+const FLOWID_CANVAS_DROP_STACK_STEP_Y = FLOWID_CANVAS_DROP_STACK_H + FLOWID_CANVAS_DROP_STACK_GAP_Y
+
+/** 底部参考条：有常见图片后缀才用 `<img>`，否则走「音」块（多路参考音频多为 blob）。 */
+function refChipUseImagePreview(url: string): boolean {
+  return /\.(png|jpe?g|webp|gif|bmp|svg)(\?|#|$)/i.test(String(url || '').trim())
 }
 
 const AI_ASSISTANT_AVATAR_MEDIA = {
@@ -394,6 +502,7 @@ const NODE_KIND_LABEL: Record<StudioNodeKind, string> = {
   text: '文字',
   script: '剧本',
   image: '图片',
+  imageCompare: '图像对比',
   video: '视频',
   audio: '音频',
   music: '音乐',
@@ -559,170 +668,35 @@ function findUpstreamTextAnchorForVisual(
   return null
 }
 
-type SplitCategory = 'role' | 'scene' | 'asset'
-
-const SPLIT_CATEGORY_LABEL: Record<SplitCategory, string> = {
-  role: '角色',
-  scene: '场景',
-  asset: '资产',
-}
+/** 文本节点「符号拆分」支持的分段标记（与底部下拉一致） */
+type TextSymbolSplitDelimiter = '###' | '///'
 
 /**
- * 将文本按“角色/场景/资产”分组，并进一步拆成单条记录。
+ * 按选定分隔符拆分文本为多段。
+ * - 分隔符可单独成行，也可出现在行内；连续分隔符会产生空段，已 trim 后过滤；
+ * - 每段标题默认「段落N」。
  */
-function splitTextByCategory(raw: string): Array<{
-  category: SplitCategory
-  title: string
-  body: string
-}> {
-  const lines = raw.replace(/\r\n?/g, '\n').split('\n')
-  const blocks: Array<{ category: SplitCategory; lines: string[] }> = []
-
-  const normalizeLine = (line: string): string =>
-    line.replace(/^[\s\u3000]*[-*?·\d.、）)]+\s*/u, '').trim()
-
-  const detectCategory = (line: string): SplitCategory | null => {
-    if (/^(角色|人物)(\s*[：:]\s*|\s*$)/u.test(line)) return 'role'
-    if (/^场景(\s*[：:]\s*|\s*$)/u.test(line)) return 'scene'
-    if (/^(资产|道具)(\s*[：:]\s*|\s*$)/u.test(line)) return 'asset'
-    return null
-  }
-
-  let currentCategory: SplitCategory | null = null
-  let currentLines: string[] = []
-  const flushBlock = () => {
-    if (!currentCategory) return
-    const compact = currentLines.map((line) => line.trim()).filter((line) => line !== '')
-    if (!compact.length) return
-    blocks.push({ category: currentCategory, lines: compact })
-  }
-
-  for (const rawLine of lines) {
-    const line = normalizeLine(rawLine)
-    if (!line) continue
-    const found = detectCategory(line)
-    if (found) {
-      flushBlock()
-      currentCategory = found
-      const inline = line.replace(/^(角色|人物|场景|资产|道具)\s*[：:]?\s*/u, '').trim()
-      currentLines = inline ? [inline] : []
-      continue
-    }
-    if (currentCategory) {
-      currentLines.push(line)
-    }
-  }
-  flushBlock()
-
-  const extractTitleHint = (category: SplitCategory, linesOfEntry: string[]): string => {
-    // 优先取中文标题行（角色/人物/场景/资产），其次取 @ 标签内容。
-    for (const line of linesOfEntry) {
-      if (category === 'role') {
-        const role = line.match(/^(?:角色|人物|姓名)\s*[：:]\s*(.+)$/u)
-        if (role?.[1]) return role[1].trim().slice(0, 24)
-      } else if (category === 'scene') {
-        const scene = line.match(/^(?:场景|镜头|地点)\s*[：:]\s*(.+)$/u)
-        if (scene?.[1]) return scene[1].trim().slice(0, 24)
-      } else {
-        const asset = line.match(/^(?:资产|道具)\s*[：:]\s*(.+)$/u)
-        if (asset?.[1]) return asset[1].trim().slice(0, 24)
-      }
-    }
-    for (const line of linesOfEntry) {
-      const tag = line.match(/^@\w+\s*[：:]\s*(.+)$/u)
-      if (tag?.[1]) return tag[1].trim().slice(0, 24)
-    }
-    return ''
-  }
-
-  const results: Array<{ category: SplitCategory; title: string; body: string }> = []
-  blocks.forEach((block) => {
-    const items: Array<{ titleHint?: string; body: string }> = []
-    let currLines: string[] = []
-    const pushItem = () => {
-      const body = currLines.join('\n').trim()
-      if (!body) return
-      items.push({ titleHint: extractTitleHint(block.category, currLines), body })
-      currLines = []
-    }
-
-    block.lines.forEach((line) => {
-      currLines.push(line)
-      // 新规则：每个资产/角色/场景实体以 @ 行收尾（例如 @character:小石头）。
-      if (/^@\w+/.test(line)) {
-        pushItem()
-      }
-    })
-    // 若末尾没有 @ 结尾，也保留最后一段，避免内容丢失。
-    pushItem()
-
-    const finalItems = items.length
-      ? items
-      : [{ body: block.lines.join('\n').trim(), titleHint: undefined }]
-    finalItems.forEach((entry, idx) => {
-      results.push({
-        category: block.category,
-        title:
-          entry.titleHint?.slice(0, 24) ||
-          `${SPLIT_CATEGORY_LABEL[block.category]}${idx + 1}`,
-        body: entry.body,
-      })
-    })
-  })
-
-  return results
-}
-
-type TextSplitMode = 'asset' | 'storyboard' | 'symbol'
-
-/**
- * 按「分镜 + 序号 + 提示词卡」锚点拆成多段（与资产拆分同样产出 `title` / `body`，便于落画布节点）。
- * - 锚点示例：`分镜 01 提示词卡`、`分镜01 提示词卡`、`分镜 1 提示词卡`；
- * - 首段锚点之前的正文会合并进第一段，避免丢失前言。
- */
-function splitTextByStoryboard(raw: string): Array<{ title: string; body: string }> {
-  const text = raw.replace(/\r\n?/g, '\n')
-  const anchorRe = /分镜\s*(\d+)\s*提示词卡/giu
-  const hits: Array<{ index: number; len: number; num: string }> = []
-  let m: RegExpExecArray | null
-  const re = new RegExp(anchorRe.source, anchorRe.flags)
-  while ((m = re.exec(text)) !== null) {
-    hits.push({ index: m.index, len: m[0].length, num: m[1] })
-  }
-  if (!hits.length) return []
-
-  const preamble = hits[0].index > 0 ? text.slice(0, hits[0].index).trim() : ''
-  const out: Array<{ title: string; body: string }> = []
-  for (let i = 0; i < hits.length; i += 1) {
-    const h = hits[i]
-    const after = h.index + h.len
-    const end = i + 1 < hits.length ? hits[i + 1].index : text.length
-    let body = text.slice(after, end).trim()
-    if (i === 0 && preamble) {
-      body = body ? `${preamble}\n\n${body}` : preamble
-    }
-    const n = Number.parseInt(h.num, 10)
-    const nn = Number.isFinite(n) ? String(n).padStart(2, '0') : h.num
-    const title = `分镜 ${nn} 提示词卡`
-    if (!body.trim()) continue
-    out.push({ title, body: body.trim() })
-  }
-  return out
-}
-
-/**
- * 按固定分隔符拆分文本段落：`###` / `---` / `@@`。
- * - 分隔符可单独成行，也可出现在行内；
- * - 连续分隔符会自动忽略空段；
- * - 每段标题默认按「段落N」生成。
- */
-function splitTextByFixedDelimiters(raw: string): Array<{ title: string; body: string }> {
+function splitTextByDelimiter(
+  raw: string,
+  delimiter: TextSymbolSplitDelimiter,
+): Array<{ title: string; body: string }> {
   const text = String(raw || '').replace(/\r\n?/g, '\n')
   const chunks = text
-    .split(/(?:###|---|@@)/g)
+    .split(delimiter)
     .map((part) => part.trim())
     .filter(Boolean)
   return chunks.map((body, idx) => ({ title: `段落${idx + 1}`, body }))
+}
+
+/** 框选键：仅 Shift / Alt（Ctrl、Cmd 留给 React Flow「追加多选」） */
+function normalizeMarqueeSelectionKey(binding: string | undefined): 'Shift' | 'Alt' {
+  const k = String(binding || 'Shift').trim()
+  return k === 'Alt' ? 'Alt' : 'Shift'
+}
+
+function nativeHasMarqueeModifier(native: MouseEvent, key: 'Shift' | 'Alt'): boolean {
+  if (key === 'Alt') return Boolean(native.altKey)
+  return Boolean(native.shiftKey)
 }
 
 /**
@@ -885,22 +859,6 @@ function detectMentionAtCaret(value: string, caret: number): MentionMatch | null
     }
   }
   return null
-}
-
-function insertTextAtCaret(
-  el: HTMLTextAreaElement,
-  textToInsert: string,
-  fallbackCaret?: number,
-): { nextValue: string; nextCaret: number } {
-  const v = el.value ?? ''
-  const start = Number.isFinite(el.selectionStart) ? (el.selectionStart ?? v.length) : (fallbackCaret ?? v.length)
-  const end = Number.isFinite(el.selectionEnd) ? (el.selectionEnd ?? start) : start
-  const before = v.slice(0, start)
-  const after = v.slice(end)
-  const insert = String(textToInsert || '')
-  const nextValue = `${before}${insert}${after}`
-  const nextCaret = before.length + insert.length
-  return { nextValue, nextCaret }
 }
 
 /**
@@ -1086,28 +1044,64 @@ function withResolvedNodeMentions(
     return node
   }
   if (data.kind === 'audio' || data.kind === 'music') {
+    const ad = data as AudioNodeData
     const referencedImages = collectMentionImageSources(data.note || '', allNodes, node.id)
+    const referencedAudioEntries = collectMentionAudioResolvedEntries(data.note || '', allNodes, node.id)
+    const referencedAudios = referencedAudioEntries.map((e) => e.url)
     const nextNote = resolveNodeMentionsInText(data.note || '', allNodes, node.id)
-    const prevRefs = data.referenceImageSources?.filter(Boolean) ?? []
-    const mergedRefs = Array.from(new Set([...prevRefs, ...referencedImages]))
+    const prevRefs = ad.referenceImageSources?.filter(Boolean) ?? []
+    const prevIdsRaw = Array.isArray(ad.referenceImageAssetIds) ? ad.referenceImageAssetIds : []
+    const mergedUrls: string[] = []
+    const mergedIds: string[] = []
+    const seenUrl = new Set<string>()
+    const pushRefPair = (url: string, assetId: string) => {
+      const u = String(url || '').trim()
+      const aid = String(assetId || '').trim()
+      if (!u) return
+      if (seenUrl.has(u)) {
+        if (aid) {
+          const idx = mergedUrls.indexOf(u)
+          if (idx >= 0 && !String(mergedIds[idx] || '').trim()) mergedIds[idx] = aid
+        }
+        return
+      }
+      seenUrl.add(u)
+      mergedUrls.push(u)
+      mergedIds.push(aid)
+    }
+    for (let i = 0; i < prevRefs.length; i += 1) {
+      pushRefPair(prevRefs[i]!, String(prevIdsRaw[i] || '').trim())
+    }
+    for (const u of referencedImages) pushRefPair(u, '')
+    for (const e of referencedAudioEntries) pushRefPair(e.url, e.assetId)
+
+    const hadSrc = Boolean(String(ad.src || '').trim())
     const nextSrc =
-      String(data.src || '').trim() ||
-      (referencedImages.length > 0 ? referencedImages[0] : '')
+      String(ad.src || '').trim() ||
+      (referencedAudios.length > 0 ? referencedAudios[0]! : '') ||
+      (referencedImages.length > 0 ? referencedImages[0]! : '')
+    const nextSrcAssetId = hadSrc
+      ? String(ad.srcAssetId || '').trim()
+      : referencedAudioEntries.length > 0
+        ? String(referencedAudioEntries[0]!.assetId || '').trim()
+        : String(ad.srcAssetId || '').trim()
+
     return {
       ...node,
       data: {
         ...data,
         note: nextNote,
         src: nextSrc,
-        referenceImageSources: mergedRefs,
+        srcAssetId: nextSrcAssetId,
+        referenceImageSources: mergedUrls,
+        referenceImageAssetIds: mergedIds,
       } as StudioNodeData,
     }
   }
-  const nextNote = resolveNodeMentionsInText(data.note || '', allNodes, node.id)
-  return {
-    ...node,
-    data: { ...data, note: nextNote } as StudioNodeData,
+  if (data.kind === 'imageCompare') {
+    return node
   }
+  return node
 }
 
 /**
@@ -1210,6 +1204,41 @@ function isRemoteOrComfyViewSrc(raw: string): boolean {
 }
 
 /**
+ * 底部「输出条」缩略图：持久化后 blob/Comfy URL 可能失效；优先本地镜像 diskPath，再 IndexedDB。
+ */
+async function hydrateNodeResultThumbnails(
+  items: NodeResultThumbnail[] | undefined,
+): Promise<NodeResultThumbnail[] | undefined> {
+  if (!items?.length) return items
+  const next = await Promise.all(
+    items.map(async (t) => {
+      const url = String(t.url || '').trim()
+      const aid = String(t.assetId || '').trim()
+      const disk = String(t.diskPath || '').trim()
+
+      if (disk) {
+        const fromDisk = await getDesktopDiskFileObjectUrl(disk)
+        if (fromDisk) return { ...t, url: fromDisk }
+      }
+
+      const needIdb =
+        !url ||
+        url.startsWith('blob:') ||
+        url.startsWith('/_comfy_local_') ||
+        isRemoteOrComfyViewSrc(url)
+      if (aid && needIdb) {
+        const restored = await getLocalImageAssetObjectUrl(aid)
+        if (restored) return { ...t, url: restored }
+      }
+
+      return t
+    }),
+  )
+  const changed = next.some((t, i) => t.url !== items[i]?.url)
+  return changed ? next : items
+}
+
+/**
  * 将节点数据中的本地图片资产 id（IndexedDB）还原为可显示 URL。
  * 仅做“显示态修复”，不改动既有业务字段逻辑。
  */
@@ -1237,29 +1266,92 @@ async function hydrateNodesLocalImageAssets(
       const srcAssetId = String(normalizedData.srcAssetId || '').trim()
       const persistedSrc = String(normalizedData.src || '').trim()
       let nextSrc = persistedSrc
-      console.log('[Flowid] hydrateNodesLocalImageAssets: processing node', { nodeId: node.id, title: data.title, kind: data.kind, srcAssetId, persistedSrc, nextSrc })
-      /** Comfy 回写后的远端 URL 若仍挂着旧的 srcAssetId，hydrate 时不得用本地图盖掉 */
-      if (srcAssetId && !isRemoteOrComfyViewSrc(nextSrc)) {
-        const restored = await getLocalImageAssetObjectUrl(srcAssetId)
-        if (restored) {
-          nextSrc = restored
-        }
-      }
-      const shouldClearStaleMainAssetId = Boolean(srcAssetId) && isRemoteOrComfyViewSrc(persistedSrc)
+      const srcDiskPathRaw = String((normalizedData as StudioNodeData & { srcDiskPath?: string }).srcDiskPath || '').trim()
+      const mediaKind =
+        data.kind === 'video' ? 'video' : data.kind === 'image' ? 'image' : 'audio'
+      const isMediaKindForDisk =
+        data.kind === 'image' || data.kind === 'video' || data.kind === 'audio' || data.kind === 'music'
+
+      console.log('[Flowid] hydrateNodesLocalImageAssets: processing node', {
+        nodeId: node.id,
+        title: data.title,
+        kind: data.kind,
+        srcAssetId,
+        persistedSrc,
+        hasSrcDiskPath: Boolean(srcDiskPathRaw),
+      })
 
       /**
-       * 视频/音频节点：若未从 IndexedDB 恢复到源，尝试从 output 目录读取对应生成内容。
-       * 同时处理 Comfy URL 失效的情况。
+       * 预览策略（桌面端）：
+       * 1) IndexedDB（srcAssetId）——生成流程会把完整音频拉取后写入；必须先于 srcDiskPath，
+       *    否则会误用「上一次镜像」留在输出目录里的短 wav 覆盖新结果。
+       * 2) srcDiskPath
+       * 3) 按标题+节点 id 扫输出目录
        */
-      if ((!nextSrc || nextSrc.startsWith('/_comfy_local_')) && (data.kind === 'video' || data.kind === 'audio' || data.kind === 'music')) {
-        const mediaKind = data.kind === 'video' ? 'video' : 'audio'
-        const title = String(data.title || '').trim() || String(node.id || '').trim()
-        console.log('[Flowid] Trying to restore from output:', { nodeId: node.id, title, mediaKind, hasComfyUrl: nextSrc.startsWith('/_comfy_local_') })
-        if (title) {
-          const restoredFromOutput = await getDesktopMirroredOutputObjectUrlByStem(title, mediaKind)
-          console.log('[Flowid] Restore result:', { nodeId: node.id, title, restoredFromOutput: !!restoredFromOutput })
+      let recoveredLocal = false
+      if (srcAssetId) {
+        const wantIdb =
+          !persistedSrc ||
+          persistedSrc.startsWith('blob:') ||
+          persistedSrc.startsWith('/_comfy_local_') ||
+          isRemoteOrComfyViewSrc(persistedSrc)
+        if (wantIdb) {
+          const restored = await getLocalImageAssetObjectUrl(srcAssetId)
+          if (restored) {
+            nextSrc = restored
+            recoveredLocal = true
+            console.log('[Flowid] Restored from IndexedDB asset', { nodeId: node.id, srcAssetId })
+          }
+        }
+      }
+
+      if (!recoveredLocal && isMediaKindForDisk && srcDiskPathRaw) {
+        const fromSavedPath = await getDesktopDiskFileObjectUrl(srcDiskPathRaw)
+        if (fromSavedPath) {
+          nextSrc = fromSavedPath
+          recoveredLocal = true
+          console.log('[Flowid] Restored from srcDiskPath', { nodeId: node.id, srcDiskPathRaw })
+        }
+      }
+
+      const shouldClearStaleMainAssetId = Boolean(srcAssetId) && isRemoteOrComfyViewSrc(persistedSrc)
+
+      /** 纯新建空节点不应扫输出目录：legacyStem 仅按标题匹配，会误绑到同名旧输出。 */
+      const resultThumbs = Array.isArray(normalizedData.resultThumbnails)
+        ? normalizedData.resultThumbnails
+        : []
+      const hasPersistedMediaHint =
+        Boolean(persistedSrc) ||
+        Boolean(srcAssetId) ||
+        Boolean(srcDiskPathRaw) ||
+        resultThumbs.length > 0
+
+      const stillNeedOutputScan =
+        hasPersistedMediaHint &&
+        !recoveredLocal &&
+        (!nextSrc ||
+          nextSrc.startsWith('/_comfy_local_') ||
+          nextSrc.startsWith('blob:') ||
+          isRemoteOrComfyViewSrc(nextSrc))
+      if (isMediaKindForDisk && stillNeedOutputScan) {
+        const titleForMirror = String(data.title || 'output')
+        const legacyStem = String(data.title || '').trim() || String(node.id || '').trim()
+        console.log('[Flowid] Trying to restore from output dir:', {
+          nodeId: node.id,
+          titleForMirror,
+          legacyStem,
+          mediaKind,
+        })
+        if (legacyStem) {
+          const restoredFromOutput = await getDesktopMirroredOutputObjectUrlByNode(
+            titleForMirror,
+            node.id,
+            mediaKind,
+            legacyStem,
+          )
           if (restoredFromOutput) {
             nextSrc = restoredFromOutput
+            console.log('[Flowid] Restored from output scan', { nodeId: node.id })
           }
         }
       }
@@ -1278,17 +1370,53 @@ async function hydrateNodesLocalImageAssets(
         if (!restored) continue
         nextRefs[i] = restored
       }
+      const hydratedThumbs = await hydrateNodeResultThumbnails(normalizedData.resultThumbnails)
+      const rawThumbs = normalizedData.resultThumbnails
+      const thumbsChanged =
+        Array.isArray(hydratedThumbs) &&
+        Array.isArray(rawThumbs) &&
+        hydratedThumbs.some((t, i) => t.url !== rawThumbs[i]?.url)
       const srcChanged = nextSrc !== persistedSrc
       const refsChanged = nextRefs.some((item, idx) => item !== oldRefs[idx])
-      if (srcChanged || refsChanged || shouldClearStaleMainAssetId || runtimeChanged) {
+      /**
+       * 配音/音乐：播放器优先渲染 `resultSources[0]`。hydrate 只改 `src` 时，列表里仍可能是
+       * 刷新前已失效的 blob:，表现为 0:00/0:00；须与 `nextSrc` 对齐。
+       *
+       * 注意：IndexedDB 还原的 `nextSrc` 每次刷新都是**新的** blob: 字符串；若仍把旧 rs 里其它 blob:
+       * 全部留在 tail，会「每刷新多一条空音频」且删不完。tail 中仅保留非 blob（http/Comfy view 等）。
+       */
+      let audioResultSourcesPatch: { resultSources: string[] } | undefined
+      if ((data.kind === 'audio' || data.kind === 'music') && nextSrc) {
+        const rs = (normalizedData as AudioNodeData).resultSources?.filter(Boolean) ?? []
+        const tail = rs.filter((u) => u !== nextSrc)
+        const tailWithoutStaleBlobs = tail.filter((u) => !String(u).startsWith('blob:'))
+        const nextRs = [nextSrc, ...tailWithoutStaleBlobs]
+        const same =
+          nextRs.length === rs.length && nextRs.every((u, i) => u === rs[i])
+        if (!same) {
+          audioResultSourcesPatch = {
+            resultSources: nextRs,
+          }
+        }
+      }
+      if (
+        srcChanged ||
+        refsChanged ||
+        shouldClearStaleMainAssetId ||
+        runtimeChanged ||
+        thumbsChanged ||
+        audioResultSourcesPatch
+      ) {
         mutated = true
         nextNodes.push({
           ...node,
           data: {
             ...normalizedData,
             src: nextSrc,
+            ...(audioResultSourcesPatch ?? {}),
             ...(shouldClearStaleMainAssetId ? { srcAssetId: undefined } : {}),
             referenceImageSources: nextRefs,
+            ...(thumbsChanged ? { resultThumbnails: hydratedThumbs } : {}),
           } as StudioNodeData,
         })
       } else {
@@ -1342,10 +1470,51 @@ const MULTI_SELECT_CTX_MENU_EST_H = 168
 /** 「添加节点」子菜单预估尺寸：用于贴边钳位 */
 const MULTI_SELECT_SYNC_SUBMENU_EST_W = CANVAS_ADD_MENU_EST_W
 const NODE_APPEND_GAP = 60
+/** Ctrl+D 复制副本：新图整体相对选区向下平移，选区底边到新图顶边间距（流坐标 px） */
+const DUPLICATE_BELOW_GAP_FLOW = 20
 const DEFAULT_NODE_WIDTH = 430
 const DEFAULT_NODE_HEIGHT = 340
 const PROMPT_PANEL_MIN_ZOOM_PERCENT = 0
 const GROUP_PADDING = 24
+/**
+ * 未指定画布坐标时连续新建：按网格排布，步长≈默认节点宽高 + 间隙，避免大图节点仍挤在同一叠。
+ */
+const AUTO_NODE_STAGGER_COLS = 3
+const AUTO_NODE_STAGGER_DX = DEFAULT_NODE_WIDTH + NODE_APPEND_GAP
+const AUTO_NODE_STAGGER_DY = DEFAULT_NODE_HEIGHT + GROUP_PADDING
+
+function countStaggerEligibleNodes(nodes: Array<Node<StudioNodeData>>): number {
+  return nodes.filter((n) => n.type !== 'ghost' && n.type !== 'group').length
+}
+
+function staggerAutoPlacedPosition(base: XYPosition, staggerIndex: number): XYPosition {
+  const col = staggerIndex % AUTO_NODE_STAGGER_COLS
+  const row = Math.floor(staggerIndex / AUTO_NODE_STAGGER_COLS)
+  return {
+    x: base.x + col * AUTO_NODE_STAGGER_DX,
+    y: base.y + row * AUTO_NODE_STAGGER_DY,
+  }
+}
+
+/** Agent 工具：按名称子串 / id 解析节点类型下的 Comfy 工作流条目 */
+function resolveWorkflowEntryForKind(
+  kind: StudioNodeKind,
+  nodeConfigs: Record<StudioNodeKind, NodeWorkflowConfig>,
+  nameOrIdHint: string,
+): { id: string; name: string } | null {
+  const hint = String(nameOrIdHint || '').trim()
+  if (!hint) return null
+  const list = nodeConfigs[kind]?.workflows ?? []
+  if (!list.length) return null
+  const low = hint.toLowerCase()
+  const byId = list.find((w) => w.id === hint)
+  if (byId) return { id: byId.id, name: byId.name }
+  const exactName = list.find((w) => (w.name || '').trim().toLowerCase() === low)
+  if (exactName) return { id: exactName.id, name: exactName.name }
+  const partial = list.find((w) => (w.name || '').toLowerCase().includes(low))
+  if (partial) return { id: partial.id, name: partial.name }
+  return null
+}
 
 type DomMouseEvent = globalThis.MouseEvent
 
@@ -1366,14 +1535,30 @@ const SYNC_ADD_MENU_ITEMS: ReadonlyArray<{
   { id: 'music', title: '音乐', icon: ICON_NODE_MUSIC, kind: 'music' },
 ]
 
+/** 解析节点 style / measured 上的宽高（支持数字或 `430px` 字符串） */
+function parseNodeDim(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value
+  if (typeof value === 'string') {
+    const n = Number.parseFloat(value)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+  return null
+}
+
 /**
- * 读取节点当前尺寸（优先实时测量值），用于计算“后接新增”的精确间距。
+ * 读取节点当前尺寸，用于「后接新增 / 拆分落点」等布局。
+ * 优先 `style`（含 NodeResizer 写入的宽高），避免 `Number("430px")` 为 NaN 时误用偏大的 `measured` 导致横向甩开。
  */
 function getNodeSize(node: Node<StudioNodeData>): { width: number; height: number } {
-  const width = Number(node.measured?.width ?? node.width ?? node.style?.width ?? DEFAULT_NODE_WIDTH)
-  const height = Number(
-    node.measured?.height ?? node.height ?? node.style?.height ?? DEFAULT_NODE_HEIGHT,
-  )
+  const n = node as Node<StudioNodeData>
+  const styleW = parseNodeDim(n.style?.width)
+  const styleH = parseNodeDim(n.style?.height)
+  const measW = parseNodeDim(n.measured?.width)
+  const measH = parseNodeDim(n.measured?.height)
+  const rootW = parseNodeDim(n.width as unknown)
+  const rootH = parseNodeDim(n.height as unknown)
+  const width = styleW ?? measW ?? rootW ?? DEFAULT_NODE_WIDTH
+  const height = styleH ?? measH ?? rootH ?? DEFAULT_NODE_HEIGHT
   return {
     width: Number.isFinite(width) ? width : DEFAULT_NODE_WIDTH,
     height: Number.isFinite(height) ? height : DEFAULT_NODE_HEIGHT,
@@ -1381,8 +1566,59 @@ function getNodeSize(node: Node<StudioNodeData>): { width: number; height: numbe
 }
 
 /**
+ * 文本拆分落点用的「源节点右缘」宽度：取 style / measured / root 中**合法正数**的最大值，
+ * 避免仅 style 过窄或为 0 时子节点叠在源节点正下方（与源同 x）。
+ */
+function splitAnchorNodeFlowWidth(node: Node<StudioNodeData>): number {
+  const n = node as Node<StudioNodeData>
+  const candidates = [
+    parseNodeDim(n.style?.width),
+    parseNodeDim(n.measured?.width),
+    parseNodeDim(n.width as unknown),
+  ].filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0)
+  const raw = candidates.length ? Math.max(...candidates) : DEFAULT_NODE_WIDTH
+  return Math.max(raw, 280)
+}
+
+/**
  * 计算一组节点在画布中的包围盒（基于节点位置和尺寸）。
  */
+/** 角度控制浮层与节点边缘的间距（与产品约定 20px） */
+const MULTIANGLE_PANEL_NODE_GAP = 20
+const MULTIANGLE_PANEL_EST_W = 368
+const MULTIANGLE_PANEL_EST_H = 540
+
+/**
+ * 将角度控制面板锚定到节点右侧（若右侧空间不足则贴左侧），坐标为 `position:fixed` 视口像素。
+ */
+function computeMultianglePanelAnchorScreen(nodeId: string): { left: number; top: number } {
+  const pad = 8
+  let safeId = nodeId
+  try {
+    safeId = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(nodeId) : nodeId
+  } catch {
+    safeId = nodeId
+  }
+  const el = document.querySelector(
+    `.react-flow__node[data-id="${safeId}"]`,
+  ) as HTMLElement | null
+  if (!el) {
+    return { left: pad, top: pad }
+  }
+  const rect = el.getBoundingClientRect()
+  if (rect.width < 2 || rect.height < 2) {
+    return { left: pad, top: pad }
+  }
+  let left = rect.right + MULTIANGLE_PANEL_NODE_GAP
+  let top = rect.top
+  if (left + MULTIANGLE_PANEL_EST_W > window.innerWidth - pad) {
+    left = rect.left - MULTIANGLE_PANEL_EST_W - MULTIANGLE_PANEL_NODE_GAP
+  }
+  left = Math.max(pad, Math.min(left, window.innerWidth - MULTIANGLE_PANEL_EST_W - pad))
+  top = Math.max(pad, Math.min(top, window.innerHeight - MULTIANGLE_PANEL_EST_H - pad))
+  return { left, top }
+}
+
 function getNodesBounds(nodes: Array<Node<StudioNodeData>>): {
   minX: number
   minY: number
@@ -1476,6 +1712,9 @@ function PromptPanelDropdown({
   className,
   ariaLabel,
   title,
+  renderButtonContent,
+  disabled,
+  onMainButtonDoubleClick,
 }: {
   value?: string
   placeholder: string
@@ -1484,6 +1723,11 @@ function PromptPanelDropdown({
   className: string
   ariaLabel?: string
   title?: string
+  /** 仅展示图标等紧凑内容时传入；`title` 未设时会用当前选项文案作悬停说明 */
+  renderButtonContent?: (info: { activeLabel: string; value: string | undefined }) => ReactNode
+  disabled?: boolean
+  /** 双击主按钮（不展开菜单时）：用于例如「工作流示例」快捷入口 */
+  onMainButtonDoubleClick?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -1514,20 +1758,45 @@ function PromptPanelDropdown({
     }
   }, [open])
 
+  useEffect(() => {
+    if (disabled) setOpen(false)
+  }, [disabled])
+
+  const iconTrigger = Boolean(renderButtonContent)
+  const buttonTitle = title ?? (iconTrigger ? activeLabel : undefined)
+  const buttonAriaLabel = iconTrigger
+    ? [ariaLabel ?? placeholder, activeLabel].filter(Boolean).join('：')
+    : ariaLabel
+
   return (
-    <div ref={rootRef} className="pp-select" data-open={open ? '1' : '0'}>
+    <div
+      ref={rootRef}
+      className={`pp-select${iconTrigger ? ' pp-select--iconTrigger' : ''}${disabled ? ' pp-select--disabled' : ''}`}
+      data-open={open ? '1' : '0'}
+    >
       <button
         type="button"
         className={className}
-        aria-label={ariaLabel}
-        title={title}
+        disabled={disabled}
+        aria-label={buttonAriaLabel}
+        title={buttonTitle}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (disabled) return
+          setOpen((v) => !v)
+        }}
+        onDoubleClick={(e) => {
+          if (!onMainButtonDoubleClick || disabled) return
+          e.preventDefault()
+          e.stopPropagation()
+          setOpen(false)
+          onMainButtonDoubleClick()
+        }}
       >
-        {activeLabel}
+        {iconTrigger ? renderButtonContent!({ activeLabel, value }) : activeLabel}
       </button>
-      {open ? (
+      {open && !disabled ? (
         <div className="pp-select__menu" role="listbox" aria-label={ariaLabel || placeholder}>
           {options.map((opt) => {
             const selected = opt.value === value
@@ -1554,6 +1823,165 @@ function PromptPanelDropdown({
     </div>
   )
 }
+
+/** 音乐微调弹窗：与 `PromptPanelDropdown` / `.pp-select` 深色菜单一致（避免原生 select 系统浅色弹层） */
+const MUSIC_FINE_TUNE_DURATION_DROPDOWN_OPTIONS: PromptPanelDropdownOption[] =
+  MUSIC_DURATION_MINUTES_OPTIONS.map((m) => ({ value: String(m), label: `${m} 分钟` }))
+const MUSIC_FINE_TUNE_TS_DROPDOWN_OPTIONS: PromptPanelDropdownOption[] = MUSIC_TIMESIGNATURE_OPTIONS.map((t) => ({
+  value: t,
+  label: t,
+}))
+const MUSIC_FINE_TUNE_LANG_DROPDOWN_OPTIONS: PromptPanelDropdownOption[] = MUSIC_LANGUAGE_OPTIONS.map((o) => ({
+  value: o.value,
+  label: o.label,
+}))
+const MUSIC_FINE_TUNE_KEY_DROPDOWN_OPTIONS: PromptPanelDropdownOption[] = MUSIC_KEYSCALE_OPTIONS.map((k) => ({
+  value: k,
+  label: k,
+}))
+
+const CLOUD_IMAGE_RESOLUTION_PANEL_OPTIONS: PromptPanelDropdownOption[] = [
+  { value: '1k', label: '1K' },
+  { value: '2k', label: '2K' },
+]
+
+/** 比例/画幅：四角取景框（与常见「尺寸」示意一致） */
+function CloudAspectGlyph() {
+  return <Frame size={18} strokeWidth={2.15} className="studio-music-prompt-panel__cloudPickSvg" aria-hidden />
+}
+
+/** 分辨率：侧方镜头机身（与常见「相机/清晰度」示意一致）；2K 略加粗并强调色 */
+function CloudResolutionGlyph({ tier }: { tier: CloudImageResolutionTier }) {
+  return (
+    <Camera
+      size={18}
+      strokeWidth={tier === '2k' ? 2.4 : 2.1}
+      className={`studio-music-prompt-panel__cloudPickSvg${tier === '2k' ? ' studio-music-prompt-panel__cloudPickSvg--emph' : ''}`}
+      aria-hidden
+    />
+  )
+}
+
+/**
+ * TD「参考音与角色名」：草稿只在子树内 setState，避免每键触发 StudioCanvasInner 全量重绘与防抖写节点导致的闪屏。
+ */
+const StudioTdRefRoleModalPortal = memo(function StudioTdRefRoleModalPortal(props: {
+  slotLabels: string[]
+  seedRows: Array<{ roleName: string }>
+  left: number
+  top: number
+  width: number
+  onCommit: (rows: ComfyTdRefAudioRoleRow[]) => void
+  /** 供父组件在强制关窗（如切换选中节点）时仍能落盘当前输入 */
+  persistRef?: MutableRefObject<(() => ComfyTdRefAudioRoleRow[]) | null>
+}) {
+  const { slotLabels, seedRows, left, top, width, onCommit, persistRef } = props
+  const [draft, setDraft] = useState<Array<{ roleName: string }>>(() =>
+    slotLabels.map((_, i) => ({
+      roleName: String(seedRows[i]?.roleName ?? ''),
+    })),
+  )
+
+  useEffect(() => {
+    if (!persistRef) return
+    persistRef.current = () =>
+      draft.map((r) => ({
+        roleName: String(r.roleName ?? ''),
+      }))
+    return () => {
+      persistRef.current = null
+    }
+  }, [draft, persistRef])
+
+  const handleSaveOrExit = () => {
+    onCommit(
+      draft.map((r) => ({
+        roleName: String(r.roleName ?? ''),
+      })),
+    )
+  }
+
+  return createPortal(
+    <div
+      className="studio-vt8-modal-shell nodrag nopan"
+      style={{
+        position: 'fixed',
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${width}px`,
+        height: 'min(560px, 70vh)',
+        zIndex: 12200,
+      }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="studio-vt8-modal">
+        <div className="studio-vt8-modal__top">
+          <span className="studio-vt8-modal__title">参考音与角色名</span>
+          <div className="studio-vt8-modal__toolbar">
+            <button
+              type="button"
+              className="studio-vt8-modal__toolbtn studio-vt8-modal__toolbtn--primary"
+              onClick={handleSaveOrExit}
+            >
+              保存
+            </button>
+            <button
+              type="button"
+              className="studio-vt8-modal__toolbtn"
+              onClick={() => {
+                setDraft(slotLabels.map(() => ({ roleName: '' })))
+              }}
+            >
+              清空
+            </button>
+            <button type="button" className="studio-vt8-modal__toolbtn" onClick={handleSaveOrExit}>
+              退出
+            </button>
+          </div>
+        </div>
+        <div className="studio-vt8-modal__body">
+          <div className="studio-vt8-modal__scroll">
+            <div className="studio-vt8-modal__th studio-vt8-modal__th--td-ref" aria-hidden>
+              <span>参考音槽</span>
+              <span>对应姓名（台本角色名）</span>
+            </div>
+            {slotLabels.map((slotLabel, rowIdx) => (
+              <div
+                key={`td-ref-${rowIdx}-${slotLabel}`}
+                className="studio-vt8-modal__tr studio-vt8-modal__tr--td-ref"
+              >
+                <div className="studio-vt8-modal__cell" title="与执行时上传顺序一致">
+                  {slotLabel.trim() ? (
+                    slotLabel
+                  ) : (
+                    <span className="studio-vt8-modal__placeholder">—</span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  className="studio-vt8-modal__field"
+                  aria-label={`第 ${rowIdx + 1} 路参考音对应角色名`}
+                  value={String(draft[rowIdx]?.roleName ?? '')}
+                  placeholder="与台本「角色名:」一致"
+                  onChange={(e) => {
+                    const v = e.target.value
+                    setDraft((prev) => {
+                      const next = prev.slice()
+                      while (next.length <= rowIdx) next.push({ roleName: '' })
+                      next[rowIdx] = { roleName: v }
+                      return next
+                    })
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+})
 
 /**
  * 画布与顶栏、节点面板的组合体（需在 ReactFlowProvider 内）。
@@ -1923,10 +2351,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const [canvasAddMenu, setCanvasAddMenu] = useState<{
     left: number
     top: number
+    /** 双击画布时的流坐标；与 pending ref 分离，避免 mousedown 先关菜单时 ref 被清空导致节点落到「窗口中心 + 网格偏移」。 */
+    flowPosition: XYPosition
   } | null>(null)
   const [connectAddMenu, setConnectAddMenu] = useState<{
     left: number
     top: number
+    flowPosition: XYPosition
   } | null>(null)
   /** 节点右键菜单：复制、粘贴、（多选）编组、执行/全部执行、新增节点、删除（单选隐藏编组；删除始终在最下） */
   const [multiSelectContextMenu, setMultiSelectContextMenu] = useState<{
@@ -1936,6 +2367,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     /** true：子菜单在主菜单右侧；false：子菜单在主菜单左侧（贴边自适应） */
     preferSubmenuRight: boolean
   } | null>(null)
+  /** 右键「角度控制」：单选图片/视频时打开 Multiangle 浮层（位置随节点与视口变化，距节点 20px） */
+  const [multianglePanel, setMultianglePanel] = useState<{ nodeId: string } | null>(null)
+  /** 窗口 resize 时递增，驱动角度面板锚点 `useMemo` 重算 */
+  const [multiangleLayoutBump, setMultiangleLayoutBump] = useState(0)
   /** 子菜单 hover 关闭延迟：避免主菜单与子菜单之间的缝隙触发误关 */
   const submenuCloseTimerRef = useRef<number | null>(null)
 
@@ -2018,6 +2453,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     runNodeWorkflow,
     workflowSnapshot,
   } = useWorkflowIntegration()
+  const marqueeSelectionKeyCode = useMemo(() => {
+    const k = normalizeMarqueeSelectionKey(shortcuts.bindings.marqueeSelect)
+    return [k] as Array<'Shift' | 'Alt'>
+  }, [shortcuts.bindings.marqueeSelect])
   const {
     assets,
     historyItems,
@@ -2090,16 +2529,17 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (!n) return ''
     const d = n.data as StudioNodeData
     const k = d.kind
-    const cfg = nodeConfigs[k]
+    const cfg = k !== 'group' ? nodeConfigs[k] : undefined
     return JSON.stringify({
       kind: k,
       wf: d.workflowEntryId,
       ppm: d.promptPickerMode,
       cm: d.cloudModelName,
       cu: d.cloudModelUrl,
+      cap: (d as { cloudAssistModelPick?: string }).cloudAssistModelPick,
       mdl: 'model' in d ? (d as { model?: string }).model : undefined,
       cfgSwf: cfg?.selectedWorkflowId,
-      cfgWfs: (cfg?.workflows ?? []).map((w) => `${w.id}\t${w.name}`).join('|'),
+      cfgWfs: (cfg?.workflows ?? []).map((w: { id: string; name: string }) => `${w.id}\t${w.name}`).join('|'),
       cfgCloud: `${String(cfg?.cloudModelName || '')}\t${String(cfg?.cloudModelUrl || '')}`,
       sv: {
         em: workflowSnapshot.executionMode,
@@ -2111,7 +2551,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     })
   }, [nodes, selectedNodeId, nodeConfigs, workflowSnapshot])
 
-  /** 选中节点变化或工作流/模型变化时，拉取与预扣一致的积分预估，写入节点 `pointsReserveHint`（底部提示框等使用，不在节点角标展示） */
+  /**
+   * 选中节点变化或工作流/模型变化时，拉取与预扣一致的积分预估，写入节点 `pointsReserveHint`（底部提示框等使用，不在节点角标展示）。
+   * 仅云端 ComfyUI 工作流会请求 /quote；本地 Comfy 无积分预扣，不请求并清空提示。
+   */
   useEffect(() => {
     const clearAllHints = () => {
       setNodes((nds) => {
@@ -2142,7 +2585,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
     const node = getNodes().find((x) => x.id === selectedNodeId) as Node<StudioNodeData> | undefined
     const kind = node?.data?.kind
-    if (!node || kind === 'group' || kind === 'panorama') {
+    if (!node || kind === 'group' || kind === 'panorama' || kind === 'imageCompare') {
       setNodes((nds) =>
         nds.map((n) => {
           if (n.id !== selectedNodeId) return n
@@ -2170,6 +2613,30 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     try {
       params = buildPointsReserveParams(node, workflowSnapshot, {})
     } catch {
+      return
+    }
+
+    /** 云端 OpenAI 兼容「模型」模式不计积分，与预扣接口一致不在此请求 quote */
+    if (params.executionTarget === 'model') {
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== selectedNodeId) return n
+          if ((n.data as { pointsReserveHint?: number }).pointsReserveHint == null) return n
+          return { ...n, data: { ...n.data, pointsReserveHint: undefined } }
+        }),
+      )
+      return
+    }
+
+    /** 本地 ComfyUI 工作流不参与积分预扣，/quote 亦无意义（避免底部出现「积分 0」） */
+    if (executionProvider !== 'cloud') {
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== selectedNodeId) return n
+          if ((n.data as { pointsReserveHint?: number }).pointsReserveHint == null) return n
+          return { ...n, data: { ...n.data, pointsReserveHint: undefined } }
+        }),
+      )
       return
     }
 
@@ -2203,7 +2670,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     return () => {
       cancelled = true
     }
-  }, [selectedNodeId, selectedNodeQuoteSourceKey, workflowSnapshot, getNodes, setNodes])
+  }, [executionProvider, selectedNodeId, selectedNodeQuoteSourceKey, workflowSnapshot, getNodes, setNodes])
 
   /**
    * 启动顺序：若存在「桌面 JSON 路径 / 浏览器绑定工程文件」则优先加载并写回默认槽；
@@ -2322,8 +2789,89 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
   /** 底部提示框是否放大布局（参考外部产品的大输入区）。 */
   const [promptPanelExpanded, setPromptPanelExpanded] = useState(false)
-  /** 文本节点「自动拆分」下拉：选完后重置 key，便于再次选择同一项。 */
-  const [textSplitSelectKey, setTextSplitSelectKey] = useState(0)
+  /** 当前 Comfy 工作流是否含对应占位符，用于展示比例/风格行 */
+  const [promptPanelComfyWorkflowOpts, setPromptPanelComfyWorkflowOpts] = useState<{
+    size: boolean
+    style: boolean
+  }>({ size: false, style: false })
+  /** 文本 Comfy 模板是否含 __SYSTEM_PROMPT__，用于侧栏展示系统提示词编辑区 */
+  const [promptPanelTextSystemPromptSlot, setPromptPanelTextSystemPromptSlot] = useState(false)
+  const [textPanelSystemPromptDraft, setTextPanelSystemPromptDraft] = useState('')
+  /** 当前 Comfy 工作流关联的「我的示例工程」弹层 */
+  const [cloudWorkflowExampleModalOpen, setCloudWorkflowExampleModalOpen] = useState(false)
+  const [cloudWorkflowExampleListTick, setCloudWorkflowExampleListTick] = useState(0)
+  const [cloudWorkflowExampleModalEntries, setCloudWorkflowExampleModalEntries] = useState<
+    CloudWorkflowExampleEntry[]
+  >([])
+  const promptPanelComfyWorkflowHint = useMemo(() => {
+    const parts: string[] = []
+    if (promptPanelComfyWorkflowOpts.size) {
+      parts.push('含 __WIDTH__/__HEIGHT__ 时可在上方调整输出比例')
+    }
+    if (promptPanelComfyWorkflowOpts.style) {
+      parts.push('含 __STYLE_TONE__ 时可在上方选择风格色调')
+    }
+    return parts.length ? ` 当前工作流${parts.join('；')}。` : ''
+  }, [promptPanelComfyWorkflowOpts])
+  /** 8 路 FB 多人无参：侧栏角色/音色表 */
+  const [promptPanelVoiceTable8, setPromptPanelVoiceTable8] = useState<{
+    show: boolean
+    scanned: boolean
+  }>({ show: false, scanned: false })
+  /** TD 有参多人：参考音槽 ↔ MultiDialog 角色名 */
+  const [promptPanelTdRefRoleMap, setPromptPanelTdRefRoleMap] = useState<{
+    show: boolean
+    scanned: boolean
+  }>({ show: false, scanned: false })
+  /** 「台本信息」弹窗：双击单元格编辑；保存写入节点 */
+  const [voiceTable8ModalOpen, setVoiceTable8ModalOpen] = useState(false)
+  const [voiceTable8Draft, setVoiceTable8Draft] = useState<ComfyVoiceTableRow[]>([])
+  const [voiceTable8Editing, setVoiceTable8Editing] = useState<{
+    row: number
+    field: 'roleName' | 'sampleLine' | 'voiceInstruct'
+  } | null>(null)
+  /** 台本信息：批量粘贴 `角色###台词###声音` 解析用 */
+  const [voiceTable8BulkPasteDraft, setVoiceTable8BulkPasteDraft] = useState('')
+  const voiceTable8DraftRef = useRef<ComfyVoiceTableRow[]>([])
+  const voiceTable8ModalTargetIdRef = useRef<string | null>(null)
+  const voiceTable8ModalWasOpenRef = useRef(false)
+  voiceTable8DraftRef.current = voiceTable8Draft
+  const [tdRefRoleModalOpen, setTdRefRoleModalOpen] = useState(false)
+  const [tdRefRoleModalKey, setTdRefRoleModalKey] = useState(0)
+  const [tdRefRoleModalSeedRows, setTdRefRoleModalSeedRows] = useState<Array<{ roleName: string }>>([])
+  const [tdRefRoleSlotLabels, setTdRefRoleSlotLabels] = useState<string[]>([])
+  const tdRefRoleModalTargetIdRef = useRef<string | null>(null)
+  const tdRefRolePersistRef = useRef<(() => ComfyTdRefAudioRoleRow[]) | null>(null)
+  const tdRefRoleModalOpenRef = useRef(false)
+  tdRefRoleModalOpenRef.current = tdRefRoleModalOpen
+  /** 音乐节点 Comfy 参数「微调」弹窗 */
+  const [musicFineTuneModalOpen, setMusicFineTuneModalOpen] = useState(false)
+  const [musicFineTuneDraft, setMusicFineTuneDraft] = useState<MusicFineTuneDraft>(DEFAULT_MUSIC_FINE_TUNE_DRAFT)
+  const musicFineTuneModalTargetIdRef = useRef<string | null>(null)
+  /** 点击「符号拆分」后展开菜单，选择 ### 或 /// 再执行拆分 */
+  const [symbolSplitMenuOpen, setSymbolSplitMenuOpen] = useState(false)
+  const symbolSplitMenuRootRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    if (!symbolSplitMenuOpen) return
+    const onDown = (event: MouseEvent | TouchEvent) => {
+      const el = symbolSplitMenuRootRef.current
+      if (!el) return
+      if (event.target instanceof Node && el.contains(event.target)) return
+      setSymbolSplitMenuOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSymbolSplitMenuOpen(false)
+    }
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('touchstart', onDown, true)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('touchstart', onDown, true)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [symbolSplitMenuOpen])
   /** 正在轮询中的云端 taskId，避免重复拉状态。 */
   const cloudTaskPollingIdsRef = useRef(new Set<string>())
   /** 防重复提交：同一节点任务运行中再次点击执行直接拦截。 */
@@ -2434,19 +2982,20 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const visiblePromptPanel = shouldShowPromptPanel ? promptPanel : null
   const visiblePromptPanelLayout = shouldShowPromptPanel ? promptPanelLayout : null
 
-  /** 与节点角标同源：来自 apiPointsQuote，展示在提示框执行按钮左侧 */
+  /** 与预扣一致：仅云端 ComfyUI 工作流展示积分预估（本地执行不显示） */
   const promptPanelFootPointsHint = useMemo(() => {
     if (!visiblePromptPanel) return null
+    if (executionProvider !== 'cloud') return null
     const fresh = nodes.find((n) => n.id === visiblePromptPanel.node.id)
     const h = fresh ? (fresh.data as { pointsReserveHint?: number }).pointsReserveHint : undefined
     return typeof h === 'number' && Number.isFinite(h) ? h : null
-  }, [nodes, visiblePromptPanel])
+  }, [executionProvider, nodes, visiblePromptPanel])
 
   const promptPanelMentionImages = useMemo(() => {
     if (!visiblePromptPanel) return []
     const { node, kind } = visiblePromptPanel
     const sortByRefOrder = (items: Array<{ mention: string; url: string }>) => {
-      if (!(kind === 'image' || kind === 'video' || kind === 'audio')) return items
+      if (!(kind === 'image' || kind === 'video' || kind === 'audio' || kind === 'music')) return items
       const refs =
         kind === 'image'
           ? (node.data as ImageNodeData).referenceImageSources ?? []
@@ -2514,21 +3063,50 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   }, [promptPanel])
 
   const [cloudWorkflowMetaList, setCloudWorkflowMetaList] = useState<CloudWorkflowMeta[]>([])
+  const [assistCatalog, setAssistCatalog] = useState<CloudAssistCatalog>(() => emptyCloudAssistCatalog())
 
   useEffect(() => {
-    if (executionProvider !== 'cloud') {
-      setCloudWorkflowMetaList([])
-      return
-    }
     let cancelled = false
-    void (async () => {
-      const list = await fetchCloudWorkflowsMeta()
-      if (!cancelled) setCloudWorkflowMetaList(list)
-    })()
+    const loadAssist = async () => {
+      try {
+        const c = await fetchCloudAssistModelCatalog()
+        if (!cancelled) setAssistCatalog(c)
+      } catch {
+        if (!cancelled) setAssistCatalog(emptyCloudAssistCatalog())
+      }
+    }
+    void loadAssist()
+    const onAssistRefresh = () => void loadAssist()
+    window.addEventListener('flowid:license-changed', onAssistRefresh as EventListener)
+    window.addEventListener('flowid:cloud-assist-catalog-changed', onAssistRefresh as EventListener)
+    window.addEventListener('flowid:cloud-assist-keys-changed', onAssistRefresh as EventListener)
     return () => {
       cancelled = true
+      window.removeEventListener('flowid:license-changed', onAssistRefresh as EventListener)
+      window.removeEventListener('flowid:cloud-assist-catalog-changed', onAssistRefresh as EventListener)
+      window.removeEventListener('flowid:cloud-assist-keys-changed', onAssistRefresh as EventListener)
     }
-  }, [executionProvider])
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      const base = String(loadLicenseServerConfig().baseUrl || '').trim()
+      if (!base) {
+        if (!cancelled) setCloudWorkflowMetaList([])
+        return
+      }
+      const list = await fetchCloudWorkflowsMeta()
+      if (!cancelled) setCloudWorkflowMetaList(list)
+    }
+    void load()
+    const onLic = () => void load()
+    window.addEventListener('flowid:license-changed', onLic as EventListener)
+    return () => {
+      cancelled = true
+      window.removeEventListener('flowid:license-changed', onLic as EventListener)
+    }
+  }, [])
 
   /** 底部提示框工作流下拉：云端 Comfy 仅展示授权服务维护的云端工作流；本地仍用设置里的列表 */
   const promptPanelWorkflowDropdownOptions = useMemo((): PromptPanelDropdownOption[] => {
@@ -2555,32 +3133,88 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     return fallback.map((name) => ({ value: name, label: name }))
   }, [cloudWorkflowMetaList, executionProvider, nodeConfigs, promptPanel])
 
+  /** 仅含 __CAM_H__ 等占位符的 Comfy 工作流（及云端对应条目）才展示角度控制相关 UI */
+  const promptPanelSupportsMultiangle = useMemo(() => {
+    if (!visiblePromptPanel) return false
+    const k = visiblePromptPanel.kind
+    if (k !== 'image' && k !== 'video') return false
+    const fresh = nodes.find((n) => n.id === visiblePromptPanel.node.id)
+    if (!fresh) return false
+    return nodeSupportsMultiangleAngleControl({
+      kind: k,
+      nodeData: fresh.data as ImageNodeData | VideoNodeData,
+      executionProvider,
+      cloudWorkflowMetaList,
+      nodeConfigs,
+    })
+  }, [visiblePromptPanel, nodes, executionProvider, cloudWorkflowMetaList, nodeConfigs])
+
   const promptPanelModelOptions = useMemo(() => {
     if (!promptPanel) return [] as PromptPanelDropdownOption[]
+    const pk = promptPanel.kind
     const presets = loadCloudSelfPresets().filter((p) => {
       const nk = String((p as any)?.nodeKind || '').trim()
-      return !nk || nk === promptPanel.kind
+      return !nk || nk === pk
     })
-    const base = presets.map((item) => ({
+    const base: PromptPanelDropdownOption[] = presets.map((item) => ({
       value: item.id,
-      label: `${item.model}`,
+      label: String(item.model || '').trim() || item.id,
     }))
+    const assistKind = studioNodeKindToAssistKind(pk)
+    if (assistKind) {
+      const rows = assistCatalog.kinds[assistKind] || []
+      for (const ep of rows) {
+        for (const model of ep.models) {
+          const m = String(model || '').trim()
+          if (!m) continue
+          base.push({
+            value: encodeCloudAssistModelPick(ep.id, m),
+            label: m,
+          })
+        }
+      }
+    }
+    const assistPick = String((promptPanel.node.data as any)?.cloudAssistModelPick || '').trim()
+    if (assistPick && tryDecodeCloudAssistModelPick(assistPick) && !base.some((b) => b.value === assistPick)) {
+      const dec = tryDecodeCloudAssistModelPick(assistPick)!
+      const m = String(dec.model || '').trim()
+      if (m)
+        base.unshift({
+          value: assistPick,
+          label: m,
+        })
+    }
     const current = String((promptPanel.node.data as any)?.cloudModelName || '').trim()
     if (current && !base.some((i) => i.label === current)) {
       base.unshift({ value: 'custom-current', label: current })
     }
-    // 不展示“自定义”入口：只显示预设模型 +（若当前值不在预设中）当前模型名
-    return base
-  }, [nodeConfigs, promptPanel])
+    /** 多条线路同名模型时，下拉仅展示模型名会重复，用 (2)(3) 区分 */
+    const labelCount = new Map<string, number>()
+    for (const o of base) {
+      labelCount.set(o.label, (labelCount.get(o.label) || 0) + 1)
+    }
+    const labelSeq = new Map<string, number>()
+    const deduped = base.map((o) => {
+      const n = labelCount.get(o.label) || 0
+      if (n <= 1) return o
+      const seq = (labelSeq.get(o.label) || 0) + 1
+      labelSeq.set(o.label, seq)
+      return seq === 1 ? o : { ...o, label: `${o.label} (${seq})` }
+    })
+    return deduped
+  }, [assistCatalog, nodeConfigs, promptPanel])
 
   const promptPanelModelSelectValue = useMemo(() => {
     if (!promptPanel) return ''
+    const assistPick = String((promptPanel.node.data as any)?.cloudAssistModelPick || '').trim()
+    if (assistPick && tryDecodeCloudAssistModelPick(assistPick)) return assistPick
     const savedId = String((promptPanel.node.data as any)?.cloudSelfPresetId || '').trim()
     if (savedId) return savedId
+    const pk = promptPanel.kind
     const current = String((promptPanel.node.data as any)?.cloudModelName || '').trim()
     const presets = loadCloudSelfPresets().filter((p) => {
       const nk = String((p as any)?.nodeKind || '').trim()
-      return !nk || nk === promptPanel.kind
+      return !nk || nk === pk
     })
     const found = presets.find((i) => i.model === current)
     if (found) return found.id
@@ -2624,6 +3258,316 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     promptPanelWorkflowDropdownOptions,
   ])
 
+  /** 底部面板「工作流示例」存储键：云端为条目 id，本地为工作流条目 id */
+  const promptPanelExampleWorkflowKey = useMemo(() => {
+    if (!promptPanel) return ''
+    if (executionMode !== 'custom' || promptPanelPickerMode !== 'workflow') return ''
+    const data = promptPanel.node.data as { workflowEntryId?: string }
+    if (executionProvider === 'cloud') {
+      return (
+        String(data.workflowEntryId || '').trim() || String(promptPanelWorkflowSelectValue || '').trim()
+      )
+    }
+    return String(data.workflowEntryId || '').trim()
+  }, [
+    promptPanel,
+    executionMode,
+    promptPanelPickerMode,
+    executionProvider,
+    promptPanelWorkflowSelectValue,
+  ])
+
+  const exampleWorkflowPanelLabel = useMemo(() => {
+    if (!promptPanelExampleWorkflowKey || !promptPanel) return ''
+    if (executionProvider === 'cloud') {
+      const hit = cloudWorkflowMetaList.find((w) => w.id === promptPanelExampleWorkflowKey)
+      return hit?.name || promptPanelExampleWorkflowKey
+    }
+    const list = nodeConfigs[promptPanel.kind].workflows
+    const hit = list.find((w) => w.id === promptPanelExampleWorkflowKey)
+    return hit?.name || promptPanelExampleWorkflowKey
+  }, [
+    cloudWorkflowMetaList,
+    executionProvider,
+    nodeConfigs,
+    promptPanel,
+    promptPanelExampleWorkflowKey,
+  ])
+
+  useEffect(() => {
+    if (!cloudWorkflowExampleModalOpen || !promptPanelExampleWorkflowKey) {
+      setCloudWorkflowExampleModalEntries([])
+      return
+    }
+    setCloudWorkflowExampleModalEntries(listCloudWorkflowExamples(promptPanelExampleWorkflowKey))
+  }, [cloudWorkflowExampleModalOpen, promptPanelExampleWorkflowKey, cloudWorkflowExampleListTick])
+
+  const textPanelSystemPromptWorkflowKey = useMemo(() => {
+    if (!promptPanel || promptPanel.kind !== 'text') return ''
+    if (executionMode !== 'custom' || promptPanelPickerMode !== 'workflow') return ''
+    const data = promptPanel.node.data as { workflowEntryId?: string }
+    if (executionProvider === 'cloud') {
+      return (
+        String(data.workflowEntryId || '').trim() ||
+        String(promptPanelWorkflowSelectValue || '').trim()
+      )
+    }
+    return String(data.workflowEntryId || '').trim()
+  }, [
+    promptPanel,
+    executionMode,
+    promptPanelPickerMode,
+    executionProvider,
+    promptPanelWorkflowSelectValue,
+  ])
+
+  const savedTextPanelSystemPrompt =
+    textPanelSystemPromptWorkflowKey &&
+    nodeConfigs.text.cloudWorkflowSystemPrompts?.[textPanelSystemPromptWorkflowKey]
+
+  useEffect(() => {
+    if (!textPanelSystemPromptWorkflowKey) return
+    setTextPanelSystemPromptDraft(String(savedTextPanelSystemPrompt ?? ''))
+  }, [textPanelSystemPromptWorkflowKey, savedTextPanelSystemPrompt])
+
+  useEffect(() => {
+    const panel = promptPanel
+    if (!panel || panel.kind !== 'text') {
+      setPromptPanelTextSystemPromptSlot(false)
+      return
+    }
+    if (executionMode !== 'custom' || promptPanelPickerMode !== 'workflow') {
+      setPromptPanelTextSystemPromptSlot(false)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        let jsonText = ''
+        if (executionProvider === 'cloud') {
+          const eid =
+            String((panel.node.data as { workflowEntryId?: string }).workflowEntryId || '').trim() ||
+            String(promptPanelWorkflowSelectValue || '').trim()
+          const cfg = nodeConfigs.text
+          const rawOv = eid ? cfg.cloudWorkflowOverrides?.[eid] : undefined
+          if (rawOv && typeof rawOv === 'object' && String(rawOv.jsonText || '').trim()) {
+            jsonText = String(rawOv.jsonText)
+          } else if (rawOv && typeof rawOv === 'string' && rawOv.trim()) {
+            jsonText = rawOv.trim()
+          } else if (eid) {
+            const r = await fetchCloudWorkflowJson(eid)
+            if (cancelled) return
+            jsonText = r.workflowJson || ''
+          }
+        } else {
+          const { picked } = matchStudioNodeWorkflow(
+            panel.node.data as { model?: string; workflowEntryId?: string },
+            nodeConfigs.text,
+          )
+          jsonText =
+            String(picked?.jsonText || '').trim() || String(nodeConfigs.text.workflowJsonText || '').trim()
+        }
+        if (cancelled) return
+        setPromptPanelTextSystemPromptSlot(workflowJsonUsesSystemPromptPlaceholder(jsonText))
+      } catch {
+        if (!cancelled) setPromptPanelTextSystemPromptSlot(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    executionMode,
+    executionProvider,
+    nodeConfigs.text,
+    promptPanel,
+    promptPanelPickerMode,
+    promptPanelWorkflowSelectValue,
+  ])
+
+  useEffect(() => {
+    const panel = promptPanel
+    if (!panel || (panel.kind !== 'image' && panel.kind !== 'video')) {
+      setPromptPanelComfyWorkflowOpts({ size: false, style: false })
+      return
+    }
+    if (promptPanelPickerMode !== 'workflow' || executionMode !== 'custom') {
+      setPromptPanelComfyWorkflowOpts({ size: false, style: false })
+      return
+    }
+    const kind = panel.kind
+    let cancelled = false
+    void (async () => {
+      try {
+        let jsonText = ''
+        if (executionProvider === 'cloud') {
+          const eid =
+            String((panel.node.data as { workflowEntryId?: string }).workflowEntryId || '').trim() ||
+            String(promptPanelWorkflowSelectValue || '').trim()
+          const cfg = nodeConfigs[kind]
+          const rawOv = eid ? cfg.cloudWorkflowOverrides?.[eid] : undefined
+          if (rawOv && typeof rawOv === 'object' && String(rawOv.jsonText || '').trim()) {
+            jsonText = String(rawOv.jsonText)
+          } else if (rawOv && typeof rawOv === 'string' && rawOv.trim()) {
+            jsonText = rawOv.trim()
+          } else if (eid) {
+            const r = await fetchCloudWorkflowJson(eid)
+            if (cancelled) return
+            jsonText = r.workflowJson || ''
+          }
+        } else {
+          const { picked } = matchStudioNodeWorkflow(
+            panel.node.data as { model?: string; workflowEntryId?: string },
+            nodeConfigs[kind],
+          )
+          jsonText =
+            String(picked?.jsonText || '').trim() || String(nodeConfigs[kind].workflowJsonText || '').trim()
+        }
+        if (cancelled) return
+        setPromptPanelComfyWorkflowOpts({
+          size: workflowJsonSupportsComfySizePlaceholders(jsonText),
+          style: workflowJsonSupportsComfyStyleTonePlaceholder(jsonText),
+        })
+      } catch {
+        if (!cancelled) setPromptPanelComfyWorkflowOpts({ size: false, style: false })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    executionMode,
+    executionProvider,
+    nodeConfigs.image,
+    nodeConfigs.video,
+    promptPanel,
+    promptPanelPickerMode,
+    promptPanelWorkflowSelectValue,
+  ])
+
+  useEffect(() => {
+    const panel = promptPanel
+    if (!panel || panel.kind !== 'audio') {
+      setPromptPanelVoiceTable8({ show: false, scanned: false })
+      setPromptPanelTdRefRoleMap({ show: false, scanned: false })
+      return
+    }
+    if (promptPanelPickerMode !== 'workflow') {
+      setPromptPanelVoiceTable8({ show: false, scanned: false })
+      setPromptPanelTdRefRoleMap({ show: false, scanned: false })
+      return
+    }
+    const kind = 'audio' as const
+    let cancelled = false
+    setPromptPanelVoiceTable8({ show: false, scanned: false })
+    setPromptPanelTdRefRoleMap({ show: false, scanned: false })
+    void (async () => {
+      try {
+        let jsonText = ''
+        if (executionProvider === 'cloud') {
+          const eid =
+            String((panel.node.data as { workflowEntryId?: string }).workflowEntryId || '').trim() ||
+            String(promptPanelWorkflowSelectValue || '').trim()
+          const cfg = nodeConfigs[kind]
+          const rawOv = eid ? cfg.cloudWorkflowOverrides?.[eid] : undefined
+          if (rawOv && typeof rawOv === 'object' && String(rawOv.jsonText || '').trim()) {
+            jsonText = String(rawOv.jsonText)
+          } else if (rawOv && typeof rawOv === 'string' && rawOv.trim()) {
+            jsonText = rawOv.trim()
+          } else if (eid) {
+            const r = await fetchCloudWorkflowJson(eid)
+            if (cancelled) return
+            jsonText = r.workflowJson || ''
+          }
+        } else {
+          const { picked } = matchStudioNodeWorkflow(
+            panel.node.data as { model?: string; workflowEntryId?: string },
+            nodeConfigs[kind],
+          )
+          jsonText =
+            String(picked?.jsonText || '').trim() || String(nodeConfigs[kind].workflowJsonText || '').trim()
+        }
+        if (cancelled) return
+        setPromptPanelVoiceTable8({
+          show: workflowJsonSupportsVoiceTable8Slots(jsonText),
+          scanned: true,
+        })
+        setPromptPanelTdRefRoleMap({
+          show: workflowJsonSupportsTdRefAudioRoleMap(jsonText),
+          scanned: true,
+        })
+      } catch {
+        if (!cancelled) {
+          setPromptPanelVoiceTable8({ show: false, scanned: true })
+          setPromptPanelTdRefRoleMap({ show: false, scanned: true })
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [executionProvider, nodeConfigs.audio, promptPanel, promptPanelPickerMode, promptPanelWorkflowSelectValue])
+
+  const voiceTable8ModalPosition = useMemo(() => {
+    if (!voiceTable8ModalOpen || !promptPanel || promptPanel.kind !== 'audio') return null
+    const n = promptPanel.node
+    const vp = viewport
+    const zoom = vp.zoom || 1
+    const nodeWidth = Number(n.measured?.width ?? n.width ?? n.style?.width ?? 430)
+    const nodeLeft = n.position.x * zoom + vp.x
+    const nodeRight = nodeLeft + nodeWidth * zoom
+    const nodeTop = n.position.y * zoom + vp.y
+    const gap = 20
+    const modalWidth = Math.min(480, Math.max(360, window.innerWidth - 32))
+    let left = nodeRight + gap
+    if (left + modalWidth > window.innerWidth - 8) {
+      left = nodeLeft - modalWidth - gap
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - modalWidth - 8))
+    const top = Math.max(8, Math.min(nodeTop, window.innerHeight - 120))
+    return { left, top, width: modalWidth }
+  }, [voiceTable8ModalOpen, promptPanel, viewport.x, viewport.y, viewport.zoom])
+
+  const tdRefRoleModalPosition = useMemo(() => {
+    if (!tdRefRoleModalOpen || !promptPanel || promptPanel.kind !== 'audio') return null
+    const n = promptPanel.node
+    const vp = viewport
+    const zoom = vp.zoom || 1
+    const nodeWidth = Number(n.measured?.width ?? n.width ?? n.style?.width ?? 430)
+    const nodeLeft = n.position.x * zoom + vp.x
+    const nodeRight = nodeLeft + nodeWidth * zoom
+    const nodeTop = n.position.y * zoom + vp.y
+    const gap = 20
+    const modalWidth = Math.min(480, Math.max(360, window.innerWidth - 32))
+    let left = nodeRight + gap
+    if (left + modalWidth > window.innerWidth - 8) {
+      left = nodeLeft - modalWidth - gap
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - modalWidth - 8))
+    const top = Math.max(8, Math.min(nodeTop, window.innerHeight - 120))
+    return { left, top, width: modalWidth }
+  }, [tdRefRoleModalOpen, promptPanel, viewport.x, viewport.y, viewport.zoom])
+
+  const musicFineTuneModalPosition = useMemo(() => {
+    if (!musicFineTuneModalOpen || !promptPanel || promptPanel.kind !== 'music') return null
+    const n = promptPanel.node
+    const vp = viewport
+    const zoom = vp.zoom || 1
+    const nodeWidth = Number(n.measured?.width ?? n.width ?? n.style?.width ?? 430)
+    const nodeLeft = n.position.x * zoom + vp.x
+    const nodeRight = nodeLeft + nodeWidth * zoom
+    const nodeTop = n.position.y * zoom + vp.y
+    const gap = 20
+    const modalWidth = Math.min(420, Math.max(340, window.innerWidth - 32))
+    let left = nodeRight + gap
+    if (left + modalWidth > window.innerWidth - 8) {
+      left = nodeLeft - modalWidth - gap
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - modalWidth - 8))
+    const top = Math.max(8, Math.min(nodeTop, window.innerHeight - 80))
+    return { left, top, width: modalWidth }
+  }, [musicFineTuneModalOpen, promptPanel, viewport.x, viewport.y, viewport.zoom])
+
   const promptPanelText = useMemo(() => {
     if (!promptPanel) return ''
     if (promptPanel.kind === 'music' || promptPanel.kind === 'audio') {
@@ -2640,6 +3584,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     }
     return ''
   }, [promptPanel])
+
+  /** COMFY 配音侧栏：明确「会参与参考音上传」的 @，与正文里的文字节点 @ 区分 */
+  const promptPanelAudioRefMentionLabels = useMemo(() => {
+    if (!promptPanel || promptPanel.kind !== 'audio') return [] as string[]
+    if (promptPanelPickerMode !== 'workflow') return []
+    return listMentionAudioRefLabelsForNote(promptPanelText, nodes, promptPanel.node.id)
+  }, [promptPanel, promptPanelPickerMode, promptPanelText, nodes])
 
   const unresolvedMentions = useMemo(() => {
     if (!promptPanel) return [] as string[]
@@ -2687,6 +3638,89 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       nodes.filter((node) => node.selected && node.type !== 'ghost' && node.type !== 'group').length,
     [nodes],
   )
+
+  /** 恰好选中 2 个图片节点：右键菜单可提供「新增对比节点」 */
+  const contextMenuImageCompareTwoPick = useMemo(() => {
+    const sel = nodes.filter((n) => n.selected && n.type !== 'ghost' && n.type !== 'group')
+    if (sel.length !== 2) return null
+    if (sel[0]!.data.kind !== 'image' || sel[1]!.data.kind !== 'image') return null
+    return { a: sel[0]!, b: sel[1]! }
+  }, [nodes])
+
+  /** 单选图片/视频且当前选中工作流为 Multiangle 模板：右键菜单显示「角度控制」 */
+  const contextMenuMultiangleTarget = useMemo(() => {
+    const sel = nodes.filter((n) => n.selected && n.type !== 'ghost' && n.type !== 'group')
+    if (sel.length !== 1) return null
+    const k = sel[0].data.kind
+    if (k !== 'image' && k !== 'video') return null
+    const data = sel[0].data as ImageNodeData | VideoNodeData
+    if (
+      !nodeSupportsMultiangleAngleControl({
+        kind: k,
+        nodeData: data,
+        executionProvider,
+        cloudWorkflowMetaList,
+        nodeConfigs,
+      })
+    ) {
+      return null
+    }
+    return { id: sel[0].id, kind: k as 'image' | 'video' }
+  }, [nodes, executionProvider, cloudWorkflowMetaList, nodeConfigs])
+
+  const multiangleTargetNodeId = multianglePanel?.nodeId
+  useEffect(() => {
+    if (!multiangleTargetNodeId) return
+    if (!nodes.some((n) => n.id === multiangleTargetNodeId)) setMultianglePanel(null)
+  }, [nodes, multiangleTargetNodeId])
+
+  useEffect(() => {
+    if (!multianglePanel) return
+    const n = nodes.find((x) => x.id === multianglePanel.nodeId)
+    if (!n || (n.data.kind !== 'image' && n.data.kind !== 'video')) {
+      setMultianglePanel(null)
+      return
+    }
+    const ok = nodeSupportsMultiangleAngleControl({
+      kind: n.data.kind,
+      nodeData: n.data as ImageNodeData | VideoNodeData,
+      executionProvider,
+      cloudWorkflowMetaList,
+      nodeConfigs,
+    })
+    if (!ok) setMultianglePanel(null)
+  }, [multianglePanel, nodes, executionProvider, cloudWorkflowMetaList, nodeConfigs])
+
+  const multiangleNodeLayoutSig = useMemo(() => {
+    const id = multianglePanel?.nodeId
+    if (!id) return ''
+    const n = nodes.find((x) => x.id === id)
+    if (!n) return ''
+    const { width, height } = getNodeSize(n)
+    return `${n.position.x}:${n.position.y}:${width}:${height}:${Boolean(n.hidden)}`
+  }, [multianglePanel?.nodeId, nodes])
+
+  const multianglePanelAnchor = useMemo(() => {
+    if (!multianglePanel) return { left: 0, top: 0 }
+    return computeMultianglePanelAnchorScreen(multianglePanel.nodeId)
+  }, [
+    multianglePanel?.nodeId,
+    viewport.x,
+    viewport.y,
+    viewport.zoom,
+    multiangleNodeLayoutSig,
+    multiangleLayoutBump,
+  ])
+
+  useEffect(() => {
+    if (!multianglePanel) {
+      setMultiangleLayoutBump(0)
+      return
+    }
+    const onResize = () => setMultiangleLayoutBump((n) => n + 1)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [multianglePanel])
 
   useEffect(() => {
     const collapsedMemberIds = new Set<string>()
@@ -2905,6 +3939,81 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     },
     [setNodes, edges],
   )
+
+  const flushVoiceTable8DraftToNode = useCallback(() => {
+    const nid = voiceTable8ModalTargetIdRef.current
+    if (!nid) return
+    updateNodeData(nid, {
+      kind: 'audio',
+      comfyVoiceTableRows: voiceTable8DraftRef.current,
+    } as Partial<StudioNodeData>)
+  }, [updateNodeData])
+
+  const applyVoiceTable8BulkPaste = useCallback(() => {
+    const { rows, skippedLines, truncated } = parseVoiceTableBulkPaste(voiceTable8BulkPasteDraft)
+    if (!rows.length) {
+      window.alert(
+        '未解析到有效行。每行格式：角色名称###代表台词###声音设定。可选第四段###语言（须与语言下拉一致）。代表台词与声音设定中请勿出现 ###。',
+      )
+      return
+    }
+    setVoiceTable8Draft(voiceTableRowsPaddedForUi(rows))
+    setVoiceTable8Editing(null)
+    const msgs: string[] = []
+    if (truncated) msgs.push('超过 8 个角色，已只保留前 8 路')
+    if (skippedLines > 0) msgs.push(`已跳过 ${skippedLines} 行（格式无效）`)
+    if (msgs.length) window.alert(msgs.join('；'))
+  }, [voiceTable8BulkPasteDraft])
+
+  const commitTdRefRoleModalToNode = useCallback(
+    (rows: ComfyTdRefAudioRoleRow[]) => {
+      const nid = tdRefRoleModalTargetIdRef.current
+      if (!nid) return
+      updateNodeData(nid, {
+        kind: 'audio',
+        comfyTdRefAudioRoleRows: rows,
+      } as Partial<StudioNodeData>)
+      tdRefRoleModalTargetIdRef.current = null
+      setTdRefRoleModalOpen(false)
+    },
+    [updateNodeData],
+  )
+
+  useEffect(() => {
+    setVoiceTable8ModalOpen(false)
+    setVoiceTable8Editing(null)
+    if (tdRefRoleModalOpenRef.current) {
+      const snap = tdRefRolePersistRef.current?.()
+      const nid = tdRefRoleModalTargetIdRef.current
+      if (snap && nid) {
+        updateNodeData(nid, {
+          kind: 'audio',
+          comfyTdRefAudioRoleRows: snap,
+        } as Partial<StudioNodeData>)
+      }
+      tdRefRoleModalTargetIdRef.current = null
+    }
+    setTdRefRoleModalOpen(false)
+  }, [selectedNodeId, updateNodeData])
+
+  /** 台本信息：编辑后防抖写入节点，误点外部关闭也不丢 */
+  useEffect(() => {
+    if (!voiceTable8ModalOpen) return
+    const t = window.setTimeout(() => {
+      flushVoiceTable8DraftToNode()
+    }, 320)
+    return () => {
+      window.clearTimeout(t)
+    }
+  }, [voiceTable8Draft, voiceTable8ModalOpen, flushVoiceTable8DraftToNode])
+
+  useEffect(() => {
+    if (voiceTable8ModalWasOpenRef.current && !voiceTable8ModalOpen) {
+      flushVoiceTable8DraftToNode()
+      voiceTable8ModalTargetIdRef.current = null
+    }
+    voiceTable8ModalWasOpenRef.current = voiceTable8ModalOpen
+  }, [voiceTable8ModalOpen, flushVoiceTable8DraftToNode])
 
   /**
    * 迁移旧版「第一路里含 ---PROMPT2---」的存盘到四路字段（仅在 2～4 路仍为空时执行，避免误拆）。
@@ -3258,57 +4367,98 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   }, [closeMentionMenu, promptPanel?.node.id, promptPanel?.kind])
 
   /**
-   * 底部面板：追加多张参考图（仅图片/视频/配音节点；仅接受图片 MIME）。
+   * 底部面板：追加参考素材。图/视频仅收图片；配音/音乐可收多路参考音频（及可选封面图）。
    */
   const appendPanelReferenceImages = useCallback(
     async (list: FileList | readonly File[] | null) => {
       if (!promptPanel) return
-      const files = list
-        ? Array.from(list as ArrayLike<File>).filter((f) => f.type.startsWith('image/'))
-        : []
-      if (!files.length) return
+      const arr = list ? Array.from(list as ArrayLike<File>) : []
+      if (!arr.length) return
       const { node, kind } = promptPanel
       const id = node.id
-      const persisted = await Promise.all(
-        files.map(async (file) => {
-          try {
-            const assetId = await saveLocalImageAsset(file)
-            const restored = await getLocalImageAssetObjectUrl(assetId)
-            return {
-              url: restored || URL.createObjectURL(file),
-              assetId,
+      if (kind === 'image' || kind === 'video') {
+        const files = arr.filter((f) => f.type.startsWith('image/'))
+        if (!files.length) return
+        const persisted = await Promise.all(
+          files.map(async (file) => {
+            try {
+              const assetId = await saveLocalImageAsset(file)
+              const restored = await getLocalImageAssetObjectUrl(assetId)
+              return {
+                url: restored || URL.createObjectURL(file),
+                assetId,
+              }
+            } catch {
+              return {
+                url: URL.createObjectURL(file),
+                assetId: '',
+              }
             }
-          } catch {
-            return {
-              url: URL.createObjectURL(file),
-              assetId: '',
+          }),
+        )
+        const urls = persisted.map((item) => item.url)
+        const assetIds = persisted.map((item) => item.assetId)
+        if (kind === 'image') {
+          const d = node.data as ImageNodeData
+          updateNodeData(id, {
+            kind: 'image',
+            referenceImageSources: [...(d.referenceImageSources ?? []), ...urls],
+            referenceImageAssetIds: [...(d.referenceImageAssetIds ?? []), ...assetIds],
+          })
+        } else {
+          const d = node.data as VideoNodeData
+          updateNodeData(id, {
+            kind: 'video',
+            referenceImageSources: [...(d.referenceImageSources ?? []), ...urls],
+            referenceImageAssetIds: [...(d.referenceImageAssetIds ?? []), ...assetIds],
+          })
+        }
+        return
+      }
+      if (kind === 'audio' || kind === 'music') {
+        const { images, audios } = partitionMediaFilesByKind(arr)
+        if (!images.length && !audios.length) return
+        const urls: string[] = []
+        const assetIds: string[] = []
+        const persisted = await Promise.all(
+          images.map(async (file) => {
+            try {
+              const assetId = await saveLocalImageAsset(file)
+              const restored = await getLocalImageAssetObjectUrl(assetId)
+              return {
+                url: restored || URL.createObjectURL(file),
+                assetId,
+              }
+            } catch {
+              return { url: URL.createObjectURL(file), assetId: '' }
             }
-          }
-        }),
-      )
-      const urls = persisted.map((item) => item.url)
-      const assetIds = persisted.map((item) => item.assetId)
-      if (kind === 'image') {
-        const d = node.data as ImageNodeData
-        updateNodeData(id, {
-          kind: 'image',
-          referenceImageSources: [...(d.referenceImageSources ?? []), ...urls],
-          referenceImageAssetIds: [...(d.referenceImageAssetIds ?? []), ...assetIds],
+          }),
+        )
+        persisted.forEach((p) => {
+          urls.push(p.url)
+          assetIds.push(p.assetId)
         })
-      } else if (kind === 'video') {
-        const d = node.data as VideoNodeData
-        updateNodeData(id, {
-          kind: 'video',
-          referenceImageSources: [...(d.referenceImageSources ?? []), ...urls],
-          referenceImageAssetIds: [...(d.referenceImageAssetIds ?? []), ...assetIds],
+        const audioPersisted = await Promise.all(
+          audios.map(async (file) => {
+            try {
+              const assetId = await saveLocalImageAsset(file)
+              const restored = await getLocalImageAssetObjectUrl(assetId)
+              return { url: restored || URL.createObjectURL(file), assetId }
+            } catch {
+              return { url: URL.createObjectURL(file), assetId: '' }
+            }
+          }),
+        )
+        audioPersisted.forEach((p) => {
+          urls.push(p.url)
+          assetIds.push(p.assetId)
         })
-      } else if (kind === 'audio') {
         const d = node.data as AudioNodeData
         updateNodeData(id, {
-          kind: 'audio',
+          kind: d.kind,
           referenceImageSources: [...(d.referenceImageSources ?? []), ...urls],
           referenceImageAssetIds: [...(d.referenceImageAssetIds ?? []), ...assetIds],
-        })
+        } as Partial<StudioNodeData>)
       }
     },
     [promptPanel, updateNodeData],
@@ -3380,6 +4530,72 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     return out
   }, [])
 
+  const applyVideoFileToNode = useCallback(
+    (nodeId: string, file: File) => {
+      const isVid =
+        file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv|avi|m4v|ogv)$/i.test(file.name)
+      if (!isVid) return
+      const src = URL.createObjectURL(file)
+      setNodes((prev) =>
+        prev.map((n) => {
+          if (n.id !== nodeId || n.data.kind !== 'video') return n
+          const d = n.data as VideoNodeData
+          return {
+            ...n,
+            data: {
+              ...d,
+              src,
+              srcFileName: file.name,
+              srcDiskPath: undefined,
+              srcAssetId: undefined,
+            } as StudioNodeData,
+          }
+        }),
+      )
+      appendHistory(`已写入节点：${file.name}`)
+    },
+    [appendHistory, setNodes],
+  )
+
+  const applyAudioFileToNode = useCallback(
+    async (nodeId: string, file: File) => {
+      const isAud =
+        file.type.startsWith('audio/') ||
+        /\.(mp3|wav|m4a|aac|flac|ogg|opus|wma|aiff?)$/i.test(file.name)
+      if (!isAud) return
+      let url = URL.createObjectURL(file)
+      let srcAssetId = ''
+      try {
+        srcAssetId = await saveLocalImageAsset(file)
+        const restored = await getLocalImageAssetObjectUrl(srcAssetId)
+        if (restored) url = restored
+      } catch {
+        void mirrorUploadToInputDir(file)
+        srcAssetId = ''
+      }
+      setNodes((prev) =>
+        prev.map((n) => {
+          if (n.id !== nodeId) return n
+          const d = n.data
+          if (d.kind !== 'audio' && d.kind !== 'music') return n
+          return {
+            ...n,
+            data: {
+              ...d,
+              src: url,
+              srcAssetId: srcAssetId || undefined,
+              srcFileName: file.name,
+              srcDiskPath: undefined,
+              resultSources: [url, ...(d.resultSources ?? []).filter((item) => item !== url)],
+            } as StudioNodeData,
+          }
+        }),
+      )
+      appendHistory(`已写入节点：${file.name}`)
+    },
+    [appendHistory, setNodes],
+  )
+
   /**
    * 在画布指定流坐标处创建图片节点（拖入/粘贴系统图片文件）。
    */
@@ -3406,8 +4622,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           extra.push({
             id,
             type: 'image',
-            position: { x: base.x + idx * 48, y: base.y + idx * 48 },
-            style: { width: 430, height: 340 },
+            position: { x: base.x, y: base.y + idx * FLOWID_CANVAS_DROP_STACK_STEP_Y },
+            style: { width: 430, height: FLOWID_CANVAS_DROP_STACK_H },
             data: {
               kind: 'image',
               title: `图片 · ${stem}`,
@@ -3530,6 +4746,127 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     [appendHistory, applyImageFileToNode],
   )
 
+  const addVideoFilesAtFlowPosition = useCallback(
+    (files: readonly File[], base: XYPosition) => {
+      const { videos } = partitionMediaFilesByKind(files)
+      if (!videos.length) return
+      setNodes((prev) => {
+        const extra: Array<Node<StudioNodeData>> = []
+        videos.forEach((file, idx) => {
+          const id = crypto.randomUUID()
+          const baseNode = createStudioNode('video', id, {
+            x: base.x,
+            y: base.y + idx * FLOWID_CANVAS_DROP_STACK_STEP_Y,
+          })
+          const src = URL.createObjectURL(file)
+          const stem = file.name.replace(/\.[^.]+$/, '').trim() || '未命名'
+          extra.push({
+            ...baseNode,
+            data: {
+              ...(baseNode.data as VideoNodeData),
+              title: `视频 · ${stem}`,
+              src,
+              srcFileName: file.name,
+            } as StudioNodeData,
+          })
+        })
+        return [...prev, ...extra]
+      })
+      appendHistory(`拖入视频：${videos.length} 个`)
+    },
+    [appendHistory, createStudioNode, setNodes],
+  )
+
+  const addAudioFilesAtFlowPosition = useCallback(
+    async (files: readonly File[], base: XYPosition) => {
+      const { audios } = partitionMediaFilesByKind(files)
+      if (!audios.length) return
+      const persisted = await Promise.all(
+        audios.map(async (file) => {
+          try {
+            const srcAssetId = await saveLocalImageAsset(file)
+            const restored = await getLocalImageAssetObjectUrl(srcAssetId)
+            return { file, src: restored || URL.createObjectURL(file), srcAssetId }
+          } catch {
+            void mirrorUploadToInputDir(file)
+            return { file, src: URL.createObjectURL(file), srcAssetId: '' }
+          }
+        }),
+      )
+      setNodes((prev) => {
+        const extra: Array<Node<StudioNodeData>> = []
+        persisted.forEach(({ file, src, srcAssetId }, idx) => {
+          const id = crypto.randomUUID()
+          const baseNode = createStudioNode('audio', id, {
+            x: base.x,
+            y: base.y + idx * FLOWID_CANVAS_DROP_STACK_STEP_Y,
+          })
+          const stem = file.name.replace(/\.[^.]+$/, '').trim() || '未命名'
+          extra.push({
+            ...baseNode,
+            data: {
+              ...(baseNode.data as AudioNodeData),
+              title: `配音 · ${stem}`,
+              src,
+              srcAssetId: srcAssetId || undefined,
+              srcFileName: file.name,
+              resultSources: [src],
+            } as StudioNodeData,
+          })
+        })
+        return [...prev, ...extra]
+      })
+      appendHistory(`拖入音频：${audios.length} 个`)
+    },
+    [appendHistory, createStudioNode, setNodes],
+  )
+
+  const applyVideoFilesToNodes = useCallback(
+    async (files: readonly File[], nodeIds: readonly string[], preferredFirstNodeId?: string | null) => {
+      const { videos } = partitionMediaFilesByKind(files)
+      if (!videos.length || !nodeIds.length) return
+      const dedupIds = Array.from(new Set(nodeIds.filter(Boolean)))
+      if (!dedupIds.length) return
+      const orderedIds = [...dedupIds]
+      if (preferredFirstNodeId && orderedIds.includes(preferredFirstNodeId)) {
+        const rest = orderedIds.filter((id) => id !== preferredFirstNodeId)
+        orderedIds.splice(0, orderedIds.length, preferredFirstNodeId, ...rest)
+      }
+      const count = Math.min(videos.length, orderedIds.length)
+      for (let i = 0; i < count; i += 1) {
+        const file = videos[i]
+        const nodeId = orderedIds[i]
+        if (!file || !nodeId) continue
+        applyVideoFileToNode(nodeId, file)
+      }
+      appendHistory(`批量填充节点：${count} 个视频`)
+    },
+    [appendHistory, applyVideoFileToNode],
+  )
+
+  const applyAudioFilesToNodes = useCallback(
+    async (files: readonly File[], nodeIds: readonly string[], preferredFirstNodeId?: string | null) => {
+      const { audios } = partitionMediaFilesByKind(files)
+      if (!audios.length || !nodeIds.length) return
+      const dedupIds = Array.from(new Set(nodeIds.filter(Boolean)))
+      if (!dedupIds.length) return
+      const orderedIds = [...dedupIds]
+      if (preferredFirstNodeId && orderedIds.includes(preferredFirstNodeId)) {
+        const rest = orderedIds.filter((id) => id !== preferredFirstNodeId)
+        orderedIds.splice(0, orderedIds.length, preferredFirstNodeId, ...rest)
+      }
+      const count = Math.min(audios.length, orderedIds.length)
+      for (let i = 0; i < count; i += 1) {
+        const file = audios[i]
+        const nodeId = orderedIds[i]
+        if (!file || !nodeId) continue
+        await applyAudioFileToNode(nodeId, file)
+      }
+      appendHistory(`批量填充节点：${count} 个音频`)
+    },
+    [appendHistory, applyAudioFileToNode],
+  )
+
   /**
    * 底部提示框：在文本框内 Ctrl+V 粘贴截图/图片时写入参考图（图片/视频/配音节点）。
    */
@@ -3554,7 +4891,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       incomingNodes: Node<StudioNodeData>[],
       incomingEdges: Edge[],
       flowAnchor: XYPosition,
-      opts?: { hydrateLocalAssets?: boolean; historyLabel?: string },
+      opts?: { hydrateLocalAssets?: boolean; historyLabel?: string; skipAnchorStagger?: boolean },
     ) => {
       if (!incomingNodes.length) return
       let nodesToMerge = structuredClone(incomingNodes) as Node<StudioNodeData>[]
@@ -3567,10 +4904,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const clipCx = (bb.minX + bb.maxX) / 2
       const clipCy = (bb.minY + bb.maxY) / 2
 
-      internalPasteStaggerRef.current += 1
-      const s = (internalPasteStaggerRef.current - 1) % 6
-      const staggerX = (s % 3) * 44
-      const staggerY = Math.floor(s / 3) * 44
+      let staggerX = 0
+      let staggerY = 0
+      if (!opts?.skipAnchorStagger) {
+        internalPasteStaggerRef.current += 1
+        const s = (internalPasteStaggerRef.current - 1) % 6
+        staggerX = (s % 3) * 44
+        staggerY = Math.floor(s / 3) * 44
+      }
       const targetX = flowAnchor.x + staggerX
       const targetY = flowAnchor.y + staggerY
       const deltaX = targetX - clipCx
@@ -3590,6 +4931,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           node.type === 'ghost' || node.type === 'group'
             ? rawTitle || fallbackTitle
             : allocateUniqueNodeTitle(allocatedTitles, rawTitle || fallbackTitle)
+        const prevThumbs = node.data.resultThumbnails
         return {
           ...structuredClone(node),
           id: nextId,
@@ -3597,6 +4939,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           data: {
             ...node.data,
             title: uniqueTitle,
+            srcDiskPath: undefined,
+            resultThumbnails: Array.isArray(prevThumbs)
+              ? prevThumbs.map((t) => ({ ...t, diskPath: undefined }))
+              : prevThumbs,
           } as StudioNodeData,
           position: {
             x: node.position.x + deltaX,
@@ -3726,7 +5072,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   )
 
   /**
-   * 画布空白处拖入外部图片文件：在落点创建图片节点。
+   * 画布拖入外部文件：图片 / 视频 / 音频在落点新建节点；工程 JSON 可导入项目。
    */
   const onCanvasDragOver = useCallback((event: React.DragEvent) => {
     if (!event.dataTransfer?.types?.length) return
@@ -3798,7 +5144,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const list = event.dataTransfer?.files
       if (!list?.length) return
       const droppedFiles = Array.from(list)
-      const files = droppedFiles.filter((f) => f.type.startsWith('image/'))
+      const { images: imageFiles, videos: videoFiles, audios: audioFiles } =
+        partitionMediaFilesByKind(droppedFiles)
       /**
        * 画布支持直接拖入 Flowid 工程 JSON：行为等同「本地项目 -> 从 JSON 导入」。
        */
@@ -3808,7 +5155,9 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         const t = String(f.type || '').toLowerCase()
         return t === 'application/json' || t === 'text/json'
       })
-      if (!files.length && projectJsonFiles.length) {
+      const hasMedia =
+        imageFiles.length > 0 || videoFiles.length > 0 || audioFiles.length > 0
+      if (!hasMedia && projectJsonFiles.length) {
         const first = projectJsonFiles[0]
         if (!first) return
         void (async () => {
@@ -3823,9 +5172,9 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         })()
         return
       }
-      if (!files.length) return
+      if (!hasMedia) return
 
-      /** 框选优先：若已有可接图节点被选中，按框选顺序进行批量填充。 */
+      /** 框选优先：若已有可接素材的节点被选中，按类型匹配后批量填充。 */
       const selectedFillNodes = nodes
         .filter((n) => n.selected)
         .filter((n) => {
@@ -3851,33 +5200,93 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       if (selectedFillNodes.length > 0) {
         const selectedIds = selectedFillNodes.map((n) => n.id)
         const preferred = selectedIds.includes(nodeId) ? nodeId : null
-        void applyImageFilesToNodes(files, selectedIds, preferred)
-        return
+        if (imageFiles.length) {
+          void applyImageFilesToNodes(imageFiles, selectedIds, preferred)
+          return
+        }
+        if (videoFiles.length) {
+          const videoNodeIds = selectedFillNodes
+            .filter((n) => n.data.kind === 'video')
+            .map((n) => n.id)
+          if (videoNodeIds.length) {
+            void applyVideoFilesToNodes(
+              videoFiles,
+              videoNodeIds,
+              preferred && videoNodeIds.includes(preferred) ? preferred : null,
+            )
+            return
+          }
+        }
+        if (audioFiles.length) {
+          const audioNodeIds = selectedFillNodes
+            .filter((n) => n.data.kind === 'audio' || n.data.kind === 'music')
+            .map((n) => n.id)
+          if (audioNodeIds.length) {
+            void applyAudioFilesToNodes(
+              audioFiles,
+              audioNodeIds,
+              preferred && audioNodeIds.includes(preferred) ? preferred : null,
+            )
+            return
+          }
+        }
       }
 
       if (nodeId) {
         const targetNode = nodes.find((n) => n.id === nodeId)
         const kind = targetNode?.data.kind
         if (
-          kind === 'image' ||
-          kind === 'video' ||
-          kind === 'audio' ||
-          kind === 'music' ||
-          kind === 'panorama'
+          imageFiles.length &&
+          (kind === 'image' ||
+            kind === 'video' ||
+            kind === 'audio' ||
+            kind === 'music' ||
+            kind === 'panorama')
         ) {
-          const first = files[0]
+          const first = imageFiles[0]
           if (!first) return
           void applyImageFileToNode(nodeId, first)
           return
         }
+        if (videoFiles.length && kind === 'video') {
+          const first = videoFiles[0]
+          if (!first) return
+          applyVideoFileToNode(nodeId, first)
+          return
+        }
+        if (audioFiles.length && (kind === 'audio' || kind === 'music')) {
+          const first = audioFiles[0]
+          if (!first) return
+          void applyAudioFileToNode(nodeId, first)
+          return
+        }
       }
       const pos = screenToFlowPosition({ x: event.clientX, y: event.clientY })
-      void addImageFilesAtFlowPosition(files, pos)
+      void (async () => {
+        let yOff = 0
+        if (imageFiles.length) {
+          await addImageFilesAtFlowPosition(imageFiles, { x: pos.x, y: pos.y + yOff })
+          yOff += imageFiles.length * FLOWID_CANVAS_DROP_STACK_STEP_Y
+        }
+        if (videoFiles.length) {
+          addVideoFilesAtFlowPosition(videoFiles, { x: pos.x, y: pos.y + yOff })
+          yOff += videoFiles.length * FLOWID_CANVAS_DROP_STACK_STEP_Y
+        }
+        if (audioFiles.length) {
+          await addAudioFilesAtFlowPosition(audioFiles, { x: pos.x, y: pos.y + yOff })
+        }
+      })()
     },
     [
+      addAudioFilesAtFlowPosition,
       addImageFilesAtFlowPosition,
+      addVideoFilesAtFlowPosition,
+      applyAudioFileToNode,
+      applyAudioFilesToNodes,
       applyImageFileToNode,
       applyImageFilesToNodes,
+      applyVideoFileToNode,
+      applyVideoFilesToNodes,
       appendHistory,
       createStudioNode,
       mergePresetTemplateFromLibrary,
@@ -3952,8 +5361,24 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       if (!promptPanel) return
       const { node, kind } = promptPanel
       const id = node.id
-      if (url.startsWith('blob:')) {
-        URL.revokeObjectURL(url)
+      const assetRowId =
+        kind === 'image'
+          ? String((node.data as ImageNodeData).referenceImageAssetIds?.[index] ?? '').trim()
+          : kind === 'video'
+            ? String((node.data as VideoNodeData).referenceImageAssetIds?.[index] ?? '').trim()
+            : kind === 'audio' || kind === 'music'
+              ? String((node.data as AudioNodeData).referenceImageAssetIds?.[index] ?? '').trim()
+              : ''
+      if (
+        url.startsWith('blob:') &&
+        !assetRowId &&
+        !isBlobUrlHeldInLocalAssetObjectUrlCache(url)
+      ) {
+        try {
+          URL.revokeObjectURL(url)
+        } catch {
+          // ignore
+        }
       }
       if (kind === 'image') {
         const d = node.data as ImageNodeData
@@ -3969,13 +5394,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           referenceImageSources: (d.referenceImageSources ?? []).filter((_, i) => i !== index),
           referenceImageAssetIds: (d.referenceImageAssetIds ?? []).filter((_, i) => i !== index),
         })
-      } else if (kind === 'audio') {
+      } else if (kind === 'audio' || kind === 'music') {
         const d = node.data as AudioNodeData
         updateNodeData(id, {
-          kind: 'audio',
+          kind: d.kind,
           referenceImageSources: (d.referenceImageSources ?? []).filter((_, i) => i !== index),
           referenceImageAssetIds: (d.referenceImageAssetIds ?? []).filter((_, i) => i !== index),
-        })
+        } as Partial<StudioNodeData>)
       }
     },
     [promptPanel, updateNodeData],
@@ -3989,7 +5414,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       setNodes((prev) =>
         prev.map((n) => {
           if (n.id !== nodeId) return n
-          if (kind !== 'image' && kind !== 'video' && kind !== 'audio') return n
+          if (kind !== 'image' && kind !== 'video' && kind !== 'audio' && kind !== 'music') return n
           const d = n.data as ImageNodeData | VideoNodeData | AudioNodeData
           const refs = Array.isArray(d.referenceImageSources) ? [...d.referenceImageSources] : []
           const ids = Array.isArray(d.referenceImageAssetIds) ? [...d.referenceImageAssetIds] : []
@@ -4782,6 +6207,39 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   }, [appendHistory, edges, nodes, selectedNodeIds])
 
   /**
+   * Ctrl+D 复制副本：在选中包围盒 **正下方** 落点，顶边距选区底边 `DUPLICATE_BELOW_GAP_FLOW`（与符号拆分横向间距一致取 20px）。
+   * 同步写入内存剪贴板，且不依赖「先 setState 再读 clipboard」的同一拍延迟。
+   */
+  const duplicateSelectedNodes = useCallback(async () => {
+    if (!selectedNodeIds.length) return
+    const selected = new Set(selectedNodeIds)
+    const selectedNodes = nodes.filter((node) => selected.has(node.id))
+    const selectedEdges = edges.filter(
+      (edge) => selected.has(edge.source) && selected.has(edge.target),
+    )
+    if (!selectedNodes.length) return
+    internalPasteStaggerRef.current = 0
+    const clipboardPayload: CanvasClipboard = {
+      nodes: structuredClone(selectedNodes),
+      edges: structuredClone(selectedEdges),
+    }
+    setClipboard(clipboardPayload)
+    const pastedBb = getNodesBounds(clipboardPayload.nodes)
+    const selBb = getNodesBounds(selectedNodes)
+    if (!pastedBb || !selBb) return
+    const clipCx = (pastedBb.minX + pastedBb.maxX) / 2
+    const clipCy = (pastedBb.minY + pastedBb.maxY) / 2
+    const deltaX = selBb.minX - pastedBb.minX
+    const deltaY = selBb.maxY + DUPLICATE_BELOW_GAP_FLOW - pastedBb.minY
+    const anchorX = clipCx + deltaX
+    const anchorY = clipCy + deltaY
+    await mergeSubgraphAtFlowCenter(clipboardPayload.nodes, clipboardPayload.edges, { x: anchorX, y: anchorY }, {
+      historyLabel: `复制副本：${clipboardPayload.nodes.length} 个`,
+      skipAnchorStagger: true,
+    })
+  }, [edges, mergeSubgraphAtFlowCenter, nodes, selectedNodeIds, setClipboard])
+
+  /**
    * 粘贴剪贴板内容到当前画布。
    * 将剪贴板包围盒中心对齐到 **当前视口中心**（跨项目粘贴时原坐标可能很远，旧逻辑只加纵向偏移会贴在屏幕外）。
    */
@@ -4915,13 +6373,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       }
       if (matchesShortcut(event, shortcuts.bindings.duplicate)) {
         event.preventDefault()
-        copySelectedNodes()
-        pasteClipboardNodes()
+        void duplicateSelectedNodes()
         return
       }
       /**
        * 画布撤销/重做：仅在非输入控件上触发（输入框内 Ctrl+Z 交给浏览器做逐字撤销）。
-       * 自动拆分后会对提示框 textarea 执行 blur，便于下一步直接撤画布。
+       * 符号拆分后会对提示框 textarea 执行 blur，便于下一步直接撤画布。
        */
       if (matchesShortcut(event, shortcuts.bindings.redo)) {
         event.preventDefault()
@@ -4974,6 +6431,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [
     copySelectedNodes,
+    duplicateSelectedNodes,
     cutSelectedNodes,
     deleteSelectedNodes,
     getViewport,
@@ -5038,6 +6496,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     const t = nodesRef.current.find((n) => n.id === tid)
     const s = nodesRef.current.find((n) => n.id === sid)
     if (!t || !s) return true
+    if (t.data.kind === 'imageCompare' || s.data.kind === 'imageCompare') return false
     if (t.data.kind !== 'video') return true
     const th = connection.targetHandle ?? ''
     const sk = s.data.kind
@@ -5461,7 +6920,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   )
 
   /**
-   * 兜底：按住 Shift 在画布空白处准备框选时，先清空旧选区（除非 Ctrl/Meta 追加）。
+   * 兜底：按住「框选键」（默认 Shift，可在设置改为 Alt）在画布空白处准备框选时，先清空旧选区（除非 Ctrl/Meta 追加）。
    * 某些情况下（例如命中 RF 的 selection-rect 层）不会触发 `onSelectionStart`，导致旧选区残留。
    */
   const onCanvasMouseDown = useCallback(
@@ -5470,7 +6929,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const el = event.target as HTMLElement | null
       // 仅在画布区域内生效（避免顶部栏/面板点击触发清空）
       if (!el || !el.closest?.('.react-flow')) return
-      if (!native?.shiftKey) return
+      const marqueeKey = normalizeMarqueeSelectionKey(shortcuts.bindings.marqueeSelect)
+      if (!nativeHasMarqueeModifier(native, marqueeKey)) return
       const isAdditive = Boolean((native?.ctrlKey && !native?.altKey) || native?.metaKey)
       if (isAdditive) return
       setNodes((prev) =>
@@ -5480,7 +6940,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         prev.some((e) => e.selected) ? prev.map((e) => (e.selected ? { ...e, selected: false } : e)) : prev,
       )
     },
-    [setEdges, setNodes],
+    [setEdges, setNodes, shortcuts.bindings.marqueeSelect],
   )
 
   /**
@@ -5614,19 +7074,72 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   }, [appendHistory, dismissMultiSelectContextMenu, getStoryboardRankForSort, nodes, setNodes])
 
   /**
+   * 框选/点选恰好两张图片节点：新建本地滑动对比节点（不跑 Comfy）。
+   */
+  const createImageCompareFromContextMenuSelection = useCallback(() => {
+    const pick = contextMenuImageCompareTwoPick
+    if (!pick) return
+    const sorted = [pick.a, pick.b].sort((a, b) => {
+      const dy = a.position.y - b.position.y
+      if (Math.abs(dy) > 48) return dy
+      return a.position.x - b.position.x
+    })
+    const urlA = getPrimaryImageDisplayUrlForCompare(sorted[0]!)
+    const urlB = getPrimaryImageDisplayUrlForCompare(sorted[1]!)
+    if (!urlA || !urlB) {
+      window.alert('两张图片节点都需要有可显示的预览图（主图或输出缩略图列表中的首张图）。')
+      return
+    }
+    dismissMultiSelectContextMenu()
+    const sz0 = getNodeSize(sorted[0]!)
+    const sz1 = getNodeSize(sorted[1]!)
+    const minX = Math.min(sorted[0]!.position.x, sorted[1]!.position.x)
+    const maxR = Math.max(sorted[0]!.position.x + sz0.width, sorted[1]!.position.x + sz1.width)
+    const maxB = Math.max(sorted[0]!.position.y + sz0.height, sorted[1]!.position.y + sz1.height)
+    const newW = 520
+    const position = {
+      x: (minX + maxR) / 2 - newW / 2,
+      y: maxB + NODE_APPEND_GAP,
+    }
+    const id = crypto.randomUUID()
+    setNodes((nds) => {
+      const index = getNextNodeTitleIndex(nds, 'imageCompare')
+      const title = `${NODE_KIND_LABEL.imageCompare}节点${index}`
+      const cleared = nds.map((n) => ({ ...n, selected: false }))
+      const node = createImageCompareStudioNode(id, position, title, {
+        compareSrcA: urlA,
+        compareSrcB: urlB,
+        compareLabelA: String(sorted[0]!.data.title || '').trim().slice(0, 40),
+        compareLabelB: String(sorted[1]!.data.title || '').trim().slice(0, 40),
+      })
+      return [...cleared, { ...node, selected: true }]
+    })
+    appendHistory('新增图像对比节点')
+  }, [
+    appendHistory,
+    contextMenuImageCompareTwoPick,
+    dismissMultiSelectContextMenu,
+    setNodes,
+  ])
+
+  /**
    * 新增节点；若传入 `flowPosition` 则在指定画布坐标落点，否则落在屏幕偏中位置。
    */
   const addNode = useCallback(
     (kind: StudioNodeKind, flowPosition?: XYPosition) => {
       const id = crypto.randomUUID()
-      const position =
+      const pending = pendingCanvasNodePositionRef.current
+      const rawBase =
         flowPosition ??
-        pendingCanvasNodePositionRef.current ??
+        pending ??
         screenToFlowPosition({
           x: window.innerWidth * 0.46,
           y: window.innerHeight * 0.38,
         })
       pendingCanvasNodePositionRef.current = null
+      const useStagger = !flowPosition && !pending
+      const staggerN = countStaggerEligibleNodes(nodesRef.current as Node<StudioNodeData>[])
+      const position = useStagger ? staggerAutoPlacedPosition(rawBase, staggerN) : rawBase
       setCanvasAddMenu(null)
       setNodes((nds) => {
         const index = getNextNodeTitleIndex(nds, kind)
@@ -5642,16 +7155,17 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
    * 从“拖线未命中”上下文创建节点，并将连接补全到新节点。
    */
   const addNodeFromPendingConnect = useCallback(
-    (kind: StudioNodeKind) => {
+    (kind: StudioNodeKind, pointerFlow?: XYPosition) => {
       const pending = pendingConnectRef.current
       if (!pending) {
-        addNode(kind)
+        addNode(kind, pointerFlow)
         return
       }
       const id = crypto.randomUUID()
       const anchorNode = nodes.find((node) => node.id === pending.nodeId)
       const anchorSize = anchorNode ? getNodeSize(anchorNode) : null
       const position =
+        pointerFlow ??
         pendingCanvasNodePositionRef.current ??
         (anchorNode
           ? {
@@ -6266,7 +7780,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       pendingCanvasNodePositionRef.current = flowPos
       dismissConnectAddMenu()
       setLeftPanel(null)
-      setCanvasAddMenu(clampCanvasAddMenuPosition(event.clientX, event.clientY))
+      const clamped = clampCanvasAddMenuPosition(event.clientX, event.clientY)
+      setCanvasAddMenu({ ...clamped, flowPosition: flowPos })
     },
     [dismissConnectAddMenu, dismissMultiSelectContextMenu, screenToFlowPosition],
   )
@@ -6342,7 +7857,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       pendingConnectPreviewRef.current = { ghostNodeId, edgeId }
       dismissCanvasAddMenu()
       setLeftPanel(null)
-      setConnectAddMenu(clampCanvasAddMenuPosition(clientX, clientY))
+      const clampedConnect = clampCanvasAddMenuPosition(clientX, clientY)
+      setConnectAddMenu({ ...clampedConnect, flowPosition: flowPos })
     },
     [clearPendingConnectPreview, dismissCanvasAddMenu, screenToFlowPosition, setEdges, setNodes],
   )
@@ -6481,20 +7997,34 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     [addNode, addSpecialNode],
   )
 
-  const connectAddNodeItems = useMemo<AddNodeMenuItem[]>(
-    () =>
-      addNodeItems.map((item) => ({
-        ...item,
-        action: () => {
-          if (item.id === 'compose-video') {
-            addNodeFromPendingConnect('video')
-            return
-          }
-          addNodeFromPendingConnect(item.id as StudioNodeKind)
-        },
-      })),
-    [addNodeFromPendingConnect, addNodeItems],
-  )
+  /** 画布双击菜单：把流坐标绑进 action，避免关菜单时 pending ref 被清空导致落点漂移。 */
+  const canvasAddNodeItems = useMemo<AddNodeMenuItem[]>(() => {
+    const fp = canvasAddMenu?.flowPosition
+    return addNodeItems.map((item) => ({
+      ...item,
+      action: () => {
+        if (item.id === 'compose-video') {
+          addNode('video', fp)
+          return
+        }
+        addNode(item.id as StudioNodeKind, fp)
+      },
+    }))
+  }, [addNode, addNodeItems, canvasAddMenu])
+
+  const connectAddNodeItems = useMemo<AddNodeMenuItem[]>(() => {
+    const fp = connectAddMenu?.flowPosition
+    return addNodeItems.map((item) => ({
+      ...item,
+      action: () => {
+        if (item.id === 'compose-video') {
+          addNodeFromPendingConnect('video', fp)
+          return
+        }
+        addNodeFromPendingConnect(item.id as StudioNodeKind, fp)
+      },
+    }))
+  }, [addNodeFromPendingConnect, addNodeItems, connectAddMenu])
 
   const exportJson = useCallback(() => {
     const snapshot: ProjectSnapshot = {
@@ -6622,6 +8152,9 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const getNodeDownloadHref = useCallback((node: Node<StudioNodeData>): string => {
     const data = node.data
     const kind = data.kind
+    if (kind === 'imageCompare') {
+      return String((data as ImageCompareNodeData).compareSrcA || '').trim()
+    }
     if (kind === 'panorama') {
       const pd = data as PanoramaNodeData
       return String(pd.rectilinearSrc || pd.src || '').trim()
@@ -6707,33 +8240,43 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       if (kind === 'music') {
         if (!result.audioUrl) {
           throw new Error(
-            '执行完成但未检测到音频输出，请确认工作流包含 SaveAudio 节点且输出字段为 audio/audios',
+            '执行完成但未检测到音频输出，请确认工作流含 PreviewAudio / SaveAudio 等节点且 history 中可见 audio/audios',
           )
         }
         const data = fresh.data as AudioNodeData
         const previousSources = data.resultSources?.filter(Boolean) ?? (data.src ? [data.src] : [])
-        const nextSources = [
-          result.audioUrl,
-          ...previousSources.filter((item) => item !== result.audioUrl),
-        ]
-        const thumb: NodeResultThumbnail = {
-          id: crypto.randomUUID(),
-          url: result.audioUrl,
-          mediaKind: 'audio',
-        }
         const prevThumbs = data.resultThumbnails ?? []
-        const nextThumbs = [thumb, ...prevThumbs.filter((t) => t.url !== thumb.url)].slice(0, 36)
-        updateNodeData(id, {
-          kind: 'music',
-          src: nextSources[0],
-          resultSources: nextSources,
-          resultThumbnails: nextThumbs,
-        })
         const mirror = await mirrorComfyOutputToDisk({
           url: result.audioUrl,
           mediaKind: 'music',
           title: fresh.data.title,
+          nodeId: id,
           requestHeaders: mirrorHeaders,
+        })
+        const playback = await resolveComfyAudioPlaybackSrc({
+          comfyUrl: result.audioUrl,
+          mirrorFilePath: mirror.filePath,
+          requestHeaders: mirrorHeaders,
+          fileBaseName: String(fresh.data.title || 'music'),
+        })
+        const displaySrc = playback.src || result.audioUrl
+        const nextSourcesResolved = [
+          displaySrc,
+          ...previousSources.filter((item) => item !== displaySrc && item !== result.audioUrl),
+        ]
+        const thumb: NodeResultThumbnail = {
+          id: crypto.randomUUID(),
+          url: displaySrc,
+          mediaKind: 'audio',
+        }
+        const nextThumbs = [thumb, ...prevThumbs.filter((t) => t.url !== displaySrc)].slice(0, 36)
+        updateNodeData(id, {
+          kind: 'music',
+          src: nextSourcesResolved[0],
+          srcAssetId: String(playback.srcAssetId || '').trim(),
+          resultSources: nextSourcesResolved,
+          resultThumbnails: nextThumbs,
+          srcDiskPath: mirror.filePath || undefined,
         })
         if (!mirror.saved) {
           appendHistory(`输出目录写入失败（音乐）：${mirror.reason || '未知原因'}`)
@@ -6743,7 +8286,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         appendHistory({
           text: '音乐生成成功',
           kind: 'music',
-          src: result.audioUrl,
+          src: displaySrc,
           title: fresh.data.title,
         })
         appendHistory(`音乐节点执行成功：${(fresh.data as AudioNodeData).model || '未命名工作流'}`)
@@ -6753,33 +8296,43 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       if (kind === 'audio') {
         if (!result.audioUrl) {
           throw new Error(
-            '执行完成但未检测到音频输出，请确认工作流包含 SaveAudio 节点且输出字段为 audio/audios',
+            '执行完成但未检测到音频输出，请确认工作流含 PreviewAudio / SaveAudio 等节点且 history 中可见 audio/audios',
           )
         }
         const data = fresh.data as AudioNodeData
         const previousSources = data.resultSources?.filter(Boolean) ?? (data.src ? [data.src] : [])
-        const nextSources = [
-          result.audioUrl,
-          ...previousSources.filter((item) => item !== result.audioUrl),
-        ]
-        const thumb: NodeResultThumbnail = {
-          id: crypto.randomUUID(),
-          url: result.audioUrl,
-          mediaKind: 'audio',
-        }
         const prevThumbs = data.resultThumbnails ?? []
-        const nextThumbs = [thumb, ...prevThumbs.filter((t) => t.url !== thumb.url)].slice(0, 36)
-        updateNodeData(id, {
-          kind: 'audio',
-          src: nextSources[0],
-          resultSources: nextSources,
-          resultThumbnails: nextThumbs,
-        })
         const mirror = await mirrorComfyOutputToDisk({
           url: result.audioUrl,
           mediaKind: 'audio',
           title: fresh.data.title,
+          nodeId: id,
           requestHeaders: mirrorHeaders,
+        })
+        const playback = await resolveComfyAudioPlaybackSrc({
+          comfyUrl: result.audioUrl,
+          mirrorFilePath: mirror.filePath,
+          requestHeaders: mirrorHeaders,
+          fileBaseName: String(fresh.data.title || 'audio'),
+        })
+        const displaySrc = playback.src || result.audioUrl
+        const nextSourcesResolved = [
+          displaySrc,
+          ...previousSources.filter((item) => item !== displaySrc && item !== result.audioUrl),
+        ]
+        const thumb: NodeResultThumbnail = {
+          id: crypto.randomUUID(),
+          url: displaySrc,
+          mediaKind: 'audio',
+        }
+        const nextThumbs = [thumb, ...prevThumbs.filter((t) => t.url !== displaySrc)].slice(0, 36)
+        updateNodeData(id, {
+          kind: 'audio',
+          src: nextSourcesResolved[0],
+          srcAssetId: String(playback.srcAssetId || '').trim(),
+          resultSources: nextSourcesResolved,
+          resultThumbnails: nextThumbs,
+          srcDiskPath: mirror.filePath || undefined,
         })
         if (!mirror.saved) {
           appendHistory(`输出目录写入失败（配音）：${mirror.reason || '未知原因'}`)
@@ -6789,7 +8342,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         appendHistory({
           text: '配音生成成功',
           kind: 'audio',
-          src: result.audioUrl,
+          src: displaySrc,
           title: fresh.data.title,
         })
         appendHistory(`配音节点执行成功：${(fresh.data as AudioNodeData).model || '未命名工作流'}`)
@@ -6851,8 +8404,16 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             url: rawUrl,
             mediaKind: kind === 'video' ? 'video' : 'image',
             title: fresh.data.title,
+            nodeId: id,
             requestHeaders: mirrorHeaders,
           })
+          /** 桌面端：镜像成功后优先用本地文件做预览，避免主图长期依赖易失效的云端 URL */
+          if (mirror.filePath) {
+            const fromMirrorDisk = await getDesktopDiskFileObjectUrl(mirror.filePath)
+            if (fromMirrorDisk) {
+              displayUrl = fromMirrorDisk
+            }
+          }
           if (!mirror.saved && urls.length === 1) {
             appendHistory(
               `输出目录写入失败（${kind === 'image' ? '图片' : '视频'}）：${mirror.reason || '未知原因'}`,
@@ -6860,13 +8421,20 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           } else if (mirror.filePath && urls.length === 1) {
             appendHistory(`已保存到输出目录（${kind === 'image' ? '图片' : '视频'}）：${mirror.filePath}`)
           }
+          const stripUrl = displayUrl || rawUrl
+          const videoThumbKind: 'video' | 'image' =
+            kind === 'video'
+              ? /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(stripUrl.split(/[?#]/)[0] || '')
+                ? 'image'
+                : 'video'
+              : 'image'
           newThumbs.push({
             id: crypto.randomUUID(),
             url: displayUrl,
             assetId,
             fileName,
             diskPath: mirror.filePath || undefined,
-            mediaKind: kind === 'video' ? 'video' : 'image',
+            mediaKind: kind === 'video' ? videoThumbKind : 'image',
           })
           if (i === 0) {
             primarySrc = displayUrl
@@ -6888,6 +8456,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           srcAssetId: primaryAssetId,
           srcFileName: primaryFileName,
           resultThumbnails: merged,
+          srcDiskPath: newThumbs[0]?.diskPath,
         } as Partial<StudioNodeData>)
         if (urls.length > 1) {
           appendHistory(
@@ -6960,9 +8529,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     executeSingleNode: async (node) => {
       const kind = node.data.kind
       if (kind === 'group') return
+      if (kind === 'imageCompare') return
       await awaitSensitiveLexiconSettled()
-      const latest = nodes.find((n) => n.id === node.id) ?? node
-      const prepared = withResolvedNodeMentions(latest, nodes)
+      const liveNodes = nodesRef.current
+      const latest = liveNodes.find((n) => n.id === node.id) ?? node
+      const prepared = withResolvedNodeMentions(latest, liveNodes)
       const sensitiveBlob = collectUserFacingTextFromNodeData(prepared.data as StudioNodeData)
       const sensitiveGate = canSend(sensitiveBlob, true)
       if (!sensitiveGate.allowed) {
@@ -6971,7 +8542,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         return false
       }
       const result = await runNodeWorkflow(prepared, {
-        allNodes: nodes,
+        allNodes: liveNodes,
         studioEdges: edgesRef.current,
         runNodeTitle: String(latest.data.title || latest.id),
         executionTarget:
@@ -6999,7 +8570,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             ),
           ),
       })
-      await applyWorkflowResultToNode(latest, kind, result)
+      const nodeForMerge = nodesRef.current.find((n) => n.id === node.id) ?? latest
+      await applyWorkflowResultToNode(nodeForMerge, kind, result)
     },
     })
 
@@ -7208,6 +8780,347 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     return nodes.find((n) => String(n.data.title || '').toLowerCase().includes(q)) ?? null
   }, [nodes])
 
+  /** Agent 浮动窗「智能 / LLM」模式：OpenAI 式 tools 循环，实时读 nodesRef 定位节点 */
+  const executeFlowidAgentTool = useCallback(
+    async (name: string, argumentsJson: string) => {
+      let args: Record<string, unknown> = {}
+      try {
+        args = JSON.parse(argumentsJson || '{}') as Record<string, unknown>
+      } catch {
+        return JSON.stringify({ ok: false, error: '无效的 JSON 参数' })
+      }
+
+      const findInCanvas = (query: string) => {
+        const q = String(query).trim().toLowerCase()
+        if (!q) return null
+        const list = nodesRef.current.filter((n) => n.type !== 'ghost')
+        const exact = list.find(
+          (n) =>
+            n.id.toLowerCase() === q || String(n.data.title || '').trim().toLowerCase() === q,
+        )
+        if (exact) return exact as Node<StudioNodeData>
+        return (
+          (list.find((n) => String(n.data.title || '').toLowerCase().includes(q)) as
+            | Node<StudioNodeData>
+            | undefined) ?? null
+        )
+      }
+
+      const findBiz = (query: string) => {
+        const n = findInCanvas(query)
+        if (!n || n.type === 'group') return null
+        return n as Node<StudioNodeData>
+      }
+
+      try {
+        if (name === 'flowid_create_node') {
+          const kind = args.kind as string
+          if (!isAiAssistantCreatableNodeKind(kind as StudioNodeKind)) {
+            return JSON.stringify({ ok: false, error: `不支持的节点类型：${kind}` })
+          }
+          let newId = ''
+          let newTitle = ''
+          setNodes((nds) => {
+            newId = crypto.randomUUID()
+            const explicitPending = pendingCanvasNodePositionRef.current
+            const rawBase =
+              explicitPending ??
+              screenToFlowPosition({
+                x: window.innerWidth * 0.46,
+                y: window.innerHeight * 0.38,
+              })
+            pendingCanvasNodePositionRef.current = null
+            const staggerN = countStaggerEligibleNodes(nds as Node<StudioNodeData>[])
+            const position = explicitPending
+              ? rawBase
+              : staggerAutoPlacedPosition(rawBase, staggerN)
+            const index = getNextNodeTitleIndex(nds, kind as StudioNodeKind)
+            newTitle = `${NODE_KIND_LABEL[kind as StudioNodeKind]}节点${index}`
+            return [...nds, createStudioNode(kind as StudioNodeKind, newId, position, newTitle)]
+          })
+          appendHistory(`Agent 工具创建节点：${kind}`)
+          return JSON.stringify({ ok: true, node_id: newId, title: newTitle })
+        }
+
+        if (name === 'flowid_connect_nodes') {
+          const s = findInCanvas(String(args.source_query ?? ''))
+          const t = findInCanvas(String(args.target_query ?? ''))
+          if (!s || !t) {
+            return JSON.stringify({
+              ok: false,
+              error: `未找到节点：${!s ? String(args.source_query) : ''}${!s && !t ? ' / ' : ''}${!t ? String(args.target_query) : ''}`,
+            })
+          }
+          if (s.id === t.id) {
+            return JSON.stringify({ ok: false, error: '不能将节点连接到自身' })
+          }
+          setEdges((eds) =>
+            addEdge(
+              attachVideoTargetHandleForEdge(
+                {
+                  id: crypto.randomUUID(),
+                  source: s.id,
+                  target: t.id,
+                  animated: true,
+                  style: { strokeWidth: 2 },
+                },
+                s.data.kind,
+                t.data.kind,
+              ) as Edge,
+              eds,
+            ),
+          )
+          appendHistory(`Agent 工具连线：${s.data.title} -> ${t.data.title}`)
+          return JSON.stringify({ ok: true })
+        }
+
+        if (name === 'flowid_set_script_body') {
+          const node = findInCanvas(String(args.target_query ?? ''))
+          if (!node) return JSON.stringify({ ok: false, error: '未找到剧本节点' })
+          if (node.data.kind !== 'script') {
+            return JSON.stringify({ ok: false, error: '目标不是剧本节点' })
+          }
+          const body = String(args.body ?? '')
+          const safeBody = replaceSensitiveWords(body)
+          const gate = canSend(safeBody)
+          if (!gate.allowed) {
+            return JSON.stringify({ ok: false, error: gate.reason ?? '内容未通过校验' })
+          }
+          updateNodeData(node.id, { kind: 'script', body: safeBody })
+          appendHistory(`Agent 工具写入剧本：${node.data.title}`)
+          return JSON.stringify({ ok: true })
+        }
+
+        if (name === 'flowid_set_video_prompt') {
+          const node = findInCanvas(String(args.target_query ?? ''))
+          if (!node) return JSON.stringify({ ok: false, error: '未找到视频节点' })
+          if (node.data.kind !== 'video') {
+            return JSON.stringify({ ok: false, error: '目标不是视频节点' })
+          }
+          const prompt = String(args.prompt ?? '')
+          const safePrompt = replaceSensitiveWords(prompt)
+          const gate = canSend(safePrompt)
+          if (!gate.allowed) {
+            return JSON.stringify({ ok: false, error: gate.reason ?? '内容未通过校验' })
+          }
+          updateNodeData(node.id, { kind: 'video', prompt: safePrompt })
+          appendHistory(`Agent 工具写入视频提示：${node.data.title}`)
+          return JSON.stringify({ ok: true })
+        }
+
+        if (name === 'flowid_set_image_prompt') {
+          const node = findBiz(String(args.target_query ?? ''))
+          if (!node) return JSON.stringify({ ok: false, error: '未找到图片节点' })
+          if (node.data.kind !== 'image') {
+            return JSON.stringify({ ok: false, error: '目标不是图片节点' })
+          }
+          const prompt = String(args.prompt ?? '')
+          const safePrompt = replaceSensitiveWords(prompt)
+          const gate = canSend(safePrompt)
+          if (!gate.allowed) {
+            return JSON.stringify({ ok: false, error: gate.reason ?? '内容未通过校验' })
+          }
+          updateNodeData(node.id, { kind: 'image', prompt: safePrompt })
+          appendHistory(`Agent 工具写入图片提示：${node.data.title}`)
+          return JSON.stringify({ ok: true })
+        }
+
+        if (name === 'flowid_set_text_body') {
+          const node = findBiz(String(args.target_query ?? ''))
+          if (!node) return JSON.stringify({ ok: false, error: '未找到文本节点' })
+          if (node.data.kind !== 'text') {
+            return JSON.stringify({ ok: false, error: '目标不是文本节点' })
+          }
+          const body = String(args.body ?? '')
+          const safeBody = replaceSensitiveWords(body)
+          const gate = canSend(safeBody)
+          if (!gate.allowed) {
+            return JSON.stringify({ ok: false, error: gate.reason ?? '内容未通过校验' })
+          }
+          updateNodeData(node.id, { kind: 'text', body: safeBody })
+          appendHistory(`Agent 工具写入文本：${node.data.title}`)
+          return JSON.stringify({ ok: true })
+        }
+
+        if (name === 'flowid_set_media_note') {
+          const node = findBiz(String(args.target_query ?? ''))
+          if (!node) return JSON.stringify({ ok: false, error: '未找到节点' })
+          if (node.data.kind !== 'audio' && node.data.kind !== 'music') {
+            return JSON.stringify({ ok: false, error: '目标不是配音或音乐节点' })
+          }
+          const note = String(args.note ?? '')
+          const safeNote = replaceSensitiveWords(note)
+          const gate = canSend(safeNote)
+          if (!gate.allowed) {
+            return JSON.stringify({ ok: false, error: gate.reason ?? '内容未通过校验' })
+          }
+          updateNodeData(node.id, { kind: node.data.kind, note: safeNote } as Partial<StudioNodeData>)
+          appendHistory(`Agent 工具写入${node.data.kind === 'audio' ? '配音' : '音乐'}备注：${node.data.title}`)
+          return JSON.stringify({ ok: true })
+        }
+
+        if (name === 'flowid_set_prompt_picker_mode') {
+          const node = findBiz(String(args.target_query ?? ''))
+          if (!node) return JSON.stringify({ ok: false, error: '未找到节点' })
+          const mode = String(args.mode ?? '')
+          if (mode !== 'workflow' && mode !== 'model') {
+            return JSON.stringify({ ok: false, error: 'mode 须为 workflow 或 model' })
+          }
+          updateNodeData(node.id, { promptPickerMode: mode } as Partial<StudioNodeData>)
+          appendHistory(`Agent 工具切换执行模式（${mode}）：${node.data.title}`)
+          return JSON.stringify({ ok: true })
+        }
+
+        if (name === 'flowid_bind_workflow_by_name') {
+          const node = findBiz(String(args.target_query ?? ''))
+          if (!node) return JSON.stringify({ ok: false, error: '未找到节点' })
+          const kind = node.data.kind as StudioNodeKind
+          const hit = resolveWorkflowEntryForKind(kind, nodeConfigs, String(args.name_substring ?? ''))
+          if (!hit) {
+            return JSON.stringify({ ok: false, error: '未匹配到工作流（请检查名称子串或设置里该类型工作流列表）' })
+          }
+          updateNodeData(node.id, {
+            promptPickerMode: 'workflow',
+            workflowEntryId: hit.id,
+          } as Partial<StudioNodeData>)
+          appendHistory(`Agent 工具绑定工作流「${hit.name}」：${node.data.title}`)
+          return JSON.stringify({ ok: true, workflow_id: hit.id, workflow_name: hit.name })
+        }
+
+        if (name === 'flowid_set_cloud_assist_pick') {
+          const node = findBiz(String(args.target_query ?? ''))
+          if (!node) return JSON.stringify({ ok: false, error: '未找到节点' })
+          const pick = String(args.pick ?? '').trim()
+          if (!tryDecodeCloudAssistModelPick(pick)) {
+            return JSON.stringify({ ok: false, error: 'pick 格式无效（需为画布云端线路编码）' })
+          }
+          const assistKind = studioNodeKindToAssistKind(node.data.kind)
+          if (!assistKind) {
+            return JSON.stringify({ ok: false, error: '该节点类型不支持云端辅助线路' })
+          }
+          updateNodeData(node.id, {
+            promptPickerMode: 'model',
+            cloudAssistModelPick: pick,
+            cloudSelfPresetId: '',
+          } as Partial<StudioNodeData>)
+          appendHistory(`Agent 工具设置云端线路：${node.data.title}`)
+          return JSON.stringify({ ok: true })
+        }
+
+        if (name === 'flowid_delete_nodes') {
+          const rawQs = args.target_queries
+          const qlist = Array.isArray(rawQs) ? rawQs.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+          if (!qlist.length) {
+            return JSON.stringify({ ok: false, error: 'target_queries 不能为空' })
+          }
+          const targets = new Map<string, Node<StudioNodeData>>()
+          for (const q of qlist) {
+            const n = findBiz(q)
+            if (n) targets.set(n.id, n)
+          }
+          if (!targets.size) {
+            return JSON.stringify({ ok: false, error: '未解析到可删除的节点' })
+          }
+          const lines = [...targets.values()].map((n) => `· ${String(n.data.title || '').trim() || n.id}`)
+          const okConfirm = window.confirm(
+            `Agent 请求删除 ${targets.size} 个节点（将移除相关连线）：\n\n${lines.join('\n')}\n\n是否继续？`,
+          )
+          if (!okConfirm) {
+            return JSON.stringify({ ok: false, error: '用户已取消删除' })
+          }
+          for (const id of targets.keys()) {
+            removeNodeById(id)
+          }
+          appendHistory(`Agent 工具删除节点：${targets.size} 个`)
+          return JSON.stringify({ ok: true, deleted: targets.size })
+        }
+
+        if (name === 'flowid_run_nodes') {
+          const rawQs = args.target_queries
+          const qlist = Array.isArray(rawQs) ? rawQs.map((x) => String(x ?? '').trim()).filter(Boolean) : []
+          const ids = new Set<string>()
+          for (const q of qlist) {
+            const n = findBiz(q)
+            if (n) ids.add(n.id)
+          }
+          if (Boolean(args.use_selected_all)) {
+            for (const n of nodesRef.current) {
+              if (n.selected && n.type !== 'ghost' && n.type !== 'group') {
+                ids.add(n.id)
+              }
+            }
+          }
+          const list = Array.from(ids)
+          if (!list.length) {
+            return JSON.stringify({ ok: false, error: '没有可执行的节点（请填写 target_queries 或勾选多选并设 use_selected_all）' })
+          }
+          if (list.length > 1) {
+            const lines = list.map((id) => {
+              const n = nodesRef.current.find((x) => x.id === id)
+              return `· ${String(n?.data.title || '').trim() || id}`
+            })
+            const okConfirm = window.confirm(
+              `Agent 请求批量执行 ${list.length} 个节点：\n\n${lines.join(
+                '\n',
+              )}\n\n将按画布规则排队/串行执行。是否继续？`,
+            )
+            if (!okConfirm) {
+              return JSON.stringify({ ok: false, error: '用户已取消批量执行' })
+            }
+          }
+          if (!ensureLicenseCanSubmit()) {
+            return JSON.stringify({ ok: false, error: '授权校验未通过，无法执行' })
+          }
+          await executeNodeIds(list, 'Agent 工具批量执行')
+          return JSON.stringify({ ok: true, count: list.length })
+        }
+
+        if (name === 'flowid_run_node') {
+          if (!ensureLicenseCanSubmit()) {
+            return JSON.stringify({ ok: false, error: '授权校验未通过，无法执行' })
+          }
+          const useCurrent = Boolean(args.use_current)
+          let targetId: string | null = null
+          if (useCurrent) {
+            const sel = nodesRef.current.find(
+              (n) => n.selected && n.type !== 'ghost' && n.type !== 'group',
+            )
+            targetId = sel?.id ?? null
+          } else {
+            const q = String(args.target_query ?? '').trim()
+            if (q) targetId = findInCanvas(q)?.id ?? null
+          }
+          if (!targetId) {
+            return JSON.stringify({ ok: false, error: '未指定可执行节点或未选中节点' })
+          }
+          await executeNodeIds([targetId], 'Agent 工具执行节点')
+          const n = nodesRef.current.find((x) => x.id === targetId)
+          return JSON.stringify({
+            ok: true,
+            title: n?.data.title ?? targetId,
+            node_id: targetId,
+          })
+        }
+
+        return JSON.stringify({ ok: false, error: `未知工具：${name}` })
+      } catch (e) {
+        return JSON.stringify({ ok: false, error: (e as Error)?.message || '执行异常' })
+      }
+    },
+    [
+      appendHistory,
+      createStudioNode,
+      ensureLicenseCanSubmit,
+      executeNodeIds,
+      nodeConfigs,
+      removeNodeById,
+      screenToFlowPosition,
+      setEdges,
+      setNodes,
+      updateNodeData,
+    ],
+  )
+
   const describeAiAction = useCallback((action: AiAssistantAction) => {
     if (action.type === 'create_node') return `新建节点：${action.kind}`
     if (action.type === 'connect_nodes') return `连接节点：${action.sourceQuery} -> ${action.targetQuery}`
@@ -7222,6 +9135,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     replySink?: (msg: string, role?: 'assistant' | 'system') => void
     skipConfirm?: boolean
     silentPlanning?: boolean
+    /**
+     * 为 true 时仅用本地规则解析动作，不调用 planActionsWithModel。
+     * 与 Agent 工作台「规则引擎」一致，避免模型臆造 `create_node: project` 等导致崩溃。
+     */
+    rulesOnly?: boolean
   }
 
   /**
@@ -7229,7 +9147,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
    */
   const executeAiAssistantCommand = useCallback(
     async (text: string, opts: ExecuteAiAssistantOpts = {}) => {
-      const { queued = false, replySink, skipConfirm = false, silentPlanning = false } = opts
+      const { queued = false, replySink, skipConfirm = false, silentPlanning = false, rulesOnly = false } = opts
       setAiBusy(true)
       const reply = (msg: string, role: 'assistant' | 'system' = 'assistant') => {
         const out = replaceSensitiveWords(msg)
@@ -7258,8 +9176,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         }
         const tabsBrief = projectTabsRef.current.map((t) => ({ id: t.id, name: t.name }))
         const forModel = augmentPromptWithMentionResolution(safeText, nodes, tabsBrief)
-        const modelActions = await planActionsWithModel(forModel, nodes, aiConfig)
+        const modelActions = rulesOnly ? [] : await planActionsWithModel(forModel, nodes, aiConfig)
         let actions = modelActions.length ? modelActions : planActionsWithRules(safeText)
+        actions = actions.filter((a) =>
+          a.type !== 'create_node' ? true : isAiAssistantCreatableNodeKind(a.kind),
+        )
         /** 项目标签 id 与节点 id 同为 uuid；误把 @项目(...) 规划成 run_node 时会找不到节点 */
         const tabUuidRe =
           /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/i
@@ -7297,6 +9218,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             }
           }
           if (action.type === 'create_node') {
+            if (!isAiAssistantCreatableNodeKind(action.kind)) {
+              reply(`无法创建该类型节点（仅支持画布节点）：${String(action.kind)}`, 'system')
+              continue
+            }
             addNode(action.kind)
             appendHistory(`AI 助手创建节点：${action.kind}`)
             const label =
@@ -7438,8 +9363,47 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           return [pg.reason ?? '消息包含敏感内容，无法发送']
         }
         const userLine = replaceSensitiveWords(t0)
-        const replyText = await callLLM([...hist, { role: 'user', content: userLine }], aiConfig)
-        return [replaceSensitiveWords(replyText)]
+        if (
+          aiConfig.provider === 'ollama' &&
+          aiConfig.pauseLocalModelWhenWorkflowRunning &&
+          workflowBusyForAiPlanning
+        ) {
+          return [
+            '当前工作流正在运行，请稍后重试；或在「设置 → AI 助手」中切换到云端模型 / 关闭「工作流运行时暂停本地模型」。',
+          ]
+        }
+        const getCanvasBrief = (): AgentCanvasBriefNode[] =>
+          getNodes()
+            .filter((n) => n.type !== 'ghost' && n.type !== 'group')
+            .map((n) => {
+              const d = n.data as StudioNodeData | undefined
+              const kind = String(d?.kind ?? n.type ?? 'other')
+              const trimmed = d && typeof d.title === 'string' ? d.title.trim() : ''
+              const title = trimmed || defaultStudioNodeTitle(kind)
+              return { id: n.id, title, kind }
+            })
+        const loopOut = await runFlowidAgentToolLoop({
+          config: aiConfig,
+          userText: userLine,
+          history: hist,
+          getCanvasBrief,
+          executeTool: executeFlowidAgentTool,
+        })
+        if (loopOut.error) {
+          const em = loopOut.error.toLowerCase()
+          if (
+            /tool|tools|function_call|not supported|unsupported|unknown parameter|invalid/.test(
+              em,
+            )
+          ) {
+            const replyText = await callLLM(
+              [...hist, { role: 'user', content: userLine }],
+              aiConfig,
+            )
+            return [replaceSensitiveWords(replyText)]
+          }
+        }
+        return loopOut.lines.map((x) => replaceSensitiveWords(x))
       }
 
       const raw = text.trim()
@@ -7486,12 +9450,19 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         replySink: (msg) => lines.push(msg),
         skipConfirm: true,
         silentPlanning: true,
+        rulesOnly: true,
       })
       return lines.length ? lines : ['好的。']
     }
     registerStudioAgentChatHandler(handler)
     return () => registerStudioAgentChatHandler(null)
-  }, [aiConfig, executeAiAssistantCommand, workflowBusyForAiPlanning])
+  }, [
+    aiConfig,
+    executeAiAssistantCommand,
+    executeFlowidAgentTool,
+    getNodes,
+    workflowBusyForAiPlanning,
+  ])
 
   useEffect(() => {
     registerAgentCanvasTasksProvider(() => {
@@ -8053,7 +10024,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   }, [])
 
   const handleAvatarDockMouseDown = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
+    (event: ReactMouseEvent<HTMLElement>) => {
       if (event.button !== 0) return
       const target = event.target as HTMLElement
       if (target.closest('.studio-ai-avatar-dock__resizeHandle')) return
@@ -8158,7 +10129,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             updateNodeData(id, { kind, runProgress: info } as Partial<StudioNodeData>)
           },
         })
-        await applyWorkflowResultToNode(fresh, kind, result)
+        const nodeForMerge = nodesRef.current.find((n) => n.id === id) ?? fresh
+        await applyWorkflowResultToNode(nodeForMerge, kind, result)
 
         updateNodeData(id, {
           kind,
@@ -8221,62 +10193,51 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   ])
 
   /**
-   * 将文本节点内容拆分为多个文本子节点并自动连线：`asset` 为角色/场景/资产规则，`storyboard` 为分镜锚点规则。
+   * 将文本节点按指定分段标记（### 或 ///）拆成多个文本子节点并自动连线。
    */
-  const splitTextNodeToStructuredNodes = useCallback((mode: TextSplitMode) => {
+  const splitTextNodeToStructuredNodes = useCallback((delimiter: TextSymbolSplitDelimiter) => {
     if (!promptPanel || promptPanel.kind !== 'text') return
     const sourceNode = nodes.find((item) => item.id === promptPanel.node.id) ?? promptPanel.node
     const body = ((sourceNode.data as TextNodeData).body || '').trim()
     if (!body) {
-      window.alert('请先填写文本内容，再执行自动拆分')
+      window.alert('请先填写文本内容，再执行符号拆分')
       return
     }
-    const entries =
-      mode === 'asset'
-        ? splitTextByCategory(body).map((item) => ({ title: item.title, body: item.body }))
-        : mode === 'storyboard'
-          ? splitTextByStoryboard(body)
-          : splitTextByFixedDelimiters(body)
+    const entries = splitTextByDelimiter(body, delimiter)
     if (!entries.length) {
-      window.alert(
-        mode === 'asset'
-          ? '未识别到“角色/场景/资产”段落，请检查文本格式'
-          : mode === 'storyboard'
-            ? '未识别到「分镜 NN 提示词卡」锚点段落，请检查文本格式'
-            : '未识别到可拆分段落，请使用分隔符单独成行：### 或 --- 或 @@',
-      )
+      window.alert(`未识别到可拆分段落，请使用 ${delimiter} 作为分段标记`)
       return
     }
-    if (mode === 'symbol' && entries.length < 2) {
-      window.alert('符号拆分至少需要 2 段内容。请在文本中加入分隔符：### 或 --- 或 @@')
+    if (entries.length < 2) {
+      window.alert(`符号拆分至少需要 2 段内容。请在文本中加入 ${delimiter} 分段。`)
       return
     }
 
-    /** 拆分生成节点与「前一节点」在流坐标中的间距（与全景导出等约定一致：20） */
+    /**
+     * 拆分落点（与「后接节点」一致）：
+     * - 第一个子节点与源节点 **顶缘平齐**（同一水平线，`y` 相同）；
+     * - 子节点列左缘 = 源节点 **右缘 + 20**（水平净距 20px）；
+     * - 后续子节点在本列向下叠，间距仍为 20。
+     * 宽度与坐标在 `setNodes` 内用 `prev` 中最新节点 + `splitAnchorNodeFlowWidth` 计算，避免闭包陈旧或 style/measured 不一致导致横向偏移为 0。
+     */
     const SPLIT_GAP_FLOW = 20
-    const parseFlowDim = (v: unknown): number => {
-      if (typeof v === 'number' && Number.isFinite(v)) return v
-      if (typeof v === 'string') {
-        const n = Number.parseFloat(v)
-        return Number.isFinite(n) ? n : NaN
-      }
-      return NaN
-    }
-    const sourceStyle = (sourceNode.style ?? {}) as {
-      width?: number | string
-      height?: number | string
-    }
-    const sn = sourceNode as Node<StudioNodeData>
-    const sourceWidth =
-      parseFlowDim(sn.measured?.width) ||
-      parseFlowDim(sourceStyle.width) ||
-      430
-    const baseX = sourceNode.position.x + sourceWidth + SPLIT_GAP_FLOW
-    let yCursor = sourceNode.position.y
+    const sourceId = sourceNode.id
     const newNodes: Array<Node<StudioNodeData>> = []
     const newEdges: Array<Edge> = []
 
     setNodes((prev) => {
+      const liveSource = prev.find((n) => n.id === sourceId) as Node<StudioNodeData> | undefined
+      if (!liveSource) return prev
+
+      const px = Number(liveSource.position.x)
+      const py = Number(liveSource.position.y)
+      const flowX = Number.isFinite(px) ? px : 0
+      const flowY = Number.isFinite(py) ? py : 0
+      const storeSource = getNodes().find((n) => n.id === sourceId) as Node<StudioNodeData> | undefined
+      const sourceW = splitAnchorNodeFlowWidth(storeSource ?? liveSource)
+      const baseX = flowX + sourceW + SPLIT_GAP_FLOW
+      let yCursor = flowY
+
       let nextNodes = prev
       const titleTaken = new Set(
         nextNodes
@@ -8298,18 +10259,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           title,
         )
         ;(node.data as TextNodeData).body = entry.body
-        const nodeH =
-          typeof node.style?.height === 'number'
-            ? node.style.height
-            : typeof node.style?.height === 'string'
-              ? Number.parseFloat(node.style.height)
-              : 340
-        yCursor += (Number.isFinite(nodeH) ? nodeH : 340) + SPLIT_GAP_FLOW
+        const nodeH = getNodeSize(node).height
+        yCursor += nodeH + SPLIT_GAP_FLOW
         nextNodes = [...nextNodes, node]
         newNodes.push(node)
         newEdges.push({
           id: crypto.randomUUID(),
-          source: sourceNode.id,
+          source: sourceId,
           target: id,
           animated: true,
           style: { strokeWidth: 2 },
@@ -8319,17 +10275,13 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     })
     setEdges((prev) => [...prev, ...newEdges])
     appendHistory(
-      mode === 'asset'
-        ? `资产拆分完成：从「${sourceNode.data.title}」生成 ${newNodes.length} 个文本节点`
-        : mode === 'storyboard'
-          ? `分镜拆分完成：从「${sourceNode.data.title}」生成 ${newNodes.length} 个文本节点`
-          : `符号拆分完成：从「${sourceNode.data.title}」生成 ${newNodes.length} 个文本节点`,
+      `符号拆分（${delimiter}）完成：从「${sourceNode.data.title}」生成 ${newNodes.length} 个文本节点`,
     )
     /** 拆分后焦点常在提示框 textarea，会导致 Ctrl+Z 只作用在输入框；失焦后可用画布撤销 */
     requestAnimationFrame(() => {
       panelPromptTextareaRef.current?.blur()
     })
-  }, [appendHistory, nodes, promptPanel, setEdges, setNodes])
+  }, [appendHistory, getNodes, nodes, promptPanel, setEdges, setNodes])
 
   return (
     <CanvasProvider
@@ -8529,7 +10481,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                           />
                         ) : (
                           <>
-                            <span className="studio-project-pill__name text-[14px] font-black tracking-widest">
+                            <span
+                              className="studio-project-pill__name text-[14px] font-black tracking-widest"
+                              title="双击此处可重命名项目"
+                            >
                               {tab.name}
                             </span>
                             {isActive ? (
@@ -8812,6 +10767,400 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               )
             : null}
 
+          {voiceTable8ModalOpen &&
+          voiceTable8ModalPosition &&
+          promptPanel &&
+          promptPanel.kind === 'audio' &&
+          typeof document !== 'undefined'
+            ? createPortal(
+                <div
+                  className="studio-vt8-modal-shell nodrag nopan"
+                  style={{
+                    position: 'fixed',
+                    left: `${voiceTable8ModalPosition.left}px`,
+                    top: `${voiceTable8ModalPosition.top}px`,
+                    width: `${voiceTable8ModalPosition.width}px`,
+                    height: 'min(480px, 56vh)',
+                    zIndex: 12200,
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="studio-vt8-modal">
+                    <div className="studio-vt8-modal__top">
+                      <span className="studio-vt8-modal__title">台本信息</span>
+                      <div className="studio-vt8-modal__toolbar">
+                        <button
+                          type="button"
+                          className="studio-vt8-modal__toolbtn studio-vt8-modal__toolbtn--primary"
+                          onClick={() => {
+                            flushVoiceTable8DraftToNode()
+                            setVoiceTable8ModalOpen(false)
+                            setVoiceTable8Editing(null)
+                          }}
+                        >
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-vt8-modal__toolbtn"
+                          onClick={() => {
+                            const blank = (): ComfyVoiceTableRow => ({
+                              roleName: '',
+                              sampleLine: '',
+                              voiceInstruct: '',
+                              language: 'Auto',
+                            })
+                            setVoiceTable8Draft([blank(), blank(), blank()])
+                            setVoiceTable8Editing(null)
+                          }}
+                        >
+                          清空
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-vt8-modal__toolbtn"
+                          onClick={() => {
+                            setVoiceTable8ModalOpen(false)
+                            setVoiceTable8Editing(null)
+                          }}
+                        >
+                          退出
+                        </button>
+                      </div>
+                    </div>
+                    <div className="studio-vt8-modal__body">
+                      <div className="studio-vt8-modal__bulk">
+                        <textarea
+                          className="studio-vt8-modal__bulk-input nodrag nopan nowheel"
+                          rows={2}
+                          spellCheck={false}
+                          placeholder="粘贴批量结果（覆盖下方表格）：每行「角色名称###代表台词###声音设定」。可选第四段「###语言」与下拉一致。勿在台词/声音中使用 ###。"
+                          value={voiceTable8BulkPasteDraft}
+                          onChange={(e) => setVoiceTable8BulkPasteDraft(e.target.value)}
+                        />
+                        <div className="studio-vt8-modal__bulk-bar">
+                          <button
+                            type="button"
+                            className="studio-vt8-modal__toolbtn studio-vt8-modal__toolbtn--primary"
+                            onClick={applyVoiceTable8BulkPaste}
+                          >
+                            填入表格
+                          </button>
+                          <button
+                            type="button"
+                            className="studio-vt8-modal__toolbtn"
+                            onClick={async () => {
+                              try {
+                                const t = await navigator.clipboard.readText()
+                                setVoiceTable8BulkPasteDraft(t)
+                              } catch {
+                                window.alert('无法读取剪贴板，请在上框手动粘贴。')
+                              }
+                            }}
+                          >
+                            从剪贴板读取
+                          </button>
+                        </div>
+                      </div>
+                      <div className="studio-vt8-modal__scroll">
+                      <div className="studio-vt8-modal__th" aria-hidden>
+                        <span>角色名称</span>
+                        <span>角色台词</span>
+                        <span>角色声音设定</span>
+                        <span>语言</span>
+                        <span />
+                      </div>
+                      {voiceTable8Draft.map((row, rowIdx) => (
+                        <div key={`vt8m-${rowIdx}`} className="studio-vt8-modal__tr">
+                          {(
+                            [
+                              ['roleName', false],
+                              ['sampleLine', true],
+                              ['voiceInstruct', true],
+                            ] as const
+                          ).map(([field, multiline]) => {
+                            const isEd =
+                              voiceTable8Editing?.row === rowIdx &&
+                              voiceTable8Editing?.field === field
+                            const val = String(row[field] ?? '')
+                            if (isEd) {
+                              if (multiline) {
+                                return (
+                                  <textarea
+                                    key={field}
+                                    className="studio-vt8-modal__field studio-vt8-modal__field--textarea"
+                                    rows={2}
+                                    autoFocus
+                                    value={val}
+                                    onChange={(e) => {
+                                      const v = e.target.value
+                                      setVoiceTable8Draft((prev) => {
+                                        const next = prev.slice()
+                                        next[rowIdx] = { ...next[rowIdx]!, [field]: v }
+                                        return next
+                                      })
+                                    }}
+                                    onBlur={() => setVoiceTable8Editing(null)}
+                                  />
+                                )
+                              }
+                              return (
+                                <input
+                                  key={field}
+                                  type="text"
+                                  className="studio-vt8-modal__field"
+                                  autoFocus
+                                  value={val}
+                                  onChange={(e) => {
+                                    const v = e.target.value
+                                    setVoiceTable8Draft((prev) => {
+                                      const next = prev.slice()
+                                      next[rowIdx] = { ...next[rowIdx]!, [field]: v }
+                                      return next
+                                    })
+                                  }}
+                                  onBlur={() => setVoiceTable8Editing(null)}
+                                />
+                              )
+                            }
+                            return (
+                              <div
+                                key={field}
+                                className="studio-vt8-modal__cell"
+                                title="双击编辑"
+                                onDoubleClick={() =>
+                                  setVoiceTable8Editing({ row: rowIdx, field })
+                                }
+                              >
+                                {val.trim() ? val : <span className="studio-vt8-modal__placeholder">—</span>}
+                              </div>
+                            )
+                          })}
+                          <PromptPanelDropdown
+                            placeholder="语言"
+                            ariaLabel={`角色 ${rowIdx + 1} 语言`}
+                            className="studio-vt8-modal__lang-dropdown"
+                            value={
+                              (COMFY_VOICE_TABLE_LANGUAGE_OPTIONS as readonly string[]).includes(
+                                row.language,
+                              )
+                                ? row.language
+                                : 'Auto'
+                            }
+                            options={COMFY_VOICE_TABLE_LANGUAGE_OPTIONS.map((v) => ({
+                              value: v,
+                              label: v,
+                            }))}
+                            onChange={(v) => {
+                              setVoiceTable8Draft((prev) => {
+                                const next = prev.slice()
+                                next[rowIdx] = { ...next[rowIdx]!, language: v }
+                                return next
+                              })
+                            }}
+                          />
+                          <button
+                            type="button"
+                            className="studio-vt8-modal__rowdel"
+                            title="删除本行"
+                            disabled={voiceTable8Draft.length <= 1}
+                            onClick={() => {
+                              setVoiceTable8Draft((prev) => prev.filter((_, j) => j !== rowIdx))
+                              setVoiceTable8Editing(null)
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="studio-vt8-modal__add-wide"
+                      disabled={voiceTable8Draft.length >= 8}
+                      onClick={() => {
+                        setVoiceTable8Draft((prev) => {
+                          if (prev.length >= 8) return prev
+                          return [
+                            ...prev,
+                            {
+                              roleName: '',
+                              sampleLine: '',
+                              voiceInstruct: '',
+                              language: 'Auto',
+                            },
+                          ]
+                        })
+                      }}
+                    >
+                      新增角色
+                    </button>
+                  </div>
+                </div>,
+                document.body,
+              )
+            : null}
+
+          {tdRefRoleModalOpen &&
+          tdRefRoleModalPosition &&
+          promptPanel &&
+          promptPanel.kind === 'audio' &&
+          typeof document !== 'undefined' ? (
+            <StudioTdRefRoleModalPortal
+              key={tdRefRoleModalKey}
+              slotLabels={tdRefRoleSlotLabels}
+              seedRows={tdRefRoleModalSeedRows}
+              left={tdRefRoleModalPosition.left}
+              top={tdRefRoleModalPosition.top}
+              width={tdRefRoleModalPosition.width}
+              onCommit={commitTdRefRoleModalToNode}
+              persistRef={tdRefRolePersistRef}
+            />
+          ) : null}
+
+          {musicFineTuneModalOpen &&
+          musicFineTuneModalPosition &&
+          promptPanel &&
+          promptPanel.kind === 'music' &&
+          typeof document !== 'undefined'
+            ? createPortal(
+                <div
+                  className="studio-vt8-modal-shell nodrag nopan"
+                  style={{
+                    position: 'fixed',
+                    left: `${musicFineTuneModalPosition.left}px`,
+                    top: `${musicFineTuneModalPosition.top}px`,
+                    width: `${musicFineTuneModalPosition.width}px`,
+                    height: 'min(520px, 72vh)',
+                    zIndex: 12200,
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <div className="studio-vt8-modal">
+                    <div className="studio-vt8-modal__top">
+                      <span className="studio-vt8-modal__title">音乐工作流微调</span>
+                      <div className="studio-vt8-modal__toolbar">
+                        <button
+                          type="button"
+                          className="studio-vt8-modal__toolbtn studio-vt8-modal__toolbtn--primary"
+                          onClick={() => {
+                            const nid = musicFineTuneModalTargetIdRef.current ?? promptPanel.node.id
+                            updateNodeData(
+                              nid,
+                              audioDataPatchFromMusicFineTuneDraft(musicFineTuneDraft) as Partial<StudioNodeData>,
+                            )
+                            setMusicFineTuneModalOpen(false)
+                          }}
+                        >
+                          保存
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-vt8-modal__toolbtn"
+                          onClick={() => {
+                            setMusicFineTuneModalOpen(false)
+                          }}
+                        >
+                          关闭
+                        </button>
+                      </div>
+                    </div>
+                    <div className="studio-vt8-modal__body">
+                      <div className="studio-vt8-modal__scroll">
+                        <div className="studio-music-finetune__row">
+                          <span>时长</span>
+                          <PromptPanelDropdown
+                            ariaLabel="生成时长（分钟）"
+                            placeholder="时长"
+                            className="studio-vt8-modal__field studio-vt8-modal__field--select"
+                            value={String(musicFineTuneDraft.durationMinutes)}
+                            options={MUSIC_FINE_TUNE_DURATION_DROPDOWN_OPTIONS}
+                            onChange={(v) => {
+                              const n = Number(v)
+                              const dm =
+                                n === 1 || n === 2 || n === 3 || n === 4
+                                  ? n
+                                  : DEFAULT_MUSIC_FINE_TUNE_DRAFT.durationMinutes
+                              setMusicFineTuneDraft((prev) => ({ ...prev, durationMinutes: dm }))
+                            }}
+                          />
+                        </div>
+                        <div className="studio-music-finetune__row">
+                          <label htmlFor="flowid-music-ft-bpm">BPM</label>
+                          <input
+                            id="flowid-music-ft-bpm"
+                            type="number"
+                            className="studio-vt8-modal__field"
+                            min={40}
+                            max={240}
+                            step={1}
+                            value={musicFineTuneDraft.bpm}
+                            onChange={(e) => {
+                              const n = Math.round(Number(e.target.value))
+                              setMusicFineTuneDraft((prev) => ({
+                                ...prev,
+                                bpm: Number.isFinite(n) ? n : prev.bpm,
+                              }))
+                            }}
+                          />
+                        </div>
+                        <div className="studio-music-finetune__row">
+                          <span>拍号</span>
+                          <PromptPanelDropdown
+                            ariaLabel="拍号"
+                            placeholder="拍号"
+                            className="studio-vt8-modal__field studio-vt8-modal__field--select"
+                            value={musicFineTuneDraft.timesignature}
+                            options={MUSIC_FINE_TUNE_TS_DROPDOWN_OPTIONS}
+                            onChange={(v) =>
+                              setMusicFineTuneDraft((prev) => ({
+                                ...prev,
+                                timesignature: v,
+                              }))
+                            }
+                          />
+                        </div>
+                        <div className="studio-music-finetune__row">
+                          <span>语言</span>
+                          <PromptPanelDropdown
+                            ariaLabel="语言"
+                            placeholder="语言"
+                            className="studio-vt8-modal__field studio-vt8-modal__field--select"
+                            value={musicFineTuneDraft.language}
+                            options={MUSIC_FINE_TUNE_LANG_DROPDOWN_OPTIONS}
+                            onChange={(v) =>
+                              setMusicFineTuneDraft((prev) => ({
+                                ...prev,
+                                language: v,
+                              }))
+                            }
+                          />
+                        </div>
+                        <div className="studio-music-finetune__row">
+                          <span>调性</span>
+                          <PromptPanelDropdown
+                            ariaLabel="调性"
+                            placeholder="调性"
+                            className="studio-vt8-modal__field studio-vt8-modal__field--select"
+                            value={musicFineTuneDraft.keyscale}
+                            options={MUSIC_FINE_TUNE_KEY_DROPDOWN_OPTIONS}
+                            onChange={(v) =>
+                              setMusicFineTuneDraft((prev) => ({
+                                ...prev,
+                                keyscale: v,
+                              }))
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>,
+                document.body,
+              )
+            : null}
+
           {leftPanel === 'settings' ? (
             <div
               className={
@@ -8832,6 +11181,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 localConfig={localConfig}
                 cloudConfig={cloudConfig}
                 cloudEndpoints={cloudEndpoints}
+                cloudWorkflowMetaList={cloudWorkflowMetaList}
                 nodeConfigs={nodeConfigs}
                 shortcuts={shortcuts}
                 lastExecutionMessage={lastExecutionMessage}
@@ -8888,7 +11238,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               role="dialog"
               aria-label="添加节点"
             >
-              <AddNodePanel addNodeItems={addNodeItems} canvasDayMode={canvasDayMode} />
+              <AddNodePanel addNodeItems={canvasAddNodeItems} canvasDayMode={canvasDayMode} />
             </div>
           ) : null}
 
@@ -8946,6 +11296,29 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                     >
                       粘贴
                     </button>
+                    {contextMenuMultiangleTarget && multiSelectContextMenu ? (
+                      <button
+                        type="button"
+                        className="studio-group__menuItem"
+                        role="menuitem"
+                        onClick={() => {
+                          setMultianglePanel({ nodeId: contextMenuMultiangleTarget.id })
+                          dismissMultiSelectContextMenu()
+                        }}
+                      >
+                        角度控制
+                      </button>
+                    ) : null}
+                    {contextMenuImageCompareTwoPick ? (
+                      <button
+                        type="button"
+                        className="studio-group__menuItem"
+                        role="menuitem"
+                        onClick={() => createImageCompareFromContextMenuSelection()}
+                      >
+                        新增对比节点
+                      </button>
+                    ) : null}
                     {batchContextMenuEligibleCount >= 2 ? (
                       <button
                         type="button"
@@ -9091,6 +11464,33 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
               )
             : null}
 
+          {multianglePanel
+            ? createPortal(
+                (() => {
+                  const n = nodes.find((x) => x.id === multianglePanel.nodeId)
+                  if (!n || (n.data.kind !== 'image' && n.data.kind !== 'video')) return null
+                  const d = n.data as ImageNodeData | VideoNodeData
+                  return (
+                    <MultiangleControlPanel
+                      nodeId={n.id}
+                      nodeKind={n.data.kind === 'image' ? 'image' : 'video'}
+                      rawH={d.comfyMultiangleH}
+                      rawV={d.comfyMultiangleV}
+                      rawZ={d.comfyMultiangleZoom}
+                      anchorLeft={multianglePanelAnchor.left}
+                      anchorTop={multianglePanelAnchor.top}
+                      canvasDayMode={canvasDayMode}
+                      onApply={(patch) =>
+                        updateNodeData(n.id, { kind: n.data.kind, ...patch } as Partial<StudioNodeData>)
+                      }
+                      onClose={() => setMultianglePanel(null)}
+                    />
+                  )
+                })(),
+                document.body,
+              )
+            : null}
+
           <ReactFlow
             ref={reactFlowRootRef}
             className={canvasDayMode ? undefined : 'dark'}
@@ -9126,8 +11526,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             /** 避免节点 DOM 盒模型异常导致“轻微碰到就全选” */
             selectionMode={SelectionMode.Full}
             selectionOnDrag={false}
-            /** Shift 框选；Ctrl/Meta 追加多选（避免与框选键冲突导致“越选越多”） */
-            selectionKeyCode={['Shift']}
+            /** 框选键在「设置 → 快捷键」可配为 Shift 或 Alt；Ctrl/Cmd 追加多选 */
+            selectionKeyCode={marqueeSelectionKeyCode}
             multiSelectionKeyCode={['Control', 'Meta']}
             panOnDrag
             defaultEdgeOptions={flowDefaultEdgeOptions}
@@ -9193,11 +11593,28 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 )
               : null}
             {visiblePromptPanel && visiblePromptPanelLayout && promptPanelWrapStyle ? (
+              <>
               <div
                 className={`studio-music-prompt-panel-wrap nodrag nopan nowheel ${promptPanelExpanded ? 'is-expanded' : ''}`}
                 style={promptPanelWrapStyle}
                 aria-label="节点提示词与执行面板"
-                onMouseDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => {
+                  event.stopPropagation()
+                  const t = event.target as HTMLElement
+                  if (t.closest('button') || t.closest('[role="listbox"]') || t.closest('input[type="file"]')) {
+                    return
+                  }
+                  if (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.closest('textarea')) {
+                    return
+                  }
+                  const ta = panelPromptTextareaRef.current
+                  if (!ta || ta.disabled || ta.readOnly) return
+                  try {
+                    ta.focus({ preventScroll: true })
+                  } catch {
+                    ta.focus()
+                  }
+                }}
                 onClick={(event) => event.stopPropagation()}
               >
                 <div
@@ -9257,7 +11674,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                     ? (visiblePromptPanel.node.data as ImageNodeData).referenceImageSources
                     : visiblePromptPanel.kind === 'video'
                       ? (visiblePromptPanel.node.data as VideoNodeData).referenceImageSources
-                      : visiblePromptPanel.kind === 'audio'
+                      : visiblePromptPanel.kind === 'audio' ||
+                          visiblePromptPanel.kind === 'music'
                         ? (visiblePromptPanel.node.data as AudioNodeData).referenceImageSources
                         : []) ?? []).filter(Boolean).length > 0 ? (
                     <div
@@ -9350,7 +11768,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         ? (visiblePromptPanel.node.data as ImageNodeData).referenceImageSources
                         : visiblePromptPanel.kind === 'video'
                           ? (visiblePromptPanel.node.data as VideoNodeData).referenceImageSources
-                          : visiblePromptPanel.kind === 'audio'
+                          : visiblePromptPanel.kind === 'audio' ||
+                              visiblePromptPanel.kind === 'music'
                             ? (visiblePromptPanel.node.data as AudioNodeData).referenceImageSources
                             : []) ?? [])
                         ?.filter(Boolean)
@@ -9365,9 +11784,30 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                             onDragEnd={() => {
                               refChipDragIndexRef.current = null
                             }}
-                            title="本地参考图（可拖拽调整顺序）"
+                            title={
+                              visiblePromptPanel.kind === 'audio' ||
+                              visiblePromptPanel.kind === 'music'
+                                ? '本地参考音/图（可拖拽排序；主槽=第1路，其余=第2路起；传几路就只上传几路文件）'
+                                : '本地参考图（可拖拽调整顺序）'
+                            }
                           >
-                            <img src={src} alt="" />
+                            {visiblePromptPanel.kind === 'audio' ||
+                            visiblePromptPanel.kind === 'music'
+                              ? refChipUseImagePreview(src)
+                                ? (
+                                    <img src={src} alt="" />
+                                  )
+                                : (
+                                    <div
+                                      className="studio-music-prompt-panel__refChipAudioPh"
+                                      aria-hidden
+                                    >
+                                      音
+                                    </div>
+                                  )
+                              : (
+                                  <img src={src} alt="" />
+                                )}
                             <button
                               type="button"
                               className="studio-music-prompt-panel__refChipRemove"
@@ -9385,12 +11825,17 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                   ) : null}
                   {(visiblePromptPanel.kind === 'image' ||
                     visiblePromptPanel.kind === 'video' ||
-                    visiblePromptPanel.kind === 'audio') && (
+                    visiblePromptPanel.kind === 'audio' ||
+                    visiblePromptPanel.kind === 'music') && (
                     <div className="studio-music-prompt-panel__refZone">
                       <input
                         ref={panelRefImagesInputRef}
                         type="file"
-                        accept="image/*"
+                        accept={
+                          visiblePromptPanel.kind === 'image' || visiblePromptPanel.kind === 'video'
+                            ? 'image/*'
+                            : 'audio/*,image/*'
+                        }
                         multiple
                         className="visually-hidden"
                         onChange={(event) => {
@@ -9416,24 +11861,436 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         onDragOver={onRefImageDragOver}
                         onDrop={onRefImageDrop}
                       >
-                        <span className="studio-music-prompt-panel__dropPadText">本地参考图（可选）</span>
-                        <span className="studio-music-prompt-panel__dropPadHint">点击或拖拽 · 多图</span>
+                        <span className="studio-music-prompt-panel__dropPadText">
+                          {visiblePromptPanel.kind === 'audio' || visiblePromptPanel.kind === 'music'
+                            ? '本地参考音 / 封面图（可选）'
+                            : '本地参考图（可选）'}
+                        </span>
+                        <span className="studio-music-prompt-panel__dropPadHint">
+                          {visiblePromptPanel.kind === 'audio' || visiblePromptPanel.kind === 'music'
+                            ? '点击或拖拽 · 多文件'
+                            : '点击或拖拽 · 多图'}
+                        </span>
                       </div>
                       {/* refStrip 已合并到上方 unified strip */}
                     </div>
                   )}
+                  {(visiblePromptPanel.kind === 'image' || visiblePromptPanel.kind === 'video') &&
+                    promptPanelSupportsMultiangle &&
+                    (() => {
+                      const d = visiblePromptPanel.node.data as ImageNodeData | VideoNodeData
+                      const h = clampMultiangleHV(d.comfyMultiangleH, FLOWID_MULTIANGLE_DEFAULT_H)
+                      const v = clampMultiangleHV(d.comfyMultiangleV, FLOWID_MULTIANGLE_DEFAULT_V)
+                      const z = clampMultiangleZoom(d.comfyMultiangleZoom, FLOWID_MULTIANGLE_DEFAULT_ZOOM)
+                      const previewFull = buildMultianglePreviewLine(h, v, z)
+                      const isDefault =
+                        h === FLOWID_MULTIANGLE_DEFAULT_H &&
+                        v === FLOWID_MULTIANGLE_DEFAULT_V &&
+                        z === FLOWID_MULTIANGLE_DEFAULT_ZOOM
+                      const panelOpenHere = multianglePanel?.nodeId === visiblePromptPanel.node.id
+                      return (
+                        <div
+                          className={`studio-prompt-multiangle-strip${isDefault ? ' is-default' : ''}${
+                            panelOpenHere ? ' is-panel-open' : ''
+                          }`}
+                          title={`工作流占位符 __CAM_H__ / __CAM_V__ / __CAM_Z__ 将注入为当前角度。\n${previewFull}`}
+                          aria-label="当前镜头角度摘要"
+                        >
+                          <span className="studio-prompt-multiangle-strip__tag">镜头</span>
+                          <span className="studio-prompt-multiangle-strip__kv">
+                            H {h}° · V {v}° · Z {z}
+                          </span>
+                          <span className="studio-prompt-multiangle-strip__hint">
+                            {isDefault ? '默认角度' : '已配置 · 悬停查看英文关键词'}
+                          </span>
+                        </div>
+                      )
+                    })()}
+                  {(visiblePromptPanel.kind === 'image' || visiblePromptPanel.kind === 'video') &&
+                  promptPanelPickerMode === 'workflow' &&
+                  (promptPanelComfyWorkflowOpts.size || promptPanelComfyWorkflowOpts.style)
+                    ? (() => {
+                        const nk = visiblePromptPanel.kind
+                        const nid = visiblePromptPanel.node.id
+                        const d = visiblePromptPanel.node.data as ImageNodeData | VideoNodeData
+                        const legacyPx = isLegacyComfyWorkflowPixelOnly(d)
+                        const useCustom =
+                          d.comfyWorkflowUseCustomPixels === true || legacyPx
+                        const resolved = resolveComfyWorkflowWidthHeight(nk, d)
+                        const aspectVal =
+                          (d.comfyWorkflowAspect as CloudImageAspectKey | undefined) ??
+                          (nk === 'video' ? '16:9' : '1:1')
+                        const wVal =
+                          typeof d.comfyWorkflowWidth === 'number' && Number.isFinite(d.comfyWorkflowWidth)
+                            ? alignComfySpatialDimension(d.comfyWorkflowWidth)
+                            : resolved.width
+                        const hVal =
+                          typeof d.comfyWorkflowHeight === 'number' && Number.isFinite(d.comfyWorkflowHeight)
+                            ? alignComfySpatialDimension(d.comfyWorkflowHeight)
+                            : resolved.height
+                        const stRaw = String(d.comfyWorkflowStyleTone ?? '').trim()
+                        const baseStyleOpts = COMFY_WORKFLOW_STYLE_TONE_PANEL_OPTIONS
+                        const styleDropdownOptions: PromptPanelDropdownOption[] =
+                          stRaw && !baseStyleOpts.some((o) => o.value === stRaw)
+                            ? [
+                                ...baseStyleOpts,
+                                {
+                                  value: stRaw,
+                                  label:
+                                    stRaw.length > 36
+                                      ? `自定义 · ${stRaw.slice(0, 36)}…`
+                                      : `自定义 · ${stRaw}`,
+                                },
+                              ]
+                            : baseStyleOpts
+                        return (
+                          <div
+                            className="studio-prompt-comfy-opts nodrag nopan"
+                            title="按比例映射 __WIDTH__ / __HEIGHT__（与云端「模型」模式的 1K 像素表一致，Comfy 无单独 1K/2K 档位）。含 __STYLE_TONE__ 时可选风格短语。"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {promptPanelComfyWorkflowOpts.size ? (
+                              <div className="studio-prompt-comfy-opts__row studio-prompt-comfy-opts__row--outputs">
+                                <span className="studio-prompt-comfy-opts__tag">输出</span>
+                                <PromptPanelDropdown
+                                  ariaLabel="Comfy 输出比例"
+                                  placeholder="比例"
+                                  className="studio-music-prompt-panel__select studio-prompt-comfy-opts__dropdown studio-prompt-comfy-opts__dropdown--wide"
+                                  value={aspectVal}
+                                  options={COMFY_WORKFLOW_ASPECT_PANEL_OPTIONS}
+                                  disabled={useCustom}
+                                  onChange={(picked) => {
+                                    updateNodeData(nid, {
+                                      kind: nk,
+                                      comfyWorkflowAspect: picked as CloudImageAspectKey,
+                                      comfyWorkflowUseCustomPixels: false,
+                                    } as Partial<StudioNodeData>)
+                                  }}
+                                />
+                                <label className="studio-prompt-comfy-opts__customCheck">
+                                  <input
+                                    type="checkbox"
+                                    checked={useCustom}
+                                    onChange={(e) => {
+                                      const on = e.target.checked
+                                      if (!on) {
+                                        updateNodeData(nid, {
+                                          kind: nk,
+                                          comfyWorkflowUseCustomPixels: false,
+                                          comfyWorkflowAspect:
+                                            (d.comfyWorkflowAspect as CloudImageAspectKey | undefined) ??
+                                            (nk === 'video' ? '16:9' : '1:1'),
+                                        } as Partial<StudioNodeData>)
+                                        return
+                                      }
+                                      const snap = resolveComfyWorkflowWidthHeight(nk, {
+                                        ...d,
+                                        comfyWorkflowUseCustomPixels: false,
+                                        comfyWorkflowAspect: aspectVal,
+                                      })
+                                      updateNodeData(nid, {
+                                        kind: nk,
+                                        comfyWorkflowUseCustomPixels: true,
+                                        comfyWorkflowWidth: snap.width,
+                                        comfyWorkflowHeight: snap.height,
+                                      } as Partial<StudioNodeData>)
+                                    }}
+                                  />
+                                  自定义宽高
+                                </label>
+                              </div>
+                            ) : null}
+                            {promptPanelComfyWorkflowOpts.size && useCustom ? (
+                              <div className="studio-prompt-comfy-opts__row studio-prompt-comfy-opts__row--pixels">
+                                <span className="studio-prompt-comfy-opts__tag studio-prompt-comfy-opts__tag--muted">
+                                  像素
+                                </span>
+                                <input
+                                  type="number"
+                                  className="studio-prompt-comfy-opts__num"
+                                  min={256}
+                                  max={4096}
+                                  step={8}
+                                  value={wVal}
+                                  aria-label="输出宽度"
+                                  onChange={(e) => {
+                                    const n = alignComfySpatialDimension(Number(e.target.value))
+                                    updateNodeData(nid, {
+                                      kind: nk,
+                                      comfyWorkflowUseCustomPixels: true,
+                                      comfyWorkflowWidth: n,
+                                      comfyWorkflowHeight: hVal,
+                                    } as Partial<StudioNodeData>)
+                                  }}
+                                />
+                                <span className="studio-prompt-comfy-opts__times" aria-hidden>
+                                  ×
+                                </span>
+                                <input
+                                  type="number"
+                                  className="studio-prompt-comfy-opts__num"
+                                  min={256}
+                                  max={4096}
+                                  step={8}
+                                  value={hVal}
+                                  aria-label="输出高度"
+                                  onChange={(e) => {
+                                    const n = alignComfySpatialDimension(Number(e.target.value))
+                                    updateNodeData(nid, {
+                                      kind: nk,
+                                      comfyWorkflowUseCustomPixels: true,
+                                      comfyWorkflowWidth: wVal,
+                                      comfyWorkflowHeight: n,
+                                    } as Partial<StudioNodeData>)
+                                  }}
+                                />
+                              </div>
+                            ) : null}
+                            {promptPanelComfyWorkflowOpts.style ? (
+                              <div className="studio-prompt-comfy-opts__row studio-prompt-comfy-opts__row--style">
+                                <span className="studio-prompt-comfy-opts__tag">风格</span>
+                                <PromptPanelDropdown
+                                  ariaLabel="风格色调短语"
+                                  placeholder="风格色调"
+                                  className="studio-music-prompt-panel__select studio-prompt-comfy-opts__dropdown studio-prompt-comfy-opts__dropdown--wide"
+                                  value={stRaw}
+                                  options={styleDropdownOptions}
+                                  onChange={(picked) => {
+                                    updateNodeData(nid, {
+                                      kind: nk,
+                                      comfyWorkflowStyleTone: picked,
+                                    } as Partial<StudioNodeData>)
+                                  }}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        )
+                      })()
+                    : null}
+                  {visiblePromptPanel.kind === 'audio' &&
+                  promptPanelPickerMode === 'workflow' &&
+                  promptPanelVoiceTable8.scanned &&
+                  promptPanelVoiceTable8.show ? (
+                    <div
+                      className="studio-voice-table-8-trigger nodrag nopan"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="studio-voice-table-8-open-btn"
+                        onClick={() => {
+                          const nid = visiblePromptPanel.node.id
+                          voiceTable8ModalTargetIdRef.current = nid
+                          const stored = (nodes.find((x) => x.id === nid)?.data as AudioNodeData)
+                            ?.comfyVoiceTableRows
+                          const blank = (): ComfyVoiceTableRow => ({
+                            roleName: '',
+                            sampleLine: '',
+                            voiceInstruct: '',
+                            language: 'Auto',
+                          })
+                          if (Array.isArray(stored) && stored.length > 0) {
+                            setVoiceTable8Draft(stored.map((r) => ({ ...r })))
+                          } else {
+                            setVoiceTable8Draft([blank(), blank(), blank()])
+                          }
+                          setVoiceTable8Editing(null)
+                          setVoiceTable8ModalOpen(true)
+                        }}
+                      >
+                        台本信息
+                      </button>
+                      <span className="studio-voice-table-8-trigger__hint">
+                        最多 8 路角色；台本在下方填写或文本节点 @ 合并
+                      </span>
+                    </div>
+                  ) : null}
+                  {visiblePromptPanel.kind === 'audio' &&
+                  promptPanelPickerMode === 'workflow' &&
+                  promptPanelTdRefRoleMap.scanned &&
+                  promptPanelTdRefRoleMap.show ? (
+                    <div
+                      className="studio-voice-table-8-trigger nodrag nopan"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="studio-voice-table-8-open-btn"
+                        onClick={() => {
+                          const nid = visiblePromptPanel.node.id
+                          tdRefRoleModalTargetIdRef.current = nid
+                          const d = nodes.find((x) => x.id === nid)?.data as AudioNodeData | undefined
+                          const labels = buildTdRefAudioRoleMatchSlotLabels({
+                            noteText: String(d?.note || ''),
+                            hostNodeId: nid,
+                            selfTitle: String(d?.title || '').trim(),
+                            primarySrc: String(d?.src || '').trim(),
+                            referenceImageSources: d?.referenceImageSources?.filter(Boolean) ?? [],
+                            allNodes: nodes,
+                          })
+                          const stored = d?.comfyTdRefAudioRoleRows ?? []
+                          let base = stored.map((r) => ({
+                            roleName: String(r.roleName ?? ''),
+                          }))
+                          // 旧版只存「第 2 路起」：比当前少一行则在首行补空
+                          if (labels.length > 0 && base.length === labels.length - 1) {
+                            base = [{ roleName: '' }, ...base]
+                          }
+                          if (base.length === labels.length + 1) {
+                            base = base.slice(1)
+                          }
+                          while (base.length < labels.length) base.push({ roleName: '' })
+                          if (base.length > labels.length) base = base.slice(0, labels.length)
+                          setTdRefRoleSlotLabels(labels)
+                          setTdRefRoleModalSeedRows(
+                            labels.map((_, i) => ({
+                              roleName: String(base[i]?.roleName ?? '').trim(),
+                            })),
+                          )
+                          setTdRefRoleModalKey((k) => k + 1)
+                          setTdRefRoleModalOpen(true)
+                        }}
+                      >
+                        匹配
+                      </button>
+                      <span className="studio-voice-table-8-trigger__hint">
+                        一路参考音一行（含主槽）；角色名须与台本「角色名:」一致
+                      </span>
+                    </div>
+                  ) : null}
+                  {visiblePromptPanel.kind === 'audio' && promptPanelPickerMode === 'workflow' ? (
+                    <div
+                      className="studio-prompt-audio-ref-audit nodrag nopan"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <span className="studio-prompt-audio-ref-audit__label">参考音 @</span>
+                      <span className="studio-prompt-audio-ref-audit__body">
+                        {promptPanelAudioRefMentionLabels.length > 0
+                          ? promptPanelAudioRefMentionLabels.join('、')
+                          : '（当前无）'}
+                      </span>
+                    </div>
+                  ) : null}
+                  {visiblePromptPanel.kind === 'music' && promptPanelPickerMode === 'workflow' ? (
+                    <div
+                      className="studio-music-finetune-trigger nodrag nopan"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="studio-voice-table-8-open-btn"
+                        onClick={() => {
+                          const nid = visiblePromptPanel.node.id
+                          musicFineTuneModalTargetIdRef.current = nid
+                          const d = nodes.find((x) => x.id === nid)?.data as AudioNodeData | undefined
+                          setMusicFineTuneDraft(musicFineTuneDraftFromAudioData(d ?? (visiblePromptPanel.node.data as AudioNodeData)))
+                          setMusicFineTuneModalOpen(true)
+                        }}
+                      >
+                        微调
+                      </button>
+                      <span className="studio-voice-table-8-trigger__hint">
+                        时长、BPM、拍号、语言、调性（提交时写入 Comfy）
+                      </span>
+                    </div>
+                  ) : null}
+                  {visiblePromptPanel.kind === 'text' && promptPanelTextSystemPromptSlot ? (
+                    <div
+                      className="studio-prompt-text-system nodrag nopan"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="studio-prompt-text-system__row">
+                        <span className="studio-prompt-text-system__label">系统提示词</span>
+                        <button
+                          type="button"
+                          className="studio-prompt-text-system__save"
+                          onClick={() => {
+                            const id = textPanelSystemPromptWorkflowKey
+                            if (!id) return
+                            const raw = textPanelSystemPromptDraft
+                            const prev = nodeConfigs.text.cloudWorkflowSystemPrompts ?? {}
+                            const next = { ...prev }
+                            if (raw.trim()) next[id] = raw
+                            else delete next[id]
+                            updateNodeConfig('text', {
+                              cloudWorkflowSystemPrompts: Object.keys(next).length ? next : undefined,
+                            })
+                          }}
+                        >
+                          保存
+                        </button>
+                      </div>
+                      <textarea
+                        className="studio-prompt-text-system__textarea nodrag nopan nowheel"
+                        rows={3}
+                        placeholder="可选。保存后执行时写入 Comfy 中的 __SYSTEM_PROMPT__（与上方主输入独立）。可粘贴，或从侧栏/记事本等拖入文本、.txt。"
+                        value={textPanelSystemPromptDraft}
+                        onChange={(e) => setTextPanelSystemPromptDraft(e.target.value)}
+                        onPaste={(e) => {
+                          e.stopPropagation()
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          const dt = e.dataTransfer
+                          if (
+                            dt.types.includes('text/plain') ||
+                            dt.types.includes('Files')
+                          ) {
+                            dt.dropEffect = 'copy'
+                          }
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          const el = e.currentTarget
+                          const applyChunk = (chunk: string) => {
+                            const t = chunk.trim()
+                            if (!t) return
+                            const { nextValue, nextCaret } = insertTextAtCaret(el, t)
+                            setTextPanelSystemPromptDraft(nextValue)
+                            queueMicrotask(() => {
+                              try {
+                                el.focus()
+                                el.setSelectionRange(nextCaret, nextCaret)
+                              } catch {
+                                // ignore
+                              }
+                            })
+                          }
+                          const syncChunk = readDraggedPlainTextSync(e.dataTransfer)
+                          if (syncChunk.trim()) {
+                            applyChunk(syncChunk)
+                            return
+                          }
+                          void (async () => {
+                            applyChunk(await readDraggedPlainText(e.dataTransfer))
+                          })()
+                        }}
+                      />
+                    </div>
+                  ) : null}
                   <textarea
                       ref={panelPromptTextareaRef}
                       data-studio-prompt-textarea="1"
                       className="studio-music-prompt-panel__textarea nodrag nopan nowheel"
                       placeholder={
-                        visiblePromptPanel.kind === 'music' || visiblePromptPanel.kind === 'audio'
-                          ? '描述你想要生成的内容；工作流中可使用占位符 __NOTE__、__REF_IMAGES__（多图 URL 换行）'
-                          : visiblePromptPanel.kind === 'text'
+                        visiblePromptPanel.kind === 'music'
+                          ? '描述你想要生成的内容；工作流可用 __NOTE__。参考音：主槽=第1路，@引用与下方参考区按顺序为第2、3…路；你只上传/引用几路，网络里就只会传那几路文件（模板里多出来的 Comfy 音频槽会用其中一路的文件名占位，避免空槽报错，不会多上传）。'
+                          : visiblePromptPanel.kind === 'audio'
+                            ? promptPanelVoiceTable8.show && promptPanelVoiceTable8.scanned
+                              ? '台本（__NOTE__）：多人对白每行「角色名:台词」，角色名须与「台本信息」里「角色名称」列一致。可用 @ 引用文本/剧本节点（勿 @ 配音/音乐节点，否则正文不会展开）；或与文本/剧本节点连线，执行时会自动合并进台本。未填的表格行不覆盖 Comfy 默认槽。'
+                              : promptPanelTdRefRoleMap.show && promptPanelTdRefRoleMap.scanned
+                                ? '台本（__NOTE__）：多人对白每行「角色名:台词」。「匹配」按实际上传路数逐路填角色名（含主槽）。正文里 @文字/剧本 可合并台词；@配音/音乐 参与参考音。'
+                                : '描述你想要生成的内容；工作流可用 __NOTE__ 作为台本占位符。若工作流含 __REF_AUDIO_n__，参考音：主槽=第1路，@引用与下方参考区按顺序为第2、3…路；未含则无需上传参考音。'
+                            : visiblePromptPanel.kind === 'text'
                             ? '输入文本或提示词；工作流中可使用占位符 __BODY__'
                             : visiblePromptPanel.kind === 'video'
-                              ? '@ 引用与文案写在一起；上游文本按画布顺序对应 __PROMPT__、__PROMPT2__…（第二路同时映射 __BODY__）。工作流可写 __PROMPT5__ 等占位符。'
-                              : '输入画面/镜头描述；'
+                              ? `@ 引用与文案写在一起；上游文本按画布顺序对应 __PROMPT__、__PROMPT2__…（第二路同时映射 __BODY__）。工作流可写 __PROMPT5__ 等占位符。${promptPanelComfyWorkflowHint}`
+                              : promptPanelSupportsMultiangle
+                                ? `输入画面/编辑描述（映射 __PROMPT__）；镜头角度请右键节点选「角度控制」。${promptPanelComfyWorkflowHint}`
+                                : `输入画面/编辑描述（映射 __PROMPT__）。${promptPanelComfyWorkflowHint}`
                       }
                       value={promptPanelText}
                       onDragOver={(event) => {
@@ -9567,46 +12424,146 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       未匹配到节点：{unresolvedMentions.map((item) => `@${item}`).join('、')}
                     </div>
                   ) : null}
-                  <div className="studio-music-prompt-panel__foot">
+                  <div
+                    className={`studio-music-prompt-panel__foot${
+                      visiblePromptPanel.kind === 'image' && promptPanelPickerMode === 'model'
+                        ? ' studio-music-prompt-panel__foot--imageCloudModel'
+                        : ''
+                    }`}
+                  >
                     {promptPanelPickerMode === 'workflow' ? (
-                      <PromptPanelDropdown
-                        ariaLabel="选择工作流模板"
-                        className="studio-music-prompt-panel__select"
-                        placeholder="选择工作流"
-                        value={promptPanelWorkflowSelectValue}
-                        options={promptPanelWorkflowDropdownOptions}
-                        onChange={(picked) => {
-                          const wfKind = visiblePromptPanel.kind
-                          if (executionProvider === 'cloud') {
-                            const cloudList = cloudWorkflowMetaList.filter(
-                              (w) => !w.nodeKind || w.nodeKind === wfKind,
-                            )
-                            const hit = cloudList.find((w) => w.id === picked)
-                            if (hit) {
-                              updateNodeData(visiblePromptPanel.node.id, {
-                                kind: wfKind,
-                                model: hit.name,
-                                workflowEntryId: hit.id,
-                              } as Partial<StudioNodeData>)
+                      <div className="studio-music-prompt-panel__workflowRow">
+                        <PromptPanelDropdown
+                          ariaLabel="选择工作流模板"
+                          className="studio-music-prompt-panel__select"
+                          placeholder="选择工作流"
+                          value={promptPanelWorkflowSelectValue}
+                          options={promptPanelWorkflowDropdownOptions}
+                          title={
+                            promptPanelExampleWorkflowKey
+                              ? '单击展开列表；双击可打开「我的示例工程」'
+                              : undefined
+                          }
+                          onMainButtonDoubleClick={
+                            promptPanelExampleWorkflowKey
+                              ? () => setCloudWorkflowExampleModalOpen(true)
+                              : undefined
+                          }
+                          onChange={(picked) => {
+                            const wfKind = visiblePromptPanel.kind
+                            if (executionProvider === 'cloud') {
+                              const cloudList = cloudWorkflowMetaList.filter(
+                                (w) => !w.nodeKind || w.nodeKind === wfKind,
+                              )
+                              const hit = cloudList.find((w) => w.id === picked)
+                              if (hit) {
+                                updateNodeData(visiblePromptPanel.node.id, {
+                                  kind: wfKind,
+                                  model: hit.name,
+                                  workflowEntryId: hit.id,
+                                } as Partial<StudioNodeData>)
+                              }
+                              return
                             }
-                            return
-                          }
-                          const list = nodeConfigs[wfKind].workflows
-                          const pickedEntry =
-                            list.find((item) => item.name === picked) ??
-                            list.find((item) => item.name.trim() === picked.trim()) ??
-                            findWorkflowEntryByPreferredName(list, picked)
-                          if (pickedEntry) {
-                            selectNodeWorkflow(wfKind, pickedEntry.id)
-                          }
-                          updateNodeData(visiblePromptPanel.node.id, {
-                            kind: wfKind,
-                            model: picked,
-                            /** 与执行逻辑一致：以条目 id 为准，不依赖全局 selectedWorkflowId */
-                            workflowEntryId: pickedEntry?.id,
-                          } as Partial<StudioNodeData>)
-                        }}
-                      />
+                            const list = nodeConfigs[wfKind].workflows
+                            const pickedEntry =
+                              list.find((item) => item.name === picked) ??
+                              list.find((item) => item.name.trim() === picked.trim()) ??
+                              findWorkflowEntryByPreferredName(list, picked)
+                            if (pickedEntry) {
+                              selectNodeWorkflow(wfKind, pickedEntry.id)
+                            }
+                            updateNodeData(visiblePromptPanel.node.id, {
+                              kind: wfKind,
+                              model: picked,
+                              /** 与执行逻辑一致：以条目 id 为准，不依赖全局 selectedWorkflowId */
+                              workflowEntryId: pickedEntry?.id,
+                            } as Partial<StudioNodeData>)
+                          }}
+                        />
+                        {executionMode === 'custom' && promptPanelExampleWorkflowKey ? (
+                          <button
+                            type="button"
+                            className="studio-prompt-workflow-examples-btn"
+                            title="打开与此工作流绑定的示例画布（也可双击左侧工作流名称）"
+                            onClick={() => setCloudWorkflowExampleModalOpen(true)}
+                          >
+                            示例
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : visiblePromptPanel.kind === 'image' ? (
+                      <>
+                        <PromptPanelDropdown
+                          ariaLabel="选择云端模型"
+                          className="studio-music-prompt-panel__select studio-music-prompt-panel__select--cloudModelPrimary"
+                          placeholder="选择模型"
+                          value={promptPanelModelSelectValue}
+                          options={promptPanelModelOptions}
+                          onChange={(pickedId) => {
+                            const kind = visiblePromptPanel.kind
+                            if (pickedId === 'custom-current') return
+                            const assistDecoded = tryDecodeCloudAssistModelPick(pickedId)
+                            if (assistDecoded) {
+                              const ak = studioNodeKindToAssistKind(kind)
+                              if (!ak) return
+                              const ep = findAssistEndpoint(ak, assistDecoded.endpointId, assistCatalog)
+                              if (!ep) return
+                              updateNodeData(visiblePromptPanel.node.id, {
+                                kind,
+                                cloudAssistModelPick: pickedId,
+                                cloudSelfPresetId: undefined,
+                                cloudModelName: assistDecoded.model,
+                                cloudModelUrl: ep.baseUrl,
+                                cloudApiKey: getAssistApiKey(ak),
+                              } as any)
+                              return
+                            }
+                            const preset = loadCloudSelfPresets().find((i) => i.id === pickedId)
+                            if (!preset) return
+                            updateNodeData(visiblePromptPanel.node.id, {
+                              kind,
+                              cloudAssistModelPick: undefined,
+                              cloudSelfPresetId: preset.id,
+                              cloudModelName: preset.model,
+                              cloudModelUrl: preset.baseUrl,
+                              cloudApiKey: String((preset as any).apiKey || ''),
+                            } as any)
+                          }}
+                        />
+                        <PromptPanelDropdown
+                          ariaLabel="比例"
+                          title="对应云端 Image API 的 size，不会拼进提示词"
+                          className="studio-music-prompt-panel__select studio-music-prompt-panel__select--iconOnly"
+                          placeholder="比例"
+                          value={(visiblePromptPanel.node.data as ImageNodeData).cloudImageAspect ?? 'auto'}
+                          options={COMFY_WORKFLOW_ASPECT_PANEL_OPTIONS}
+                          renderButtonContent={() => <CloudAspectGlyph />}
+                          onChange={(picked) => {
+                            updateNodeData(visiblePromptPanel.node.id, {
+                              kind: 'image',
+                              cloudImageAspect: picked as CloudImageAspectKey,
+                            } as Partial<StudioNodeData>)
+                          }}
+                        />
+                        <PromptPanelDropdown
+                          ariaLabel="分辨率"
+                          title="影响像素档位与 quality；不进入提示词正文"
+                          className="studio-music-prompt-panel__select studio-music-prompt-panel__select--iconOnly"
+                          placeholder="分辨率"
+                          value={(visiblePromptPanel.node.data as ImageNodeData).cloudImageResolutionTier ?? '1k'}
+                          options={CLOUD_IMAGE_RESOLUTION_PANEL_OPTIONS}
+                          renderButtonContent={({ value: v }) => (
+                            <CloudResolutionGlyph tier={(v as CloudImageResolutionTier) ?? '1k'} />
+                          )}
+                          onChange={(picked) => {
+                            updateNodeData(visiblePromptPanel.node.id, {
+                              kind: 'image',
+                              cloudImageResolutionTier: picked as CloudImageResolutionTier,
+                            } as Partial<StudioNodeData>)
+                          }}
+                        />
+                      </>
                     ) : (
                       <PromptPanelDropdown
                         ariaLabel="选择云端模型"
@@ -9617,10 +12574,27 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         onChange={(pickedId) => {
                           const kind = visiblePromptPanel.kind
                           if (pickedId === 'custom-current') return
+                          const assistDecoded = tryDecodeCloudAssistModelPick(pickedId)
+                          if (assistDecoded) {
+                            const ak = studioNodeKindToAssistKind(kind)
+                            if (!ak) return
+                            const ep = findAssistEndpoint(ak, assistDecoded.endpointId, assistCatalog)
+                            if (!ep) return
+                            updateNodeData(visiblePromptPanel.node.id, {
+                              kind,
+                              cloudAssistModelPick: pickedId,
+                              cloudSelfPresetId: undefined,
+                              cloudModelName: assistDecoded.model,
+                              cloudModelUrl: ep.baseUrl,
+                              cloudApiKey: getAssistApiKey(ak),
+                            } as any)
+                            return
+                          }
                           const preset = loadCloudSelfPresets().find((i) => i.id === pickedId)
                           if (!preset) return
                           updateNodeData(visiblePromptPanel.node.id, {
                             kind,
+                            cloudAssistModelPick: undefined,
                             cloudSelfPresetId: preset.id,
                             cloudModelName: preset.model,
                             cloudModelUrl: preset.baseUrl,
@@ -9630,26 +12604,49 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       />
                     )}
                     {visiblePromptPanel.kind === 'text' ? (
-                      <PromptPanelDropdown
-                        key={textSplitSelectKey}
-                        aria-label="自动拆分方式"
-                        title="选择拆分方式：资产拆分 / 分镜拆分 / 符号拆分"
-                        className="nodrag studio-music-prompt-panel__splitSelect"
-                        placeholder="自动拆分"
-                        value=""
-                        options={[
-                          { value: '', label: '自动拆分', disabled: true },
-                          { value: 'asset', label: '资产拆分' },
-                          { value: 'storyboard', label: '分镜拆分' },
-                          { value: 'symbol', label: '符号拆分（### / --- / @@）' },
-                        ]}
-                        onChange={(v) => {
-                          if (v === 'asset' || v === 'storyboard' || v === 'symbol') {
-                            splitTextNodeToStructuredNodes(v as TextSplitMode)
-                            setTextSplitSelectKey((k) => k + 1)
-                          }
-                        }}
-                      />
+                      <div
+                        ref={symbolSplitMenuRootRef}
+                        className="nodrag pp-select studio-music-prompt-panel__splitSymbolMenu"
+                        data-open={symbolSplitMenuOpen ? '1' : '0'}
+                      >
+                        <button
+                          type="button"
+                          className="nodrag studio-music-prompt-panel__splitSelect"
+                          aria-label="符号拆分"
+                          title="点击后在菜单中选择 ### 或 /// 作为分段标记"
+                          aria-haspopup="listbox"
+                          aria-expanded={symbolSplitMenuOpen}
+                          onClick={() => setSymbolSplitMenuOpen((o) => !o)}
+                        >
+                          符号拆分
+                        </button>
+                        {symbolSplitMenuOpen ? (
+                          <div className="pp-select__menu" role="listbox" aria-label="选择分段标记">
+                            <button
+                              type="button"
+                              role="option"
+                              className="pp-select__item"
+                              onClick={() => {
+                                setSymbolSplitMenuOpen(false)
+                                splitTextNodeToStructuredNodes('###')
+                              }}
+                            >
+                              ###
+                            </button>
+                            <button
+                              type="button"
+                              role="option"
+                              className="pp-select__item"
+                              onClick={() => {
+                                setSymbolSplitMenuOpen(false)
+                                splitTextNodeToStructuredNodes('///')
+                              }}
+                            >
+                              ///
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
                     ) : null}
                     <div className="studio-music-prompt-panel__footEnd">
                       {promptPanelFootPointsHint != null ? (
@@ -9678,6 +12675,158 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                   </div>
                 </div>
               </div>
+              {cloudWorkflowExampleModalOpen && promptPanelExampleWorkflowKey
+                ? createPortal(
+                    <div
+                      className="studio-workflow-examples-modal"
+                      role="presentation"
+                      onMouseDown={() => setCloudWorkflowExampleModalOpen(false)}
+                    >
+                      <div
+                        className="studio-workflow-examples-modal__card"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-label="工作流示例工程"
+                        onMouseDown={(e) => e.stopPropagation()}
+                      >
+                        <div className="studio-workflow-examples-modal__head">
+                          <div className="min-w-0">
+                            <div className="studio-workflow-examples-modal__kicker">我的示例工程</div>
+                            <div className="studio-workflow-examples-modal__title truncate" title={exampleWorkflowPanelLabel}>
+                              {exampleWorkflowPanelLabel}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="studio-workflow-examples-modal__close"
+                            aria-label="关闭"
+                            onClick={() => setCloudWorkflowExampleModalOpen(false)}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <p className="studio-workflow-examples-modal__hint">
+                          与当前选中的 Comfy 工作流绑定，存在本机浏览器。列表中点「插入画布」会把该示例里的节点与连线**合并进当前画布**（落在视口中心附近，与粘贴一致）；「新标签」则在独立标签中打开整页工程。
+                        </p>
+                        <div className="studio-workflow-examples-modal__actions">
+                          <button
+                            type="button"
+                            className="studio-workflow-examples-modal__btn studio-workflow-examples-modal__btn--primary"
+                            onClick={() => {
+                              const wfKey = promptPanelExampleWorkflowKey
+                              if (!wfKey || !visiblePromptPanel) return
+                              const r = pinCloudWorkflowExample(wfKey, {
+                                name: `${activeProjectName} · 示例`,
+                                snapshot: cloneCanvasSnapshot(getCanvasSnapshot()),
+                                nodeKind: visiblePromptPanel.kind,
+                              })
+                              if (!r.ok) {
+                                window.alert(r.message)
+                                return
+                              }
+                              setCloudWorkflowExampleListTick((n) => n + 1)
+                            }}
+                          >
+                            将当前画布存为示例
+                          </button>
+                        </div>
+                        <div className="studio-workflow-examples-modal__list">
+                          {cloudWorkflowExampleModalEntries.length === 0 ? (
+                            <div className="studio-workflow-examples-modal__empty">
+                              暂无保存的示例。搭好参考图/节点后点上方按钮即可固定为「此工作流」的示例工程。
+                            </div>
+                          ) : (
+                            cloudWorkflowExampleModalEntries.map((en) => (
+                              <div key={en.id} className="studio-workflow-examples-modal__row">
+                                <div className="studio-workflow-examples-modal__rowMain min-w-0">
+                                  <div className="studio-workflow-examples-modal__rowTitle truncate" title={en.name}>
+                                    {en.name}
+                                  </div>
+                                  <div className="studio-workflow-examples-modal__rowMeta">
+                                    {new Date(en.savedAt).toLocaleString('zh-CN')}
+                                    {en.nodeKind ? ` · ${en.nodeKind}` : ''}
+                                  </div>
+                                </div>
+                                <div className="studio-workflow-examples-modal__rowActions">
+                                  <button
+                                    type="button"
+                                    className="studio-workflow-examples-modal__btn studio-workflow-examples-modal__btn--primary"
+                                    onClick={() => {
+                                      void (async () => {
+                                        const snap = en.snapshot
+                                        const incoming = snap.nodes as Node<StudioNodeData>[]
+                                        if (!Array.isArray(incoming) || !incoming.length) return
+                                        const bb = getNodesBounds(incoming)
+                                        if (!bb) return
+                                        const clipCx = (bb.minX + bb.maxX) / 2
+                                        const clipCy = (bb.minY + bb.maxY) / 2
+                                        let anchorX = clipCx
+                                        let anchorY = clipCy
+                                        const root = reactFlowRootRef.current
+                                        if (root) {
+                                          const r = root.getBoundingClientRect()
+                                          if (r.width > 0 && r.height > 0) {
+                                            const center = screenToFlowPosition({
+                                              x: r.left + r.width / 2,
+                                              y: r.top + r.height / 2,
+                                            })
+                                            anchorX = center.x
+                                            anchorY = center.y
+                                          }
+                                        }
+                                        await mergeSubgraphAtFlowCenter(
+                                          incoming,
+                                          (snap.edges || []) as Edge[],
+                                          { x: anchorX, y: anchorY },
+                                          {
+                                            hydrateLocalAssets: true,
+                                            historyLabel: `插入工作流示例「${en.name}」（${incoming.length} 个节点）`,
+                                          },
+                                        )
+                                        setCloudWorkflowExampleModalOpen(false)
+                                      })()
+                                    }}
+                                  >
+                                    插入画布
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="studio-workflow-examples-modal__btn"
+                                    onClick={() => {
+                                      openImportedProjectInNewTab({
+                                        version: 1,
+                                        name: en.name,
+                                        nodes: en.snapshot.nodes,
+                                        edges: en.snapshot.edges,
+                                        viewport: en.snapshot.viewport,
+                                      })
+                                      setCloudWorkflowExampleModalOpen(false)
+                                    }}
+                                  >
+                                    新标签
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="studio-workflow-examples-modal__btn studio-workflow-examples-modal__btn--danger"
+                                    onClick={() => {
+                                      if (!promptPanelExampleWorkflowKey) return
+                                      removeCloudWorkflowExample(promptPanelExampleWorkflowKey, en.id)
+                                      setCloudWorkflowExampleListTick((n) => n + 1)
+                                    }}
+                                  >
+                                    删除
+                                  </button>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    </div>,
+                    document.body,
+                  )
+                : null}
+              </>
             ) : null}
           </ReactFlow>
           <div

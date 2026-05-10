@@ -7,6 +7,7 @@ export type StudioNodeKind =
   | 'text'
   | 'script'
   | 'image'
+  | 'imageCompare'
   | 'video'
   | 'audio'
   | 'music'
@@ -56,6 +57,14 @@ export type WorkflowProviderConfig = {
  */
 export type WorkflowTemplateBindings = Partial<Record<StudioNodeKind, string>>
 
+/** 本地对授权服务「云端工作流」JSON 的覆盖（按云端工作流 id 存储） */
+export type CloudWorkflowOverrideEntry = {
+  jsonText: string
+  resultNodeId?: string
+  resultFieldPath?: string
+  updatedAt?: number
+}
+
 /**
  * 节点级工作流配置：同一类节点可共享一套本地/云端配置。
  */
@@ -89,6 +98,23 @@ export type NodeWorkflowConfig = {
   resultNodeId?: string
   /** 兼容旧版本：节点类型级结果字段路径（新版本优先读取工作流条目内配置）。 */
   resultFieldPath?: string
+  /**
+   * 设置页「文本/图片/视频…」里当前编辑的是本地导入列表还是云端授权工作流。
+   * 与全局「执行环境 本地/云端 Comfy」独立：便于在本地执行时仍预调云端 JSON，或反之。
+   */
+  settingsEditTarget?: 'local' | 'cloud'
+  /** 设置页云端分支：当前选中的云端工作流 id（来自授权服务 /cloud-workflows） */
+  cloudSettingsSelectedWorkflowId?: string
+  /**
+   * 云端工作流 id → 用户在本机保存的 JSON 与结果映射；缺省时执行仍从授权服务拉取原版。
+   * 值可为纯字符串（旧版仅保存 JSON 文本）或完整条目对象。
+   */
+  cloudWorkflowOverrides?: Record<string, CloudWorkflowOverrideEntry | string>
+  /**
+   * 文本类 Comfy 模板中 `__SYSTEM_PROMPT__` 占位替换（按云端条目 id 或本地工作流条目 id 存储）。
+   * 执行时自 `nodeConfigs.text` 读取，以便脚本节点与文本节点共用对话类云端工作流。
+   */
+  cloudWorkflowSystemPrompts?: Record<string, string>
 }
 
 export type ShortcutCommandId =
@@ -102,6 +128,8 @@ export type ShortcutCommandId =
   | 'redo'
   | 'fitView'
   | 'resetZoom'
+  /** 画布矩形框选：按住该键在空白处拖选（与 React Flow `selectionKeyCode` 一致） */
+  | 'marqueeSelect'
 
 /** 单次运行可能产生的多条媒体（分镜多图等），用于节点底部缩略图条 */
 export type NodeResultThumbnail = {
@@ -149,12 +177,22 @@ export type StudioNodeDataBase = {
   cloudModelUrl?: string
   cloudApiKey?: string
 
+  /** 自助模式：选中的云端模型预设 id（与 `cloudAssistModelPick` 二选一） */
+  cloudSelfPresetId?: string
+  /** 辅助线路：编码后的「端点 + 模型」选择值（见 `encodeCloudAssistModelPick`） */
+  cloudAssistModelPick?: string
+
   /**
    * 兼容字段：部分 UI 层会在未严格区分 kind 的情况下读取媒体节点字段。
    * 这些字段对非媒体节点应视为不存在（undefined）。
    */
   src?: string
   srcAssetId?: string
+  /**
+   * 主预览对应生成物在本地 output 目录的绝对路径（桌面端镜像成功后写入）。
+   * 重启后优先从此路径恢复，避免仅按节点标题扫目录导致跨工程/重名串文件。
+   */
+  srcDiskPath?: string
   referenceImageSources?: string[]
   referenceImageAssetIds?: string[]
 
@@ -186,6 +224,35 @@ export type ScriptNodeData = StudioNodeDataBase & {
  */
 export type MattingPoint = { x: number; y: number; t: 0 | 1 }
 
+/** 图片节点「模型」模式云端生图：宽高比（写入 API `size`，不拼进 prompt） */
+export type CloudImageAspectKey =
+  | 'auto'
+  | '1:1'
+  | '16:9'
+  | '9:16'
+  | '4:5'
+  | '3:2'
+  | '2:3'
+  | '4:3'
+  | '3:4'
+  | '21:9'
+
+/** 云端生图分辨率档位（影响 `size` 像素与 `quality`） */
+export type CloudImageResolutionTier = '1k' | '2k'
+
+/**
+ * 画布内双图滑动对比（不执行 Comfy，仅本地预览）。
+ */
+export type ImageCompareNodeData = StudioNodeDataBase & {
+  kind: 'imageCompare'
+  /** 左半 / 滑块左侧显示的图像 URL（与图片节点主图同源） */
+  compareSrcA: string
+  /** 右半 / 底层完整显示的图像 URL */
+  compareSrcB: string
+  compareLabelA?: string
+  compareLabelB?: string
+}
+
 export type ImageNodeData = StudioNodeDataBase & {
   kind: 'image'
   /** 参考图 URL 或占位说明 */
@@ -207,6 +274,29 @@ export type ImageNodeData = StudioNodeDataBase & {
   mattingRefWidth?: number
   /** 主图 naturalHeight */
   mattingRefHeight?: number
+  /** 云端「模型」模式：输出比例，对应 Image API / image_generation 的 `size` */
+  cloudImageAspect?: CloudImageAspectKey
+  /** 云端「模型」模式：1K / 2K */
+  cloudImageResolutionTier?: CloudImageResolutionTier
+  /**
+   * Comfy「Qwen Multiangle Camera」类工作流：水平/垂直角与变焦，提交时写入占位符
+   * `__CAM_H__` / `__CAM_V__` / `__CAM_Z__`（整数角约 ±60，与常见节点上限一致）。
+   */
+  comfyMultiangleH?: number
+  comfyMultiangleV?: number
+  comfyMultiangleZoom?: number
+  /**
+   * Comfy 工作流占位符 `__WIDTH__` / `__HEIGHT__`（如 TTResolutionSelector、EmptyLatent* 等）。
+   * 仅「工作流」模式生效；与云端 Image API 的 `cloudImageAspect` 相互独立。
+   */
+  comfyWorkflowWidth?: number
+  comfyWorkflowHeight?: number
+  /** Comfy 工作流：输出比例（与云端模型比例下拉同一套，映射到像素） */
+  comfyWorkflowAspect?: CloudImageAspectKey
+  /** 为 true 时以 comfyWorkflowWidth/Height 为准，忽略比例映射 */
+  comfyWorkflowUseCustomPixels?: boolean
+  /** Comfy 占位符 `__STYLE_TONE__`（风格短语，不进入用户主提示词框） */
+  comfyWorkflowStyleTone?: string
 }
 
 export type VideoNodeData = StudioNodeDataBase & {
@@ -236,6 +326,32 @@ export type VideoNodeData = StudioNodeDataBase & {
   referenceImageSources?: string[]
   /** 与 `referenceImageSources` 对齐的本地资产 id 列表（空串表示非本地资产） */
   referenceImageAssetIds?: string[]
+  /** 与 Image 节点相同：Comfy Multiangle 占位符 `__CAM_H__` 等（视频 Comfy 工作流可用） */
+  comfyMultiangleH?: number
+  comfyMultiangleV?: number
+  comfyMultiangleZoom?: number
+  /** Comfy 工作流占位符 `__WIDTH__` / `__HEIGHT__` */
+  comfyWorkflowWidth?: number
+  comfyWorkflowHeight?: number
+  comfyWorkflowAspect?: CloudImageAspectKey
+  comfyWorkflowUseCustomPixels?: boolean
+  comfyWorkflowStyleTone?: string
+}
+
+/** 8 路 FB 多人配音侧栏：一行对应 RoleBank 一路（与 Comfy 图槽位顺序一致）。 */
+export type ComfyVoiceTableRow = {
+  roleName: string
+  /** 写入 VoiceDesign `text` 与 VoiceClone `ref_text` 的一句台词 */
+  sampleLine: string
+  /** 写入 VoiceDesign `instruct` */
+  voiceInstruct: string
+  /** 界面选项见 `COMFY_VOICE_TABLE_LANGUAGE_OPTIONS`，提交时映射为 Comfy 语言枚举 */
+  language: string
+}
+
+/** TD 有参参考音 → MultiDialog 角色名（按槽位索引，与主槽+@+本地上传去重后的执行顺序一致，含第 1 路） */
+export type ComfyTdRefAudioRoleRow = {
+  roleName: string
 }
 
 export type AudioNodeData = StudioNodeDataBase & {
@@ -255,6 +371,19 @@ export type AudioNodeData = StudioNodeDataBase & {
   referenceImageSources?: string[]
   /** 与 `referenceImageSources` 对齐的本地资产 id 列表（空串表示非本地资产） */
   referenceImageAssetIds?: string[]
+  /** 多人 FB 工作流：最多 8 行角色/音色表（无参多人 TTS） */
+  comfyVoiceTableRows?: ComfyVoiceTableRow[]
+  /** TD 有参多人：参考音槽位顺序与 `__REF_AUDIO_*` 一致，对应 `TDQwen3TTSDefineSpeaker.inputs.name`（与台本角色名对齐） */
+  comfyTdRefAudioRoleRows?: ComfyTdRefAudioRoleRow[]
+  /**
+   * 音乐节点：侧栏「微调」写入 Comfy（Ace Step `TextEncodeAceStepAudio1.5` / `EmptyAceStep1.5LatentAudio` 等）。
+   * 缺省与云端「(语音转音乐)-音乐创作」模板一致。
+   */
+  comfyMusicDurationMinutes?: 1 | 2 | 3 | 4
+  comfyMusicBpm?: number
+  comfyMusicTimesignature?: '2' | '3' | '4' | '6' | string
+  comfyMusicLanguage?: string
+  comfyMusicKeyscale?: string
 }
 
 /**
@@ -300,6 +429,7 @@ export type StudioNodeData =
   | TextNodeData
   | ScriptNodeData
   | ImageNodeData
+  | ImageCompareNodeData
   | VideoNodeData
   | AudioNodeData
   | PanoramaNodeData

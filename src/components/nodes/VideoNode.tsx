@@ -90,7 +90,7 @@ export function VideoNode({
             event.stopPropagation()
             const material = parseFlowidMaterialDragPayload(event.dataTransfer)
             if (material?.kind === 'video' && material.src) {
-              updateNodeData(id, { kind: 'video', src: material.src })
+              updateNodeData(id, { kind: 'video', src: material.src, srcDiskPath: undefined })
               return
             }
             const f = pickFirstVideoFile(event.dataTransfer)
@@ -99,6 +99,7 @@ export function VideoNode({
               kind: 'video',
               src: URL.createObjectURL(f),
               srcFileName: f.name,
+              srcDiskPath: undefined,
             })
           }}
           onPaste={(event) => {
@@ -110,12 +111,14 @@ export function VideoNode({
               kind: 'video',
               src: URL.createObjectURL(f),
               srcFileName: f.name,
+              srcDiskPath: undefined,
             })
           }}
         >
           {data.src ? (
             <>
               <video
+                key={`${id}:${data.src}`}
                 className="studio-thumb__video"
                 src={data.src}
                 controls
@@ -171,6 +174,7 @@ export function VideoNode({
                   kind: 'video',
                   src: URL.createObjectURL(file),
                   srcFileName: file.name,
+                  srcDiskPath: undefined,
                 })
               }
               event.target.value = ''

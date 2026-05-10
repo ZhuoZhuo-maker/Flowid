@@ -80,6 +80,21 @@ if (process.platform === 'win32') {
 }
 
 /**
+ * 与安装包约定：本地数据默认落在「安装程序所在盘符」下的 `flowid-zy`，与设置页六项子目录一致。
+ * 可通过环境变量 FLOWID_ZY_ROOT 覆盖（绝对路径）。
+ */
+function getDefaultFlowidZyRoot() {
+  const env = String(process.env.FLOWID_ZY_ROOT || '').trim()
+  if (env) return path.normalize(env)
+  const exeDir = path.dirname(app.getPath('exe'))
+  if (process.platform === 'win32') {
+    const { root } = path.parse(exeDir)
+    return path.join(root, 'flowid-zy')
+  }
+  return path.join(os.homedir(), 'flowid-zy')
+}
+
+/**
  * 创建桌面主窗口。
  */
 function createMainWindow() {
@@ -631,6 +646,23 @@ ipcMain.handle('flowid:dialog-save-json-file', async (_event, opts) => {
 /**
  * 选择文件夹。
  */
+ipcMain.handle('flowid:get-default-local-storage-paths', async () => {
+  try {
+    const root = getDefaultFlowidZyRoot()
+    const paths = {
+      inputPath: path.join(root, 'input'),
+      outputPath: path.join(root, 'output'),
+      workflowPath: path.join(root, 'workflow'),
+      flowidProjectJsonPath: path.join(root, 'flowid'),
+      materialLibraryPath: path.join(root, 'sucaiku'),
+      systemPromptCoverPath: path.join(root, 'fenmian'),
+    }
+    return { ok: true, root, paths }
+  } catch (err) {
+    return { ok: false, error: String(err?.message || err) }
+  }
+})
+
 ipcMain.handle('flowid:dialog-pick-directory', async (_event, opts) => {
   try {
     const win = BrowserWindow.getFocusedWindow()

@@ -14,10 +14,16 @@ import {
   replaceSensitiveWordsSync,
 } from './sensitiveEngine/engineFacade'
 import type { SensitiveWord } from './sensitiveEngine/types'
+import { isSensitiveWordFilterEnabled } from './sensitiveWordFilterSettings'
 
 export type { SensitiveCategory, SensitiveLevel, SensitiveWord } from './sensitiveEngine/types'
 
 export { awaitSensitiveLexiconSettled, ensureLexiconLoading, isLexiconReady } from './sensitiveEngine/engineFacade'
+export {
+  isSensitiveWordFilterEnabled,
+  setSensitiveWordFilterEnabled,
+  SENSITIVE_FILTER_CHANGED_EVENT,
+} from './sensitiveWordFilterSettings'
 
 /**
  * 首包内置核心词（与 `public/lexicon/sensitive.json` 合并前的 fast path 子集）。
@@ -32,11 +38,21 @@ export function checkSensitiveWords(text: string): {
   blockedCount: number
   warningCount: number
 } {
+  if (!isSensitiveWordFilterEnabled()) {
+    return {
+      hasSensitive: false,
+      words: [],
+      level: 'clean',
+      blockedCount: 0,
+      warningCount: 0,
+    }
+  }
   ensureLexiconLoading()
   return checkSensitiveWordsSync(text)
 }
 
 export function replaceSensitiveWords(text: string, replaceChar: string = '*'): string {
+  if (!isSensitiveWordFilterEnabled()) return text
   ensureLexiconLoading()
   return replaceSensitiveWordsSync(text, replaceChar)
 }
@@ -46,6 +62,7 @@ export function replaceSensitiveWordsByLevel(
   levels: Array<'block' | 'warning'>,
   replaceChar: string = '*',
 ): string {
+  if (!isSensitiveWordFilterEnabled()) return text
   ensureLexiconLoading()
   return replaceSensitiveWordsByLevelSync(text, levels, replaceChar)
 }
@@ -99,8 +116,26 @@ export function collectUserFacingTextFromNodeData(data: StudioNodeData): string 
       return slots.map((s) => String(s ?? '').trim()).filter(Boolean).join('\n\n')
     }
     case 'audio':
-    case 'music':
-      return String((data as AudioNodeData).note || '')
+    case 'music': {
+      const a = data as AudioNodeData
+      const note = String(a.note || '')
+      const vt = (a.comfyVoiceTableRows ?? [])
+        .map((r) =>
+          [r.roleName, r.sampleLine, r.voiceInstruct, r.language]
+            .map((x) => String(x || '').trim())
+            .filter(Boolean)
+            .join('\n'),
+        )
+        .filter(Boolean)
+        .join('\n\n')
+      const tdRef = (a.comfyTdRefAudioRoleRows ?? [])
+        .map((r) => String(r.roleName || '').trim())
+        .filter(Boolean)
+        .join('\n')
+      return [note, vt, tdRef].filter(Boolean).join('\n\n')
+    }
+    case 'imageCompare':
+      return ''
     default:
       return ''
   }
@@ -137,7 +172,25 @@ export function sanitizeStudioNodeDataUserFields(data: StudioNodeData): Partial<
     case 'audio':
     case 'music': {
       const a = data as AudioNodeData
-      return { kind: a.kind, note: replaceSensitiveWords(a.note || '') } as Partial<StudioNodeData>
+      const comfyVoiceTableRows = Array.isArray(a.comfyVoiceTableRows)
+        ? a.comfyVoiceTableRows.map((r) => ({
+            roleName: replaceSensitiveWords(String(r.roleName || '')),
+            sampleLine: replaceSensitiveWords(String(r.sampleLine || '')),
+            voiceInstruct: replaceSensitiveWords(String(r.voiceInstruct || '')),
+            language: replaceSensitiveWords(String(r.language || '')),
+          }))
+        : undefined
+      const comfyTdRefAudioRoleRows = Array.isArray(a.comfyTdRefAudioRoleRows)
+        ? a.comfyTdRefAudioRoleRows.map((r) => ({
+            roleName: replaceSensitiveWords(String(r.roleName || '')),
+          }))
+        : undefined
+      return {
+        kind: a.kind,
+        note: replaceSensitiveWords(a.note || ''),
+        ...(comfyVoiceTableRows ? { comfyVoiceTableRows } : {}),
+        ...(comfyTdRefAudioRoleRows ? { comfyTdRefAudioRoleRows } : {}),
+      } as Partial<StudioNodeData>
     }
     default:
       return {}
@@ -157,6 +210,27 @@ export function applySensitiveFilterToNodeDataPatch(patch: Partial<StudioNodeDat
   const ex = (patch as { extraPrompts?: unknown }).extraPrompts
   if ('extraPrompts' in patch && Array.isArray(ex)) {
     out.extraPrompts = ex.map((s) => replaceSensitiveWordsByLevel(String(s ?? ''), ['block']))
+  }
+  const vt = (patch as { comfyVoiceTableRows?: unknown }).comfyVoiceTableRows
+  if ('comfyVoiceTableRows' in patch && Array.isArray(vt)) {
+    out.comfyVoiceTableRows = vt.map((raw) => {
+      const r = raw as Record<string, unknown>
+      return {
+        roleName: replaceSensitiveWordsByLevel(String(r.roleName ?? ''), ['block']),
+        sampleLine: replaceSensitiveWordsByLevel(String(r.sampleLine ?? ''), ['block']),
+        voiceInstruct: replaceSensitiveWordsByLevel(String(r.voiceInstruct ?? ''), ['block']),
+        language: replaceSensitiveWordsByLevel(String(r.language ?? ''), ['block']),
+      }
+    })
+  }
+  const tdr = (patch as { comfyTdRefAudioRoleRows?: unknown }).comfyTdRefAudioRoleRows
+  if ('comfyTdRefAudioRoleRows' in patch && Array.isArray(tdr)) {
+    out.comfyTdRefAudioRoleRows = tdr.map((raw) => {
+      const r = raw as Record<string, unknown>
+      return {
+        roleName: replaceSensitiveWordsByLevel(String(r.roleName ?? ''), ['block']),
+      }
+    })
   }
   return out as Partial<StudioNodeData>
 }

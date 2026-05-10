@@ -1463,7 +1463,7 @@ button.lic-dash-card:hover {
   align-self: stretch;
 }
 
-/* ========== 云端模型（辅助模式）仪表盘（module-cloud-models.js） ========== */
+/* ========== 管理页通用卡片布局（云端 ComfyUI 等，cm-*） ========== */
 .cm-page {
   max-width: 1280px;
   margin: 0 auto;
@@ -1588,6 +1588,27 @@ button.lic-dash-card:hover {
 
 .cm-field--full {
   grid-column: 1 / -1;
+}
+
+.cm-field--json-drop textarea {
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.cm-field--json-drop--active textarea {
+  border-color: rgba(251, 191, 36, 0.55);
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.22);
+}
+
+.cm-field__hint-sub {
+  display: inline;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  color: rgba(148, 163, 184, 0.9);
+  margin-left: 8px;
+  font-size: 11px;
 }
 
 .cm-field > span,
@@ -1725,12 +1746,52 @@ button.lic-dash-card:hover {
   border: 1px solid rgba(51, 65, 85, 0.9);
 }
 
+/** 官方工作流等长列表：限制高度并纵向滚动，表头吸附 */
+.cm-table-wrap--scroll-y {
+  max-height: min(52vh, 440px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.cm-table-wrap--scroll-y .cm-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: rgba(51, 65, 85, 0.92);
+  box-shadow: 0 1px 0 rgba(51, 65, 85, 0.95);
+}
+
 .cm-table {
   width: 100%;
   min-width: 640px;
   border-collapse: collapse;
   font-size: 13px;
   color: var(--text-body);
+}
+
+.cm-card--wide .cm-table {
+  min-width: 920px;
+}
+
+.cm-th-num {
+  width: 44px;
+  text-align: right;
+}
+
+.cm-td-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: rgba(148, 163, 184, 0.95);
+}
+
+.cm-th-ts {
+  white-space: nowrap;
+}
+
+.cm-td-ts {
+  white-space: nowrap;
+  font-size: 12px;
+  color: rgba(203, 213, 225, 0.92);
 }
 
 .cm-table thead {
@@ -1775,7 +1836,7 @@ button.lic-dash-card:hover {
 }
 
 .cm-th-actions {
-  width: 88px;
+  width: 132px;
 }
 
 .cm-td-actions {

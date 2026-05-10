@@ -40,6 +40,21 @@ export type AiAssistantAction =
   | { type: 'connect_nodes'; sourceQuery: string; targetQuery: string }
   | { type: 'run_node'; targetQuery?: string; current?: boolean }
 
+/** 助手允许创建的节点 kind；模型若返回 project/group 等会丢弃，避免 createStudioNode 抛错导致整页崩溃 */
+const AI_ASSISTANT_CREATABLE_KINDS = new Set<string>([
+  'text',
+  'script',
+  'image',
+  'video',
+  'audio',
+  'music',
+  'panorama',
+])
+
+export function isAiAssistantCreatableNodeKind(kind: unknown): kind is StudioNodeKind {
+  return typeof kind === 'string' && AI_ASSISTANT_CREATABLE_KINDS.has(kind)
+}
+
 export function getDefaultAiAssistantConfig(): AiAssistantConfig {
   return {
     provider: 'ollama',
@@ -110,8 +125,8 @@ function extractActionsFromText(rawText: string): AiAssistantAction[] {
       const v = item as Record<string, unknown>
       const t = String(v.type || '')
       if (t === 'create_node') {
-        const kind = String(v.kind || '') as StudioNodeKind
-        if (kind) out.push({ type: 'create_node', kind })
+        const kind = String(v.kind || '').trim()
+        if (isAiAssistantCreatableNodeKind(kind)) out.push({ type: 'create_node', kind })
       } else if (t === 'connect_nodes') {
         const sourceQuery = String(v.sourceQuery || '').trim()
         const targetQuery = String(v.targetQuery || '').trim()

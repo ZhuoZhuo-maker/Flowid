@@ -312,6 +312,66 @@ export function collectMentionImageSources(
   return Array.from(new Set(urls))
 }
 
+export type MentionAudioResolvedEntry = { url: string; assetId: string }
+
+/**
+ * 从 @ 引用收集「配音 / 音乐」节点的主音频（原文出现顺序，按 URL 去重保序）。
+ * 带上 `srcAssetId`，便于 `blob:` 失效后从本地资产恢复（与图片 @ 引用一致）。
+ */
+export function collectMentionAudioResolvedEntries(
+  text: string,
+  nodes: Array<Node<StudioNodeData>>,
+  currentNodeId?: string,
+): MentionAudioResolvedEntry[] {
+  const refs = parseMentionRefs(text)
+  const out: MentionAudioResolvedEntry[] = []
+  const seen = new Set<string>()
+  for (const ref of refs) {
+    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId)
+    if (!hit) continue
+    const k = hit.data.kind
+    if (k !== 'audio' && k !== 'music') continue
+    const u = String((hit.data as { src?: string }).src || '').trim()
+    const assetId = String((hit.data as { srcAssetId?: string }).srcAssetId || '').trim()
+    if (!u || seen.has(u)) continue
+    seen.add(u)
+    out.push({ url: u, assetId })
+  }
+  return out
+}
+
+/**
+ * 仅 URL 列表；内部走 `collectMentionAudioResolvedEntries`。
+ */
+export function collectMentionAudioSources(
+  text: string,
+  nodes: Array<Node<StudioNodeData>>,
+  currentNodeId?: string,
+): string[] {
+  return collectMentionAudioResolvedEntries(text, nodes, currentNodeId).map((e) => e.url)
+}
+
+/**
+ * 侧栏说明用：描述里按出现顺序列出「会参与参考音」的 @（仅配音/音乐）；不含文字/剧本。
+ */
+export function listMentionAudioRefLabelsForNote(
+  text: string,
+  nodes: Array<Node<StudioNodeData>>,
+  currentNodeId?: string,
+): string[] {
+  const refs = parseMentionRefs(text)
+  const out: string[] = []
+  for (const ref of refs) {
+    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId)
+    if (!hit) continue
+    if (hit.data.kind !== 'audio' && hit.data.kind !== 'music') continue
+    const title = String(hit.data.title || '').trim()
+    const lab = String(ref.label || '').trim()
+    out.push(lab || title || '未命名配音节点')
+  }
+  return out
+}
+
 /**
  * 列出提示词中 @ 引用且解析为「图片/全景 URL」的条目，供提示框展示缩略图。
  * 顺序与 `collectMentionImageSources` 一致：默认标题序号升序，其余按原文出现顺序。
@@ -331,7 +391,7 @@ export function listMentionImageAttachments(
 /**
  * 解析文本中的 @节点引用并替换为对应节点主文本。
  * 若引用的是图片/视频/配音/音乐节点：仅表示沿用其**生成结果（画面/音频 URL）**，
- * 由 `collectMentionImageSources` 等单独收集，此处不把该节点的提示词/说明写进文案。
+ * 由 `collectMentionImageSources` / `collectMentionAudioSources` 等在执行前单独并入节点字段，此处不把该节点的提示词/说明写进文案。
  */
 export function resolveNodeMentionsInText(
   text: string,

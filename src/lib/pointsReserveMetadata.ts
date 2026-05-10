@@ -25,7 +25,7 @@ export function buildPointsReserveParams(
   options?: { executionTarget?: 'model' | 'workflow' },
 ): PointsReserveParams {
   const nodeKind = node.data.kind
-  if (nodeKind === 'group' || nodeKind === 'panorama') {
+  if (nodeKind === 'group' || nodeKind === 'panorama' || nodeKind === 'imageCompare') {
     throw new Error('unsupported_node_kind')
   }
   const nodeConfig = snapshot.nodeConfigs[nodeKind]

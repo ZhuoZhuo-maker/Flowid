@@ -8,6 +8,15 @@ import { applyPointsRecharge, insertRechargeIfAbsent } from '../lib/pointsRechar
 
 const DLQ_STATUS = new Set(['pending', 'resolved', 'ignored'])
 
+/** 是否允许管理接口「先删 points_log 再删授权码」（本地/测试清库；生产须显式 FLOWID_ALLOW_LICENSE_PURGE=1）。 */
+export function allowPurgePointsLogForDelete() {
+  const flag = String(process.env.FLOWID_ALLOW_LICENSE_PURGE || '').trim()
+  if (flag === '1') return true
+  if (flag === '0') return false
+  const n = String(process.env.NODE_ENV || '').toLowerCase()
+  return n !== 'production'
+}
+
 const DLQ_SELECT =
   `SELECT id, license_code, machine_code, dedupe_key, error_text, meta_json, status, retry_count,
           resolved_at, resolved_by, ignored_at, ignored_by, created_at
@@ -204,6 +213,17 @@ export function createAdminRouter(db, opts) {
   r.use(verifyAdminToken(opts))
 
   /**
+   * GET /server-hints — 管理页自检（如是否允许 purgeLogs 删码）。
+   */
+  r.get('/server-hints', (req, res) => {
+    return res.json({
+      ok: true,
+      purgeLogsDeleteAllowed: allowPurgePointsLogForDelete(),
+      nodeEnv: String(process.env.NODE_ENV || ''),
+    })
+  })
+
+  /**
    * GET /licenses — 分页与筛选；无 page/pageSize 时兼容旧客户端（最多 2000 条）。
    * query: code?, search?（与 code 二选一语义：优先 search；任一匹配授权码或机器码）, statusFilter? (active|expired|revoked|all), page?, pageSize?
    */
@@ -339,12 +359,22 @@ export function createAdminRouter(db, opts) {
 
   /**
    * DELETE /licenses/:code — 删除授权码（未绑定且未过期 active 禁止；已绑定且仍有效禁止；存在 points_log 外键时失败）。
+   * 测试清库：query `purgeLogs=1` 且环境允许时，先删该码的 points_log / confirm 死信再删 licenses（见 allowPurgePointsLogForDelete）。
    */
   r.delete('/licenses/:code', (req, res) => {
     try {
       const raw = decodeURIComponent(String(req.params.code || '').trim())
       const key16 = normalizeLicenseKey(raw)
       const display = formatLicenseDisplay(key16) || raw
+      const q = String(req.query?.purgeLogs ?? req.query?.purge_logs ?? '').trim()
+      const wantPurgeLogs = q === '1' || String(q).toLowerCase() === 'true'
+      if (wantPurgeLogs && !allowPurgePointsLogForDelete()) {
+        return res.status(403).json({
+          ok: false,
+          message:
+            '未启用「清除流水后删除」。生产环境请设置 FLOWID_ALLOW_LICENSE_PURGE=1（或勿使用 purgeLogs）；若误设为 production 可改 NODE_ENV 或设置上述变量。',
+        })
+      }
       const row = db.prepare(`SELECT code, machine_code, expire_time, status FROM licenses WHERE code = ?`).get(display)
       if (!row) return res.status(404).json({ ok: false, message: '授权码不存在' })
       const bound = row.machine_code && String(row.machine_code).trim()
@@ -358,12 +388,25 @@ export function createAdminRouter(db, opts) {
       if (bound && st === 'active' && !expired) {
         return res.status(409).json({ ok: false, message: '已绑定且未过期，禁止删除' })
       }
+      if (wantPurgeLogs && allowPurgePointsLogForDelete()) {
+        const tx = db.transaction(() => {
+          db.prepare(`DELETE FROM points_log WHERE license_code = ?`).run(display)
+          db.prepare(`DELETE FROM points_confirm_failures WHERE license_code = ?`).run(display)
+          db.prepare(`DELETE FROM licenses WHERE code = ?`).run(display)
+        })
+        tx()
+        return res.json({ ok: true, purgedLogs: true })
+      }
       try {
         db.prepare(`DELETE FROM licenses WHERE code = ?`).run(display)
       } catch (e) {
         const msg = String(e?.message || e)
         if (/FOREIGN KEY|constraint/i.test(msg)) {
-          return res.status(409).json({ ok: false, message: '存在积分流水引用，无法删除' })
+          return res.status(409).json({
+            ok: false,
+            message:
+              '存在积分流水引用，无法删除。测试请在管理页勾选「删码时清除积分流水」后重试；生产需 FLOWID_ALLOW_LICENSE_PURGE=1 且带 ?purgeLogs=1。',
+          })
         }
         throw e
       }

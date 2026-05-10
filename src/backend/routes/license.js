@@ -33,7 +33,7 @@ export function createLicenseRouter(db) {
 
       const exp = row.expire_time ? String(row.expire_time) : ''
       if (exp) {
-        const t = Date.parse(exp)
+        const t = Date.parse(exp.replace(' ', 'T'))
         if (Number.isFinite(t) && Date.now() > t) {
           return res.json({ valid: false, message: '授权已过期', expireTime: exp })
         }
@@ -41,11 +41,26 @@ export function createLicenseRouter(db) {
 
       const bound = row.machine_code != null ? String(row.machine_code).trim() : ''
       if (!bound) {
-        const conflict = db
-          .prepare('SELECT code FROM licenses WHERE machine_code = ? AND code != ?')
+        const conflictRow = db
+          .prepare(
+            `SELECT code, status, expire_time FROM licenses WHERE machine_code = ? AND code != ?`,
+          )
           .get(machineCode, display)
-        if (conflict) {
-          return res.json({ valid: false, message: '该机器已绑定其他授权码' })
+        if (conflictRow) {
+          const otherSt = String(conflictRow.status || '').trim().toLowerCase()
+          const oex = conflictRow.expire_time != null ? String(conflictRow.expire_time).trim() : ''
+          let otherExpired = false
+          if (oex) {
+            const ot = Date.parse(oex.replace(' ', 'T'))
+            otherExpired = Number.isFinite(ot) && Date.now() > ot
+          }
+          const canReleaseMachine = otherSt === 'revoked' || otherExpired
+          if (!canReleaseMachine) {
+            return res.json({ valid: false, message: '该机器已绑定其他授权码' })
+          }
+          db.prepare(`UPDATE licenses SET machine_code = NULL, bind_time = NULL WHERE code = ?`).run(
+            conflictRow.code,
+          )
         }
         db.prepare(
           `UPDATE licenses SET machine_code = ?, bind_time = datetime('now') WHERE code = ?`,

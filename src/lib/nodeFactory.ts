@@ -1,6 +1,6 @@
 import type { XYPosition } from '@xyflow/react'
 import type { Node } from '@xyflow/react'
-import type { StudioNodeData, StudioNodeKind } from '../types'
+import type { ImageCompareNodeData, StudioNodeData, StudioNodeKind } from '../types'
 
 /** 与 `createStudioNode` / `createGroupNode` 默认标题一致，供侧栏等与画布展示对齐 */
 export function defaultStudioNodeTitle(kind: StudioNodeKind | string): string {
@@ -19,10 +19,44 @@ export function defaultStudioNodeTitle(kind: StudioNodeKind | string): string {
       return '音乐'
     case 'panorama':
       return 'VR360 全景'
+    case 'imageCompare':
+      return '图像对比'
     case 'group':
       return '分组'
     default:
       return typeof kind === 'string' && kind ? kind : '节点'
+  }
+}
+
+export function createImageCompareStudioNode(
+  id: string,
+  position: XYPosition,
+  titleOverride: string | undefined,
+  payload: Pick<ImageCompareNodeData, 'compareSrcA' | 'compareSrcB'> &
+    Partial<Pick<ImageCompareNodeData, 'compareLabelA' | 'compareLabelB'>>,
+): Node<StudioNodeData> {
+  return {
+    id,
+    type: 'imageCompare',
+    position,
+    draggable: true,
+    selectable: true,
+    /** 仅标题栏拖节点；预览区内拖中线不再被整节点拖拽抢走 */
+    dragHandle: '.studio-node__head',
+    style: {
+      width: 520,
+      /** 数值高度以便 NodeResizer 缩放；预览区在节点内 flex 撑满 */
+      height: 420,
+    },
+    data: {
+      kind: 'imageCompare',
+      title: titleOverride ?? defaultStudioNodeTitle('imageCompare'),
+      runStatus: 'idle',
+      compareSrcA: payload.compareSrcA,
+      compareSrcB: payload.compareSrcB,
+      compareLabelA: payload.compareLabelA,
+      compareLabelB: payload.compareLabelB,
+    },
   }
 }
 
@@ -81,6 +115,12 @@ export function createStudioNode(
           model: '',
           referenceImageSources: [],
           mattingPoints: [],
+          cloudImageAspect: 'auto',
+          cloudImageResolutionTier: '1k',
+          comfyWorkflowWidth: 1024,
+          comfyWorkflowHeight: 1024,
+          comfyWorkflowAspect: '1:1',
+          comfyWorkflowUseCustomPixels: false,
         },
       }
     case 'video':
@@ -98,6 +138,10 @@ export function createStudioNode(
           prompt4: '',
           model: '',
           referenceImageSources: [],
+          comfyWorkflowWidth: 1280,
+          comfyWorkflowHeight: 720,
+          comfyWorkflowAspect: '16:9',
+          comfyWorkflowUseCustomPixels: false,
         },
       }
     case 'audio':
@@ -128,6 +172,11 @@ export function createStudioNode(
           note: '',
           model: 'Comfy Music Flow A',
           referenceImageSources: [],
+          comfyMusicDurationMinutes: 3,
+          comfyMusicBpm: 98,
+          comfyMusicTimesignature: '4',
+          comfyMusicLanguage: 'zh',
+          comfyMusicKeyscale: 'D major',
         },
       }
     case 'panorama':
@@ -148,6 +197,11 @@ export function createStudioNode(
           exportHeight: 1024,
         },
       }
+    case 'imageCompare':
+      return createImageCompareStudioNode(id, position, titleOverride, {
+        compareSrcA: '',
+        compareSrcB: '',
+      })
     default: {
       const _never: never = kind
       throw new Error(`未知节点类型: ${_never}`)

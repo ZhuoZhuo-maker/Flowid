@@ -6,6 +6,7 @@ import {
 } from './browserFolderHandleStore'
 import { readLocalImageAssetBlob } from './localImageAssetStore'
 import { loadLocalDiskPathsSettings } from './localDiskPathsSettings'
+import { outputMirrorStemWithNodeId } from './outputMirrorStem'
 import { readKvFromIndexedDb, writeKvToIndexedDb } from './historyIndexedDb'
 
 /** 画布「自动延迟镜像」两次实际落盘之间的最短间隔（毫秒），避免拖拽等高频变更刷盘。 */
@@ -241,6 +242,10 @@ function extFromMime(ct: string, mediaKind: 'image' | 'video' | 'audio'): string
   if (c.includes('mpeg') || c.includes('mp3')) return 'mp3'
   if (c.includes('ogg')) return 'ogg'
   if (c.includes('flac')) return 'flac'
+  if (c.includes('mp4') || c.includes('m4a')) return 'm4a'
+  if (c.includes('aac')) return 'aac'
+  if (c.includes('opus')) return 'opus'
+  if (c.includes('webm')) return 'webm'
   return 'bin'
 }
 
@@ -292,6 +297,15 @@ export async function mirrorUploadToInputDir(file: File, assetId?: string): Prom
     if (t.includes('jpeg') || t.includes('jpg')) return '.jpg'
     if (t.includes('webp')) return '.webp'
     if (t.includes('gif')) return '.gif'
+    if (t.includes('wav')) return '.wav'
+    if (t.includes('mpeg') || t.includes('mp3')) return '.mp3'
+    if (t.includes('flac')) return '.flac'
+    if (t.includes('ogg')) return '.ogg'
+    if (t.includes('mp4') || t.includes('m4a')) return '.m4a'
+    if (t.includes('aac')) return '.aac'
+    if (t.includes('opus')) return '.opus'
+    if (t.includes('webm')) return '.webm'
+    if (t.includes('quicktime') || t.includes('mov')) return '.mov'
     return extFromName || '.bin'
   }
   const stem = sanitizeFileStem(baseStem)
@@ -422,6 +436,8 @@ export async function mirrorComfyOutputToDisk(args: {
   url: string
   mediaKind: MirrorComfyOutputKind
   title?: string
+  /** 画布节点 id（无连字符片段写入文件名），避免跨工程/同标题串文件 */
+  nodeId: string
   requestHeaders?: Record<string, string>
 }): Promise<{ saved: boolean; reason?: string; fileName?: string; filePath?: string }> {
   const electronOut = hasDesktopBinaryWrite() ? loadLocalDiskPathsSettings().outputPath.trim() : ''
@@ -469,11 +485,11 @@ export async function mirrorComfyOutputToDisk(args: {
         : mediaKind === 'video'
           ? extFromMime(ct, 'video')
           : extFromMime(ct, 'audio')
-    const stem = sanitizeFileStem(args.title || 'output')
+    const stem = outputMirrorStemWithNodeId(args.title, args.nodeId)
     /**
-     * 输出镜像按“节点标题 + 时间戳”命名：
-     * - 避免同节点重复执行时覆盖旧文件（用户会误判为“没有写入 output”）；
-     * - 仍可通过前缀快速按节点回查。
+     * 输出镜像按「标题 + 节点 id + 时间戳」命名：
+     * - 避免同节点重复执行时覆盖旧文件；
+     * - 节点 id 段避免跨工程、仅标题相同导致的误匹配。
      */
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     const fileName = `${stem}-${stamp}.${ext}`
@@ -638,7 +654,13 @@ export async function mirrorInputAssetsFromProjectSnapshot(
       }
 
       const src = String(d.src || '').trim()
-      if (src.startsWith('blob:') && (kind === 'image' || kind === 'video' || kind === 'panorama')) {
+      const blobPrimaryKinds =
+        kind === 'image' ||
+        kind === 'video' ||
+        kind === 'panorama' ||
+        kind === 'audio' ||
+        kind === 'music'
+      if (src.startsWith('blob:') && blobPrimaryKinds) {
         const bkey = `blob:${node.id}:src`
         if (seenBlobKey.has(bkey)) continue
         try {

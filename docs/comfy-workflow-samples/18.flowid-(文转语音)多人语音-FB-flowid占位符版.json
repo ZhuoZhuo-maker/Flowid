@@ -1,0 +1,327 @@
+{
+  "1": {
+    "inputs": {
+      "audio": "__REF_AUDIO_1__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "参考音 1"
+    }
+  },
+  "2": {
+    "inputs": {
+      "audio": "__REF_AUDIO_2__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "参考音 2"
+    }
+  },
+  "3": {
+    "inputs": {
+      "audio": "__REF_AUDIO_3__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "参考音 3"
+    }
+  },
+  "4": {
+    "inputs": {
+      "audio": "__REF_AUDIO_4__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "参考音 4"
+    }
+  },
+  "5": {
+    "inputs": {
+      "audio": "__REF_AUDIO_5__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "参考音 5"
+    }
+  },
+  "6": {
+    "inputs": {
+      "audio": "__REF_AUDIO_6__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "参考音 6"
+    }
+  },
+  "7": {
+    "inputs": {
+      "audio": "__REF_AUDIO_7__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "参考音 7"
+    }
+  },
+  "8": {
+    "inputs": {
+      "audio": "__REF_AUDIO_8__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "参考音 8"
+    }
+  },
+  "9": {
+    "inputs": {
+      "ref_audio": [
+        "1",
+        0
+      ],
+      "ref_text": "__ROLE_REF_TEXT_1__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "auto",
+      "x_vector_only": false,
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "VoiceClone 御姐"
+    }
+  },
+  "10": {
+    "inputs": {
+      "ref_audio": [
+        "2",
+        0
+      ],
+      "ref_text": "__ROLE_REF_TEXT_2__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "auto",
+      "x_vector_only": false,
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "VoiceClone 小林"
+    }
+  },
+  "11": {
+    "inputs": {
+      "ref_audio": [
+        "3",
+        0
+      ],
+      "ref_text": "__ROLE_REF_TEXT_3__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "auto",
+      "x_vector_only": false,
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "VoiceClone 旁白"
+    }
+  },
+  "12": {
+    "inputs": {
+      "ref_audio": [
+        "4",
+        0
+      ],
+      "ref_text": "__ROLE_REF_TEXT_4__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "auto",
+      "x_vector_only": false,
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "VoiceClone Role4"
+    }
+  },
+  "13": {
+    "inputs": {
+      "ref_audio": [
+        "5",
+        0
+      ],
+      "ref_text": "__ROLE_REF_TEXT_5__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "auto",
+      "x_vector_only": false,
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "VoiceClone Role5"
+    }
+  },
+  "14": {
+    "inputs": {
+      "ref_audio": [
+        "6",
+        0
+      ],
+      "ref_text": "__ROLE_REF_TEXT_6__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "auto",
+      "x_vector_only": false,
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "VoiceClone Role6"
+    }
+  },
+  "15": {
+    "inputs": {
+      "ref_audio": [
+        "7",
+        0
+      ],
+      "ref_text": "__ROLE_REF_TEXT_7__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "auto",
+      "x_vector_only": false,
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "VoiceClone Role7"
+    }
+  },
+  "16": {
+    "inputs": {
+      "ref_audio": [
+        "8",
+        0
+      ],
+      "ref_text": "__ROLE_REF_TEXT_8__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "attention": "auto",
+      "x_vector_only": false,
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSVoiceClonePrompt",
+    "_meta": {
+      "title": "VoiceClone Role8"
+    }
+  },
+  "17": {
+    "inputs": {
+      "prompt_1": [
+        "9",
+        0
+      ],
+      "prompt_2": [
+        "10",
+        0
+      ],
+      "prompt_3": [
+        "11",
+        0
+      ],
+      "prompt_4": [
+        "12",
+        0
+      ],
+      "prompt_5": [
+        "13",
+        0
+      ],
+      "prompt_6": [
+        "14",
+        0
+      ],
+      "prompt_7": [
+        "15",
+        0
+      ],
+      "prompt_8": [
+        "16",
+        0
+      ],
+      "role_name_1": "R1",
+      "role_name_2": "R2",
+      "role_name_3": "R3",
+      "role_name_4": "R4",
+      "role_name_5": "R5",
+      "role_name_6": "R6",
+      "role_name_7": "R7",
+      "role_name_8": "R8"
+    },
+    "class_type": "FB_Qwen3TTSRoleBank",
+    "_meta": {
+      "title": "FB Qwen3 TTS Role Bank"
+    }
+  },
+  "18": {
+    "inputs": {
+      "role_bank": [
+        "17",
+        0
+      ],
+      "script": "__NOTE__",
+      "model_choice": "1.7B",
+      "device": "auto",
+      "precision": "bf16",
+      "language": "__DIALOGUE_LANGUAGE__",
+      "pause_linebreak": 0.5,
+      "period_pause": 0.4,
+      "comma_pause": 0.2,
+      "question_pause": 0.6,
+      "hyphen_pause": 0.3,
+      "merge_outputs": true,
+      "batch_size": 4,
+      "seed": 600958532036460,
+      "max_new_tokens_per_line": 2048,
+      "top_p": 0.8,
+      "top_k": 20,
+      "temperature": 1,
+      "repetition_penalty": 1.05,
+      "attention": "auto",
+      "unload_model_after_generate": false
+    },
+    "class_type": "FB_Qwen3TTSDialogueInference",
+    "_meta": {
+      "title": "FB Qwen3 TTS Dialogue Inference"
+    }
+  },
+  "19": {
+    "inputs": {
+      "audioUI": "",
+      "audio": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "PreviewAudio",
+    "_meta": {
+      "title": "预览音频"
+    }
+  }
+}

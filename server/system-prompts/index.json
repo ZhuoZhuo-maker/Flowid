@@ -1,54 +1,147 @@
 {
   "prompts": [
     {
-      "id": "e73c56ba-e4a2-4986-9984-c4c81bbe30d8",
-      "name": "动效提示词",
+      "id": "7ab625b8-b2cb-4f3b-b0cd-3e0c1ff4193b",
+      "name": "角色三视图提示词",
       "version": "1.0.0",
       "category": "生图",
+      "tier": "free",
       "description": "",
-      "promptFile": "e73c56ba-e4a2-4986-9984-c4c81bbe30d8.system-prompt.txt",
-      "sha256": "fcd7c458d9b78f2e3693510d017c0800982af87984825766a653cf881039f8a0",
-      "sig": "e270e29b19138f5dd63990cec966caab7add866473155a756028699490a94ac6"
+      "promptFile": "7ab625b8-b2cb-4f3b-b0cd-3e0c1ff4193b.system-prompt.txt",
+      "sha256": "d238cac52998e3d5c2540d40a4830f014876d9bcb812c688168593fafd3c0e91",
+      "sig": "0cc5c111c5699477df7166214ff5d0909417b5ff9dfdbcd9a6f2b31698bc7fd3"
     },
     {
-      "id": "c3b8f1e8-22c4-4144-bbf6-05f1c11f8d18",
-      "name": "海报提示词",
+      "id": "a13f5d67-2c10-464e-bb56-d8a37c866a8a",
+      "name": "360° VR 全景图提示词",
       "version": "1.0.0",
       "category": "生图",
+      "tier": "free",
       "description": "",
-      "promptFile": "c3b8f1e8-22c4-4144-bbf6-05f1c11f8d18.system-prompt.txt",
-      "sha256": "6ff7cd049ebbb933e4c1313ba0cb2fa64c5015686a258332941a7dd5f7bf914f",
-      "sig": "8c8b4e2821ee7ed52150b7c9c4a1ef9c6d16addda9e7588e605751c66604d276"
+      "promptFile": "a13f5d67-2c10-464e-bb56-d8a37c866a8a.system-prompt.txt",
+      "sha256": "bfe9713ee2e68df81e8bb20b0036a817bedc98ba4d09229ecb11db890a94d89e",
+      "sig": "d6bc572777c35b0f31a06ba548c66d917761f4971ba4697ac6be73c04630c55d"
     },
     {
-      "id": "a4edec6d-a9bc-453f-8d77-9303dd25bf08",
-      "name": "图标提示词",
+      "id": "2ce13f4c-964c-4cf9-affd-27a615a4fff6",
+      "name": "有声剧脚本JSON-分镜 JSON",
       "version": "1.0.0",
-      "category": "生图",
+      "category": "分镜",
+      "tier": "free",
       "description": "",
-      "promptFile": "a4edec6d-a9bc-453f-8d77-9303dd25bf08.system-prompt.txt",
-      "sha256": "fa6cff27a6dd4cd47e73b49b9433f7fb1c24b8e23503648c34e985d4c6fecf79",
-      "sig": "8216c24ece812fc10c42df699feed5ec958b360c9877a8d623b1d2589ca559a9"
+      "promptFile": "2ce13f4c-964c-4cf9-affd-27a615a4fff6.system-prompt.txt",
+      "sha256": "92866f6c9aa50dc17b04c4bc0de5659c038cacb328d3d2805f9a50c225281d43",
+      "sig": "e3fdf9476476a5353ee4ceb214646e783f294ced418f11dc540b514ce70dc723"
     },
     {
-      "id": "d5750a37-8487-4c3f-9bd3-6d7a170f2329",
-      "name": "logo提示词",
+      "id": "2ba28fa0-5177-4cd4-a659-cea2882564d9",
+      "name": "有声剧导演",
       "version": "1.0.0",
-      "category": "生图",
-      "description": "",
-      "promptFile": "d5750a37-8487-4c3f-9bd3-6d7a170f2329.system-prompt.txt",
-      "sha256": "f1e99f9936574017656366694cddc8ce1373a479ef8d6bc7c14192eed4d1850a",
-      "sig": "4048148fbe38bda4c83b15c4c032b8d9ca4e668c5ad7ff3251050a36adc2a243"
+      "category": "配音",
+      "tier": "free",
+      "description": "用户提供小说原文。请将其改编为“多人有声剧”脚本。",
+      "promptFile": "2ba28fa0-5177-4cd4-a659-cea2882564d9.system-prompt.txt",
+      "sha256": "57cd8120b9b3e2a076db43a1260fc5aa15ff742a1c9b63fd2bff173f346a5f1f",
+      "sig": "6ecaab6268b08efdd85393e27e9ce4eae9b05c3196c9401420a91ce045c3380b"
     },
     {
-      "id": "9f2c94ba-d283-45bd-a46b-0a595d8522f8",
-      "name": "UI界面提示词",
+      "id": "fc6d0dac-54c9-4a6c-861c-0f23c55d82de",
+      "name": "(文转语音)-多人语音(无参)【台本信息转换】",
       "version": "1.0.0",
-      "category": "生图",
+      "category": "配音",
+      "tier": "free",
       "description": "",
-      "promptFile": "9f2c94ba-d283-45bd-a46b-0a595d8522f8.system-prompt.txt",
-      "sha256": "704699971f7380c92439d883e3df7c1b5a9f9dbcbcc46fc99676b256e26de2fc",
-      "sig": "b1d91992c1c17aef9ad3084c520280fa59cbac5ca55e4ca3c60e4da83ed5cc43"
+      "promptFile": "fc6d0dac-54c9-4a6c-861c-0f23c55d82de.system-prompt.txt",
+      "sha256": "0feb347d04fbe0782a14f952269ded2c310f5a72a4ff1c0f5abf8dbf061a93ab",
+      "sig": "2dfc037d75cd634b81ebec26f70b2a1ed270c303a31ab3f8e33fb0259285fa81"
+    },
+    {
+      "id": "10a4b928-9314-4a6d-801b-3163a73711cb",
+      "name": "(文语音转语音)-单_多人语音(无参)",
+      "version": "1.0.0",
+      "category": "配音",
+      "tier": "free",
+      "description": "",
+      "promptFile": "10a4b928-9314-4a6d-801b-3163a73711cb.system-prompt.txt",
+      "sha256": "81fb4954dfd373ef330311cc0e2d720b193570731a7298e07ad9c8de12df2994",
+      "sig": "bdb0204fa37d0839eb5fc854309fc3ada600ad619462f276160973ae3014503c"
+    },
+    {
+      "id": "45a6ed9b-29ff-4cdd-b5f9-7a2cab02b218",
+      "name": "(语音转音乐)-音乐创作",
+      "version": "1.0.0",
+      "category": "音乐",
+      "tier": "free",
+      "description": "",
+      "promptFile": "45a6ed9b-29ff-4cdd-b5f9-7a2cab02b218.system-prompt.txt",
+      "sha256": "d2b1ce4ad5b28032604d256bb16bf1c1bf935f75e40f3b31b0f175ba9c384c95",
+      "sig": "c7c171bb642f8310cafa5615e08f4235be1a19cc3b0cfd14668b8bf7b32cfe1a"
+    },
+    {
+      "id": "961aaf38-b10f-4c3f-9e6f-ef374ed739b6",
+      "name": "提示词优化工程师",
+      "version": "1.0.0",
+      "category": "文本",
+      "tier": "free",
+      "description": "",
+      "promptFile": "961aaf38-b10f-4c3f-9e6f-ef374ed739b6.system-prompt.txt",
+      "sha256": "16861a19ccaf90111302069b44be4c4f59f53b01e7e0363ce7b86cf367d97906",
+      "sig": "573d83e9642dd32b5e270df13057175a0a46fda2ac8db03dd81ee9ffcf4eab20"
+    },
+    {
+      "id": "5f101eda-ac3a-46e4-8d94-d46d31a3199e",
+      "name": "(图生视频音)-首尾视频【首图加故事推提示词】",
+      "version": "1.0.0",
+      "category": "视频",
+      "tier": "free",
+      "description": "",
+      "promptFile": "5f101eda-ac3a-46e4-8d94-d46d31a3199e.system-prompt.txt",
+      "sha256": "ae0ade53be72b4ca6ca68055d31590facb584381e3d727babb6fd24c50679db1",
+      "sig": "ee859e1b3586f822afebb05fc8cfc534ecaa11a8a1887d40f11e33daeaf6bb25"
+    },
+    {
+      "id": "4fc50850-153a-4029-b964-2a072dbc81cc",
+      "name": "(图生视频)-LTX2.3-四宫格图片反推分镜提示词【1】",
+      "version": "1.0.0",
+      "category": "视频",
+      "tier": "free",
+      "description": "",
+      "promptFile": "4fc50850-153a-4029-b964-2a072dbc81cc.system-prompt.txt",
+      "sha256": "f4d64700c5551827c4bcaea1ff823300de625eabf47ec648f6f077b4365a2d55",
+      "sig": "8f8c65203a45a694cd74abf504209627c1b54bc28389cdaf9260f2bb0e9171a6"
+    },
+    {
+      "id": "4fa47935-e647-420f-8c2a-0e3314c4eb12",
+      "name": "(图生视频)-LTX2.3-四宫格格式化输出【2】",
+      "version": "1.0.0",
+      "category": "视频",
+      "tier": "free",
+      "description": "",
+      "promptFile": "4fa47935-e647-420f-8c2a-0e3314c4eb12.system-prompt.txt",
+      "sha256": "35e827c994c264004804c3dab5797e2dfb3fd10268e32a488edfe5098956a818",
+      "sig": "ebee6e4b746bf03a9f5c91f3531bffae4f20a833f8311be46b7d1c8a8b2887bd"
+    },
+    {
+      "id": "3d53e7d4-d4e6-492d-8a33-a37b74af17c7",
+      "name": "(图生视频)-数宇人-场景【2】",
+      "version": "1.0.0",
+      "category": "视频",
+      "tier": "free",
+      "description": "",
+      "promptFile": "3d53e7d4-d4e6-492d-8a33-a37b74af17c7.system-prompt.txt",
+      "sha256": "1ba5a3c88a25d3c4c00ebe2f560235b5bada7fe0b05770322b32ced1e2fb82fe",
+      "sig": "0ebe5b10430d80e71d386ecd1674f86963e280fbce348f43074d2bff5b76d23b"
+    },
+    {
+      "id": "c6ca065b-1903-41a1-be7a-1be3bdfdd18d",
+      "name": "(图生视频)-数宇人-分镜【1】",
+      "version": "1.0.0",
+      "category": "视频",
+      "tier": "free",
+      "description": "(图生视频)-数宇人-分镜【1】关于英文分镜的",
+      "promptFile": "c6ca065b-1903-41a1-be7a-1be3bdfdd18d.system-prompt.txt",
+      "sha256": "d5a49e5e97284a3be387d322197e8d68470857ffc2206017a273ed076d8352ee",
+      "sig": "b49bc121c0bf4c70134206fac36f1a486f7d9524a51ed58ba932d6516f185d6f"
     },
     {
       "id": "b6dbdab7-8b1d-4a95-bfd9-0f71380cc84a",

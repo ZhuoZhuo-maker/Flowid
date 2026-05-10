@@ -16,10 +16,48 @@ type LocalImageAssetRecord = {
   name?: string
 }
 
+import { mirrorUploadToInputDir } from './localAssetDiskMirror'
 import { loadLocalDiskPathsSettings } from './localDiskPathsSettings'
+import { outputMirrorStemWithNodeId } from './outputMirrorStem'
 
 const objectUrlCache = new Map<string, string>()
 const inflightUrlTasks = new Map<string, Promise<string | null>>()
+/** 绝对磁盘路径 → object URL（输出条缩略图等，避免 Comfy /view 或失效 blob） */
+const diskPathObjectUrlCache = new Map<string, string>()
+const diskPathObjectUrlInflight = new Map<string, Promise<string | null>>()
+
+/** 某 `blob:` 是否仍由本模块缓存（与其它节点/侧栏共享）；勿随意 revoke，否则多处预览同时失效。 */
+export function isBlobUrlHeldInLocalAssetObjectUrlCache(url: string): boolean {
+  const t = String(url || '').trim()
+  if (!t.startsWith('blob:')) return false
+  for (const u of objectUrlCache.values()) {
+    if (u === t) return true
+  }
+  for (const u of diskPathObjectUrlCache.values()) {
+    if (u === t) return true
+  }
+  return false
+}
+
+/** 丢弃该资产的 object URL 缓存并 revoke，下次 `getLocalImageAssetObjectUrl` 会从 IDB/磁盘重建。 */
+export function bumpLocalImageAssetObjectUrl(assetId: string): void {
+  const id = String(assetId || '').trim()
+  if (!id) return
+  const old = objectUrlCache.get(id)
+  if (!old) return
+  try {
+    URL.revokeObjectURL(old)
+  } catch {
+    // ignore
+  }
+  objectUrlCache.delete(id)
+}
+
+/** 强制刷新预览 URL（用于 `<audio>` 等资源已失效但 IndexedDB 仍有数据时）。 */
+export async function getLocalImageAssetObjectUrlAfterBump(assetId: string): Promise<string | null> {
+  bumpLocalImageAssetObjectUrl(assetId)
+  return getLocalImageAssetObjectUrl(assetId)
+}
 
 /**
  * 依据路径内容选择分隔符并拼接文件名。
@@ -38,6 +76,32 @@ function mimeTypeFromExt(ext: string): string {
   if (e === '.webp') return 'image/webp'
   if (e === '.gif') return 'image/gif'
   if (e === '.bmp') return 'image/bmp'
+  return 'application/octet-stream'
+}
+
+/** 任意镜像媒体文件的 MIME（含音视频，供 readBinaryFile + Blob 预览）。 */
+function mediaMimeFromAbsolutePath(filePath: string): string {
+  const leaf = filePath.split(/[/\\]/).pop() || ''
+  const extRaw = leaf.includes('.') ? leaf.split('.').pop()?.toLowerCase() || '' : ''
+  const e = extRaw ? `.${extRaw}` : ''
+  if (e === '.png') return 'image/png'
+  if (e === '.jpg' || e === '.jpeg') return 'image/jpeg'
+  if (e === '.webp') return 'image/webp'
+  if (e === '.gif') return 'image/gif'
+  if (e === '.bmp') return 'image/bmp'
+  if (e === '.mp4') return 'video/mp4'
+  if (e === '.webm') return 'video/webm'
+  if (e === '.mov') return 'video/quicktime'
+  if (e === '.mkv') return 'video/x-matroska'
+  if (e === '.avi') return 'video/x-msvideo'
+  if (e === '.wav') return 'audio/wav'
+  if (e === '.mp3') return 'audio/mpeg'
+  if (e === '.flac') return 'audio/flac'
+  if (e === '.ogg') return 'audio/ogg'
+  if (e === '.m4a') return 'audio/mp4'
+  if (e === '.aac') return 'audio/aac'
+  if (e === '.opus') return 'audio/opus'
+  if (e === '.bin') return 'application/octet-stream'
   return 'application/octet-stream'
 }
 
@@ -140,6 +204,75 @@ async function readDesktopMirroredOutputBlobByStem(
 }
 
 /**
+ * 按「标题 + 节点 id」前缀在 output 目录查找镜像（新命名）；无结果时回退旧版仅标题规则。
+ */
+async function readDesktopMirroredOutputBlobByNode(
+  title: string,
+  nodeId: string,
+  mediaKind: 'image' | 'video' | 'audio',
+  /** 旧版仅按标题/节点 id 扫目录时的 stem，与历史 hydrate 一致 */
+  legacyStem: string,
+): Promise<Blob | null> {
+  const cleanStem = outputMirrorStemWithNodeId(title, nodeId)
+  console.log('[Flowid] readDesktopMirroredOutputBlobByNode:', { title, nodeId, cleanStem, legacyStem, mediaKind })
+  if (!String(nodeId || '').trim()) {
+    return readDesktopMirroredOutputBlobByStem(legacyStem, mediaKind)
+  }
+  const desktop = window.flowidDesktop
+  if (!desktop?.readBinaryFile) return null
+  const outputPath = loadLocalDiskPathsSettings().outputPath.trim()
+  if (!outputPath) return readDesktopMirroredOutputBlobByStem(legacyStem, mediaKind)
+
+  const extCandidates =
+    mediaKind === 'image'
+      ? ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp']
+      : mediaKind === 'video'
+        ? ['.mp4', '.webm', '.mov', '.mkv', '.avi']
+        : ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac', '.bin']
+
+  const dirResult = await desktop.readDirectory?.(outputPath)
+  if (!dirResult?.ok || !Array.isArray(dirResult.files)) {
+    return readDesktopMirroredOutputBlobByStem(legacyStem, mediaKind)
+  }
+
+  const stemLower = cleanStem.toLowerCase()
+  const matchedFiles: Array<{ name: string; ext: string; mtimeMs: number }> = []
+
+  for (const entry of dirResult.files) {
+    const fileName = String(entry.name || '').trim()
+    if (!fileName) continue
+    const nameLower = fileName.toLowerCase()
+    let matchedExt: string | undefined
+    for (const ext of extCandidates) {
+      if (nameLower.endsWith(ext.toLowerCase())) {
+        matchedExt = ext
+        break
+      }
+    }
+    if (!matchedExt) continue
+    if (nameLower.startsWith(stemLower + '-')) {
+      matchedFiles.push({
+        name: fileName,
+        ext: matchedExt,
+        mtimeMs: Number(entry.mtimeMs || 0),
+      })
+    }
+  }
+
+  if (matchedFiles.length > 0) {
+    matchedFiles.sort((a, b) => b.mtimeMs - a.mtimeMs)
+    const newest = matchedFiles[0]!
+    const filePath = joinPath(outputPath, newest.name)
+    const res = await desktop.readBinaryFile(filePath)
+    if (res?.ok && res.data && res.data.byteLength > 0) {
+      return new Blob([res.data], { type: mimeTypeFromExt(newest.ext) })
+    }
+  }
+
+  return readDesktopMirroredOutputBlobByStem(legacyStem, mediaKind)
+}
+
+/**
  * 桌面端兜底：IndexedDB 不命中时，从用户配置的 inputPath 中读取镜像文件。
  */
 async function readDesktopMirroredAssetBlob(assetId: string): Promise<Blob | null> {
@@ -149,13 +282,31 @@ async function readDesktopMirroredAssetBlob(assetId: string): Promise<Blob | nul
   if (!desktop?.readBinaryFile) return null
   const inputPath = loadLocalDiskPathsSettings().inputPath.trim()
   if (!inputPath) return null
-  const extCandidates = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.bin']
+  const extCandidates = [
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.webp',
+    '.gif',
+    '.bmp',
+    '.wav',
+    '.mp3',
+    '.flac',
+    '.ogg',
+    '.m4a',
+    '.aac',
+    '.opus',
+    '.mp4',
+    '.webm',
+    '.mov',
+    '.bin',
+  ]
   for (const ext of extCandidates) {
     const fileName = `flowid-asset-${id}${ext}`
     const filePath = joinPath(inputPath, fileName)
     const res = await desktop.readBinaryFile(filePath)
     if (!res?.ok || !res.data || res.data.byteLength <= 0) continue
-    return new Blob([res.data], { type: mimeTypeFromExt(ext) })
+    return new Blob([res.data], { type: mediaMimeFromAbsolutePath(filePath) })
   }
   return null
 }
@@ -215,9 +366,10 @@ export async function saveLocalImageAsset(file: File): Promise<string> {
       req.onerror = () => reject(req.error ?? new Error('写入图片资产失败'))
     })
     /**
-     * 输入目录镜像统一由 `mirrorInputAssetsFromProjectSnapshot` 按“节点标题”命名执行。
-     * 这里不再即时写入 `flowid-asset-*`，避免 input 目录出现难以对应节点的文件堆积。
+     * 同步写一份到设置里的「输入」目录（`flowid-asset-{id}.ext`），供桌面端 IndexedDB 未命中或
+     * blob 失效时从盘符恢复；与 Comfy `input` 对齐时需用户将输入路径指到该目录。
      */
+    void mirrorUploadToInputDir(file, id)
     return id
   } finally {
     db.close()
@@ -267,6 +419,34 @@ export async function getLocalImageAssetObjectUrl(assetId: string): Promise<stri
 /**
  * 按节点标题从本地 output 镜像目录恢复媒体预览 URL（桌面端）。
  */
+/**
+ * 桌面端：按绝对路径读盘并缓存为 object URL（Electron 内页面无法用 file:// 直链 img/video）。
+ */
+export async function getDesktopDiskFileObjectUrl(absPath: string): Promise<string | null> {
+  const key = String(absPath || '').trim()
+  if (!key) return null
+  const cached = diskPathObjectUrlCache.get(key)
+  if (cached) return cached
+  const running = diskPathObjectUrlInflight.get(key)
+  if (running) return await running
+  const task = (async () => {
+    const desktop = window.flowidDesktop
+    if (!desktop?.readBinaryFile) return null
+    const res = await desktop.readBinaryFile(key)
+    if (!res?.ok || !res.data?.byteLength) return null
+    const blob = new Blob([res.data], { type: mediaMimeFromAbsolutePath(key) })
+    const url = URL.createObjectURL(blob)
+    diskPathObjectUrlCache.set(key, url)
+    return url
+  })()
+  diskPathObjectUrlInflight.set(key, task)
+  try {
+    return await task
+  } finally {
+    diskPathObjectUrlInflight.delete(key)
+  }
+}
+
 export async function getDesktopMirroredOutputObjectUrlByStem(
   stem: string,
   mediaKind: 'image' | 'video' | 'audio',
@@ -291,6 +471,33 @@ export async function getDesktopMirroredOutputObjectUrlByStem(
   }
 }
 
+export async function getDesktopMirroredOutputObjectUrlByNode(
+  title: string,
+  nodeId: string,
+  mediaKind: 'image' | 'video' | 'audio',
+  legacyStem: string,
+): Promise<string | null> {
+  const stemKey = outputMirrorStemWithNodeId(title, nodeId)
+  const key = `outputnode:${mediaKind}:${nodeId}:${stemKey}:${legacyStem}`
+  const cached = objectUrlCache.get(key)
+  if (cached) return cached
+  const running = inflightUrlTasks.get(key)
+  if (running) return await running
+  const task = (async () => {
+    const blob = await readDesktopMirroredOutputBlobByNode(title, nodeId, mediaKind, legacyStem)
+    if (!blob) return null
+    const url = URL.createObjectURL(blob)
+    objectUrlCache.set(key, url)
+    return url
+  })()
+  inflightUrlTasks.set(key, task)
+  try {
+    return await task
+  } finally {
+    inflightUrlTasks.delete(key)
+  }
+}
+
 /**
  * 可选：释放所有缓存 URL（例如页面卸载时）。
  */
@@ -299,4 +506,8 @@ export function revokeAllLocalImageAssetObjectUrls(): void {
     URL.revokeObjectURL(url)
   }
   objectUrlCache.clear()
+  for (const url of diskPathObjectUrlCache.values()) {
+    URL.revokeObjectURL(url)
+  }
+  diskPathObjectUrlCache.clear()
 }

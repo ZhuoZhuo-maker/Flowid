@@ -15,8 +15,10 @@ const TEMPLATES_DIR = path.resolve(__dirname, 'templates')
 const TEMPLATE_INDEX_PATH = path.join(TEMPLATES_DIR, 'index.json')
 const SYSTEM_PROMPTS_DIR = path.resolve(__dirname, 'system-prompts')
 const SYSTEM_PROMPTS_INDEX_PATH = path.join(SYSTEM_PROMPTS_DIR, 'index.json')
-const CLOUD_MODELS_PATH = path.resolve(__dirname, 'cloud-models.json')
 const CLOUD_WORKFLOWS_PATH = path.resolve(__dirname, 'cloud-workflows.json')
+const CLOUD_ASSIST_MODELS_PATH = path.resolve(__dirname, 'cloud-assist-models.json')
+/** 与画布「云端模型」辅助线路对齐：文本 / 图 / 视频 / 配音 / 音乐 */
+const CLOUD_ASSIST_KINDS = ['text', 'image', 'video', 'audio', 'music']
 const USER_AGREEMENT_PATH = path.resolve(__dirname, 'user-agreement.json')
 const INSPIRATION_MARKET_DIR = path.resolve(__dirname, 'inspiration-market')
 const INSPIRATION_INDEX_PATH = path.join(INSPIRATION_MARKET_DIR, 'index.json')
@@ -87,63 +89,23 @@ function writeDb(db) {
   fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf8')
 }
 
-function ensureCloudModels() {
-  if (!fs.existsSync(CLOUD_MODELS_PATH)) {
-    const initial = { token: '', providers: [] }
-    fs.writeFileSync(CLOUD_MODELS_PATH, JSON.stringify(initial, null, 2), 'utf8')
-  }
-}
-
-function readCloudModels() {
-  ensureCloudModels()
-  try {
-    const raw = fs.readFileSync(CLOUD_MODELS_PATH, 'utf8')
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return { token: '', providers: [] }
-    if (!Array.isArray(parsed.providers)) parsed.providers = []
-    parsed.token = String(parsed.token || '')
-    // 兼容旧数据：曾有版本把对象模型 String() 成 "[object Object]"，这里丢弃这些脏值
-    parsed.providers = parsed.providers
-      .map((p) => {
-        const modelsRaw = Array.isArray(p?.models) ? p.models : []
-        const models = modelsRaw
-          .map((m) => {
-            if (typeof m === 'string') {
-              const s = String(m).trim()
-              if (!s || s === '[object Object]') return null
-              return s
-            }
-            if (m && typeof m === 'object') {
-              const name = String(m?.name || m?.model || '').trim()
-              if (!name || name === '[object Object]') return null
-              return { name, nodeKind: String(m?.nodeKind || '').trim() }
-            }
-            return null
-          })
-          .filter(Boolean)
-        return { ...p, models }
-      })
-      .filter((p) => p && (p.id || p.provider))
-    return parsed
-  } catch {
-    return { token: '', providers: [] }
-  }
-}
-
-function writeCloudModels(next) {
-  const token = String(next?.token || '')
-  const providers = Array.isArray(next?.providers) ? next.providers : []
-  fs.writeFileSync(CLOUD_MODELS_PATH, JSON.stringify({ token, providers }, null, 2), 'utf8')
-}
-
 function ensureCloudWorkflows() {
   if (!fs.existsSync(CLOUD_WORKFLOWS_PATH)) {
     fs.writeFileSync(CLOUD_WORKFLOWS_PATH, JSON.stringify({ workflows: [] }, null, 2), 'utf8')
   }
 }
 
+function workflowContentKey(rec) {
+  return JSON.stringify({
+    name: rec.name,
+    description: rec.description,
+    nodeKind: rec.nodeKind,
+    workflowJson: rec.workflowJson,
+  })
+}
+
 /**
- * @returns {{ workflows: Array<{ id: string; name: string; description: string; nodeKind: string; workflowJson: string }> }}
+ * @returns {{ workflows: Array<{ id: string; name: string; description: string; nodeKind: string; workflowJson: string; createdAtMs: number; updatedAtMs: number }> }}
  */
 function readCloudWorkflows() {
   ensureCloudWorkflows()
@@ -159,12 +121,21 @@ function readCloudWorkflows() {
       const name = String(w.name || '').trim()
       if (!name) continue
       const workflowJson = String(w.workflowJson || '')
+      const description = String(w.description || '').trim().slice(0, 500)
+      const nodeKind = String(w.nodeKind || '').trim().slice(0, 32)
+      const jsonSlice = workflowJson.slice(0, 500000)
+      const c0 = Number(w.createdAtMs)
+      const u0 = Number(w.updatedAtMs)
+      const createdAtMs = Number.isFinite(c0) && c0 > 0 ? Math.floor(c0) : 0
+      const updatedAtMs = Number.isFinite(u0) && u0 > 0 ? Math.floor(u0) : 0
       workflows.push({
         id,
         name,
-        description: String(w.description || '').trim().slice(0, 500),
-        nodeKind: String(w.nodeKind || '').trim().slice(0, 32),
-        workflowJson: workflowJson.slice(0, 500000),
+        description,
+        nodeKind,
+        workflowJson: jsonSlice,
+        createdAtMs,
+        updatedAtMs,
       })
     }
     return { workflows }
@@ -177,7 +148,10 @@ function readCloudWorkflows() {
  * @param {{ workflows?: unknown[] }} next
  */
 function writeCloudWorkflows(next) {
+  const prev = readCloudWorkflows()
+  const prevMap = new Map(prev.workflows.map((x) => [x.id, x]))
   const rawList = Array.isArray(next?.workflows) ? next.workflows : []
+  const now = Date.now()
   const workflows = []
   for (const w of rawList) {
     if (!w || typeof w !== 'object') continue
@@ -185,15 +159,122 @@ function writeCloudWorkflows(next) {
     const name = String(w.name || '').trim()
     if (!name) continue
     const workflowJson = String(w.workflowJson || '')
+    const description = String(w.description || '').trim().slice(0, 500)
+    const nodeKind = String(w.nodeKind || '').trim().slice(0, 32)
+    const jsonSlice = workflowJson.slice(0, 500000)
+    const incoming = { id, name, description, nodeKind, workflowJson: jsonSlice }
+    const key = workflowContentKey(incoming)
+    const old = prevMap.get(id)
+    let createdAtMs = 0
+    let updatedAtMs = 0
+    if (!old) {
+      createdAtMs = now
+      updatedAtMs = now
+    } else if (key !== workflowContentKey(old)) {
+      createdAtMs = old.createdAtMs > 0 ? old.createdAtMs : now
+      updatedAtMs = now
+    } else {
+      createdAtMs = old.createdAtMs
+      updatedAtMs = old.updatedAtMs
+    }
     workflows.push({
-      id,
-      name,
-      description: String(w.description || '').trim().slice(0, 500),
-      nodeKind: String(w.nodeKind || '').trim().slice(0, 32),
-      workflowJson: workflowJson.slice(0, 500000),
+      ...incoming,
+      createdAtMs,
+      updatedAtMs,
     })
   }
+
+  /** 磁盘上曾无任何时间戳时，第一次全量保存为仍为 0 的条目写入错开的迁移时间（与本次新建/编辑用的 now 错开，避免混淆） */
+  const allPrevLegacy =
+    prev.workflows.length > 0 &&
+    prev.workflows.every(
+      (x) => (Number(x.createdAtMs) || 0) <= 0 && (Number(x.updatedAtMs) || 0) <= 0,
+    )
+  if (allPrevLegacy && workflows.length > 0) {
+    const n = workflows.length
+    const gapMs = 1000
+    const migrationAnchor = now - (n + 4) * gapMs
+    workflows.forEach((rec, i) => {
+      if ((Number(rec.createdAtMs) || 0) <= 0 && (Number(rec.updatedAtMs) || 0) <= 0) {
+        const t = migrationAnchor + i * gapMs
+        rec.createdAtMs = t
+        rec.updatedAtMs = t
+      }
+    })
+  }
+
   fs.writeFileSync(CLOUD_WORKFLOWS_PATH, JSON.stringify({ workflows }, null, 2), 'utf8')
+}
+
+function ensureCloudAssistModels() {
+  if (!fs.existsSync(CLOUD_ASSIST_MODELS_PATH)) {
+    const kinds = {}
+    for (const k of CLOUD_ASSIST_KINDS) kinds[k] = []
+    fs.writeFileSync(CLOUD_ASSIST_MODELS_PATH, JSON.stringify({ kinds }, null, 2), 'utf8')
+  }
+}
+
+/**
+ * @returns {{ kinds: Record<string, Array<{ id: string; baseUrl: string; models: string[] }>> }}
+ */
+function readCloudAssistModels() {
+  ensureCloudAssistModels()
+  try {
+    const raw = fs.readFileSync(CLOUD_ASSIST_MODELS_PATH, 'utf8')
+    const j = JSON.parse(raw)
+    const out = {}
+    for (const k of CLOUD_ASSIST_KINDS) out[k] = []
+    const src = j && typeof j === 'object' && j.kinds && typeof j.kinds === 'object' ? j.kinds : {}
+    for (const k of CLOUD_ASSIST_KINDS) {
+      const arr = Array.isArray(src[k]) ? src[k] : []
+      for (const row of arr) {
+        if (!row || typeof row !== 'object') continue
+        const id = String(row.id || '').trim() || crypto.randomUUID()
+        const baseUrl = String(row.baseUrl || '').trim().slice(0, 800)
+        if (!/^https?:\/\//i.test(baseUrl)) continue
+        const models = []
+        const rawModels = Array.isArray(row.models) ? row.models : []
+        for (const m of rawModels) {
+          const t = String(m || '').trim().slice(0, 200)
+          if (t && !models.includes(t)) models.push(t)
+        }
+        if (!models.length) continue
+        out[k].push({ id, baseUrl, models })
+      }
+    }
+    return { kinds: out }
+  } catch {
+    const kinds = {}
+    for (const k of CLOUD_ASSIST_KINDS) kinds[k] = []
+    return { kinds }
+  }
+}
+
+/**
+ * @param {{ kinds?: unknown }} next
+ */
+function writeCloudAssistModels(next) {
+  const kinds = {}
+  for (const k of CLOUD_ASSIST_KINDS) kinds[k] = []
+  const src = next && typeof next === 'object' && next.kinds && typeof next.kinds === 'object' ? next.kinds : {}
+  for (const k of CLOUD_ASSIST_KINDS) {
+    const arr = Array.isArray(src[k]) ? src[k] : []
+    for (const row of arr) {
+      if (!row || typeof row !== 'object') continue
+      const id = String(row.id || '').trim() || crypto.randomUUID()
+      const baseUrl = String(row.baseUrl || '').trim().slice(0, 800)
+      if (!/^https?:\/\//i.test(baseUrl)) continue
+      const models = []
+      const rawModels = Array.isArray(row.models) ? row.models : []
+      for (const m of rawModels) {
+        const t = String(m || '').trim().slice(0, 200)
+        if (t && !models.includes(t)) models.push(t)
+      }
+      if (!models.length) continue
+      kinds[k].push({ id, baseUrl, models })
+    }
+  }
+  fs.writeFileSync(CLOUD_ASSIST_MODELS_PATH, JSON.stringify({ kinds }, null, 2), 'utf8')
 }
 
 function readUserAgreement() {
@@ -474,8 +555,43 @@ function parseWorkflowJsonInput(input) {
   throw new Error('workflowJson 格式错误，需为 JSON 字符串或对象')
 }
 
+function xgpuContainerPublicHost(hostname) {
+  return /\.container\.x-gpu\.com$/i.test(String(hostname || ''))
+}
+function xgpuIntranetHost(hostname) {
+  return /\.c\.x-gpu\.com$/i.test(String(hostname || ''))
+}
+function hostnameFromBareBaseUrl(bare) {
+  const b = String(bare || '')
+    .trim()
+    .replace(/^\/+/, '')
+  if (!b) return ''
+  try {
+    const withScheme = /^https?:\/\//i.test(b) ? b : `http://${b}`
+    return new URL(withScheme).hostname
+  } catch {
+    return String(b.split('/')[0] || '')
+      .split(':')[0]
+      .trim()
+  }
+}
+
+/** 与前端 comfyClient.effectiveCloudComfyBaseUrl 对齐：仙宫云公网 https、内网 http、其它默认 http */
+function resolveComfyProviderBaseUrl(raw) {
+  let s = String(raw || '')
+    .trim()
+    .replace(/\/+$/, '')
+  if (!s) return s
+  const bare = s.replace(/^https:\/\//i, '').replace(/^http:\/\//i, '').replace(/^\/+/, '')
+  if (!bare) return s
+  const host = hostnameFromBareBaseUrl(bare)
+  if (xgpuContainerPublicHost(host)) return `https://${bare}`
+  if (xgpuIntranetHost(host)) return `http://${bare}`
+  return `http://${bare}`
+}
+
 function resolveRequestBase(baseUrl) {
-  return String(baseUrl || '').trim().replace(/\/+$/, '')
+  return resolveComfyProviderBaseUrl(baseUrl)
 }
 
 function getComfyAuthHeaders(provider) {
@@ -845,6 +961,79 @@ app.get('/admin/inspiration', (_req, res) => {
   res.redirect(302, '/admin.html?panel=inspiration-market')
 })
 
+/**
+ * 云端 Comfy 工作流 + 云端模型辅助：必须放在 express.static 之前。
+ * 否则在部分环境下对 /admin/* 的 API 请求可能被静态层处理成 404（管理页 POST 保存失败）。
+ */
+app.get('/cloud-workflows/:workflowId/workflow', (req, res) => {
+  const workflowId = String(req.params.workflowId || '').trim()
+  if (!workflowId) {
+    res.status(400).json({ message: '缺少工作流 id' })
+    return
+  }
+  const { workflows } = readCloudWorkflows()
+  const w = workflows.find((x) => x.id === workflowId)
+  if (!w) {
+    res.status(404).json({ message: '未找到该云端工作流' })
+    return
+  }
+  const jsonText = String(w.workflowJson || '').trim()
+  if (!jsonText) {
+    res.status(404).json({ message: '该云端工作流 JSON 为空' })
+    return
+  }
+  res.json({
+    id: w.id,
+    name: w.name,
+    description: w.description,
+    nodeKind: w.nodeKind,
+    workflowJson: jsonText,
+    serverTimeMs: Date.now(),
+  })
+})
+
+app.get('/cloud-workflows', (_req, res) => {
+  const { workflows } = readCloudWorkflows()
+  res.json({
+    workflows: workflows.map((w) => {
+      const j = String(w.workflowJson || '')
+      const supportsMultiangle =
+        j.includes('__CAM_H__') && j.includes('__CAM_V__') && j.includes('__CAM_Z__')
+      return {
+        id: w.id,
+        name: w.name,
+        description: w.description,
+        nodeKind: w.nodeKind,
+        supportsMultiangle,
+      }
+    }),
+    serverTimeMs: Date.now(),
+  })
+})
+
+app.get('/admin/cloud-workflows', adminMiddleware, (_req, res) => {
+  res.json({ ...readCloudWorkflows(), serverTimeMs: Date.now() })
+})
+
+app.post('/admin/cloud-workflows/save', adminMiddleware, (req, res) => {
+  const list = Array.isArray(req.body?.workflows) ? req.body.workflows : []
+  writeCloudWorkflows({ workflows: list })
+  res.json({ ok: true, count: readCloudWorkflows().workflows.length, serverTimeMs: Date.now() })
+})
+
+app.get('/cloud-assist-model-catalog', (_req, res) => {
+  res.json({ ...readCloudAssistModels(), serverTimeMs: Date.now() })
+})
+
+app.get('/admin/cloud-assist-models', adminMiddleware, (_req, res) => {
+  res.json({ ...readCloudAssistModels(), serverTimeMs: Date.now() })
+})
+
+app.post('/admin/cloud-assist-models/save', adminMiddleware, (req, res) => {
+  writeCloudAssistModels(req.body || {})
+  res.json({ ok: true, serverTimeMs: Date.now() })
+})
+
 app.use(express.static(path.join(__dirname, 'public')))
 
 // 后端管理页入口（静态页面；接口仍由 /admin/* 提供）
@@ -944,36 +1133,6 @@ function sendStatusPage(_req, res) {
 
 app.get('/status', sendStatusPage)
 app.get('/healthz-ui', sendStatusPage)
-
-/**
- * 辅助模式（配置下发）：拉取后台预设的「模型 + 接口地址」配置。
- * - 不做鉴权：用户请求与结果都直连第三方；此处仅下发可用的 baseUrl/model 清单。
- * - Response: { providers: [{ id, label, baseUrl, models[] }], serverTimeMs }
- */
-app.get('/cloud-models', (_req, res) => {
-  const cfg = readCloudModels()
-  const providers = (cfg.providers || [])
-    .map((p) => ({
-      id: String(p?.id || p?.provider || ''),
-      label: String(p?.label || p?.id || p?.provider || ''),
-      baseUrl: String(p?.baseUrl || ''),
-      models: Array.isArray(p?.models)
-        ? p.models
-            .map((m) => {
-              if (typeof m === 'string') return { name: String(m), nodeKind: '' }
-              if (m && typeof m === 'object')
-                return {
-                  name: String(m?.name || m?.model || ''),
-                  nodeKind: String(m?.nodeKind || ''),
-                }
-              return null
-            })
-            .filter(Boolean)
-        : [],
-    }))
-    .filter((p) => p.id && p.baseUrl)
-  res.json({ providers, serverTimeMs: Date.now() })
-})
 
 app.get('/templates', licenseMiddleware, (req, res) => {
   // legacy: kept for compatibility, but we now allow public free listing via optional license.
@@ -1222,97 +1381,6 @@ function adminMiddleware(req, res, next) {
   }
   next()
 }
-
-app.get('/admin/cloud-models', adminMiddleware, (_req, res) => {
-  const cfg = readCloudModels()
-  res.json({
-    token: String(cfg.token || ''),
-    providers: Array.isArray(cfg.providers) ? cfg.providers : [],
-    serverTimeMs: Date.now(),
-  })
-})
-
-/** 公开：按 id 拉取云端工作流完整 JSON（供客户端在「云端 Comfy + 自定义」模式下组 prompt） */
-app.get('/cloud-workflows/:workflowId/workflow', (req, res) => {
-  const workflowId = String(req.params.workflowId || '').trim()
-  if (!workflowId) {
-    res.status(400).json({ message: '缺少工作流 id' })
-    return
-  }
-  const { workflows } = readCloudWorkflows()
-  const w = workflows.find((x) => x.id === workflowId)
-  if (!w) {
-    res.status(404).json({ message: '未找到该云端工作流' })
-    return
-  }
-  const jsonText = String(w.workflowJson || '').trim()
-  if (!jsonText) {
-    res.status(404).json({ message: '该云端工作流 JSON 为空' })
-    return
-  }
-  res.json({
-    id: w.id,
-    name: w.name,
-    description: w.description,
-    nodeKind: w.nodeKind,
-    workflowJson: jsonText,
-    serverTimeMs: Date.now(),
-  })
-})
-
-app.get('/cloud-workflows', (_req, res) => {
-  const { workflows } = readCloudWorkflows()
-  res.json({
-    workflows: workflows.map((w) => ({
-      id: w.id,
-      name: w.name,
-      description: w.description,
-      nodeKind: w.nodeKind,
-    })),
-    serverTimeMs: Date.now(),
-  })
-})
-
-app.get('/admin/cloud-workflows', adminMiddleware, (_req, res) => {
-  res.json({ ...readCloudWorkflows(), serverTimeMs: Date.now() })
-})
-
-app.post('/admin/cloud-workflows/save', adminMiddleware, (req, res) => {
-  const list = Array.isArray(req.body?.workflows) ? req.body.workflows : []
-  writeCloudWorkflows({ workflows: list })
-  res.json({ ok: true, count: readCloudWorkflows().workflows.length, serverTimeMs: Date.now() })
-})
-
-app.post('/admin/cloud-models/save', adminMiddleware, (req, res) => {
-  const providersRaw = Array.isArray(req.body?.providers) ? req.body.providers : []
-  const providers = providersRaw
-    .map((p) => ({
-      id: String(p?.id || p?.provider || '').trim(),
-      label: String(p?.label || p?.id || p?.provider || '').trim(),
-      baseUrl: String(p?.baseUrl || '').trim(),
-      models: Array.isArray(p?.models)
-        ? p.models
-            .map((m) => {
-              if (typeof m === 'string') return { name: String(m), nodeKind: '' }
-              if (m && typeof m === 'object')
-                return {
-                  name: String(m?.name || m?.model || '').trim(),
-                  nodeKind: String(m?.nodeKind || '').trim(),
-                }
-              return null
-            })
-            .filter((x) => x && x.name)
-        : [],
-    }))
-    .filter((p) => p.id && p.baseUrl)
-  const prev = readCloudModels()
-  const token =
-    req.body && Object.prototype.hasOwnProperty.call(req.body, 'token')
-      ? String(req.body.token ?? '')
-      : String(prev.token || '')
-  writeCloudModels({ token, providers })
-  res.json({ ok: true, providers: providers.length, serverTimeMs: Date.now() })
-})
 
 app.get('/admin/licenses', adminMiddleware, (_req, res) => {
   const db = readDb()

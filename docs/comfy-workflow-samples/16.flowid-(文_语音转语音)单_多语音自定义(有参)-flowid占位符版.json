@@ -1,0 +1,344 @@
+{
+  "1": {
+    "inputs": {
+      "model_path": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "precision": "bf16",
+      "device": "cuda",
+      "attn_implementation": "sdpa",
+      "auto_download": false,
+      "download_source": "ModelScope"
+    },
+    "class_type": "TDQwen3TTSModelLoader",
+    "_meta": {
+      "title": "TD Qwen3 TTS Model Loader"
+    }
+  },
+  "6": {
+    "inputs": {
+      "clean_file_cache": true,
+      "clean_processes": true,
+      "clean_dlls": true,
+      "retry_times": 3,
+      "anything": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "RAMCleanup",
+    "_meta": {
+      "title": "释放内存"
+    }
+  },
+  "7": {
+    "inputs": {
+      "offload_model": true,
+      "offload_cache": true,
+      "anything": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "VRAMCleanup",
+    "_meta": {
+      "title": "释放显存"
+    }
+  },
+  "8": {
+    "inputs": {
+      "audio": "__REF_AUDIO_1__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "9": {
+    "inputs": {
+      "audio": "__REF_AUDIO_2__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "10": {
+    "inputs": {
+      "audio": "__REF_AUDIO_3__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "11": {
+    "inputs": {
+      "name": "旁白",
+      "audio": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "12": {
+    "inputs": {
+      "name": "李追远",
+      "audio": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "13": {
+    "inputs": {
+      "name": "崔桂英",
+      "audio": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "14": {
+    "inputs": {
+      "audioUI": "",
+      "audio": [
+        "16",
+        0
+      ]
+    },
+    "class_type": "PreviewAudio",
+    "_meta": {
+      "title": "预览音频"
+    }
+  },
+  "16": {
+    "inputs": {
+      "text": "__NOTE__",
+      "interval": 0.5,
+      "seed": 216951534771240,
+      "model": [
+        "1",
+        0
+      ],
+      "speaker_1": [
+        "11",
+        0
+      ],
+      "speaker_2": [
+        "12",
+        0
+      ],
+      "speaker_3": [
+        "13",
+        0
+      ],
+      "speaker_4": [
+        "21",
+        0
+      ],
+      "speaker_5": [
+        "22",
+        0
+      ],
+      "speaker_6": [
+        "23",
+        0
+      ],
+      "speaker_7": [
+        "24",
+        0
+      ],
+      "speaker_8": [
+        "28",
+        0
+      ],
+      "speaker_9": [
+        "29",
+        0
+      ],
+      "speaker_10": [
+        "30",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSMultiDialog",
+    "_meta": {
+      "title": "TD Qwen3 TTS Multi Dialog"
+    }
+  },
+  "17": {
+    "inputs": {
+      "audio": "__REF_AUDIO_4__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "18": {
+    "inputs": {
+      "audio": "__REF_AUDIO_5__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "19": {
+    "inputs": {
+      "audio": "__REF_AUDIO_6__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "20": {
+    "inputs": {
+      "audio": "__REF_AUDIO_7__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "21": {
+    "inputs": {
+      "name": "崔桂英",
+      "audio": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "22": {
+    "inputs": {
+      "name": "崔桂英",
+      "audio": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "23": {
+    "inputs": {
+      "name": "崔桂英",
+      "audio": [
+        "19",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "24": {
+    "inputs": {
+      "name": "崔桂英",
+      "audio": [
+        "20",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "25": {
+    "inputs": {
+      "audio": "__REF_AUDIO_8__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "26": {
+    "inputs": {
+      "audio": "__REF_AUDIO_9__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "27": {
+    "inputs": {
+      "audio": "__REF_AUDIO_10__",
+      "audioUI": ""
+    },
+    "class_type": "LoadAudio",
+    "_meta": {
+      "title": "加载音频"
+    }
+  },
+  "28": {
+    "inputs": {
+      "name": "崔桂英",
+      "audio": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "29": {
+    "inputs": {
+      "name": "崔桂英",
+      "audio": [
+        "26",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  },
+  "30": {
+    "inputs": {
+      "name": "崔桂英",
+      "audio": [
+        "27",
+        0
+      ]
+    },
+    "class_type": "TDQwen3TTSDefineSpeaker",
+    "_meta": {
+      "title": "TD Qwen3 TTS Define Speaker"
+    }
+  }
+}

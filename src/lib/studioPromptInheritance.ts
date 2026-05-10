@@ -1,8 +1,9 @@
 import type { Edge, Node } from '@xyflow/react'
 import type { ImageNodeData, StudioNodeData } from '../types'
 
-function collectInboundTextScriptIdsForImage(
-  imageId: string,
+/** 与图片/配音节点相邻连线的「文本」「剧本」节点 id（双向边，按画布位置排序）。 */
+function collectAdjacentTextScriptNodeIds(
+  hostNodeId: string,
   edges: Edge[],
   nodes: Array<Node<StudioNodeData>>,
 ): string[] {
@@ -10,10 +11,10 @@ function collectInboundTextScriptIdsForImage(
   const ids: string[] = []
   for (const e of edges) {
     let sid: string | undefined
-    if (e.target === imageId) {
+    if (e.target === hostNodeId) {
       const n = nodes.find((x) => x.id === e.source)
       if (n?.data?.kind === 'text' || n?.data?.kind === 'script') sid = e.source
-    } else if (e.source === imageId) {
+    } else if (e.source === hostNodeId) {
       const n = nodes.find((x) => x.id === e.target)
       if (n?.data?.kind === 'text' || n?.data?.kind === 'script') sid = e.target
     }
@@ -55,7 +56,7 @@ export function cloneNodeWithInboundTextPromptPrepended(
     if (wf && !wf.includes('__PROMPT__')) return node
     const im = node.data as ImageNodeData
     const prompt = String(im.prompt ?? '').trim()
-    const inboundIds = collectInboundTextScriptIdsForImage(node.id, edges, allNodes)
+    const inboundIds = collectAdjacentTextScriptNodeIds(node.id, edges, allNodes)
     const inherited: string[] = []
     for (const sid of inboundIds) {
       const n = allNodes.find((x) => x.id === sid)
@@ -77,4 +78,39 @@ export function cloneNodeWithInboundTextPromptPrepended(
   }
 
   return node
+}
+
+/**
+ * 执行前：配音/音乐节点——把「已连线但未写进台本框」的文字/剧本正文前插到 __NOTE__（与图片侧 `__PROMPT__` 合并策略一致）。
+ */
+export function cloneNodeWithInboundTextNotePrepended(
+  node: Node<StudioNodeData>,
+  edges: Edge[] | undefined,
+  allNodes: Array<Node<StudioNodeData>> | undefined,
+  _workflowSource?: string,
+): Node<StudioNodeData> {
+  if (!edges?.length || !allNodes?.length) return node
+  if (node.data.kind !== 'audio' && node.data.kind !== 'music') return node
+  /** 无 __NOTE__ 的 TD 无参多人等模板仍合并连线正文到 note，供后置写入 MultiDialog（见 applyNoteToTdMultiSpeakerTemplatePrompt）。 */
+
+  const note = String((node.data as { note?: string }).note ?? '').trim()
+  const inboundIds = collectAdjacentTextScriptNodeIds(node.id, edges, allNodes)
+  const inherited: string[] = []
+  for (const sid of inboundIds) {
+    const n = allNodes.find((x) => x.id === sid)
+    if (!n) continue
+    const body = textScriptBody(n)
+    if (!body) continue
+    if (note.includes(body)) continue
+    inherited.push(body)
+  }
+  if (!inherited.length) return node
+  const merged = [inherited.join('\n\n'), note].filter(Boolean).join('\n\n')
+  return {
+    ...node,
+    data: {
+      ...node.data,
+      note: merged,
+    } as StudioNodeData,
+  }
 }

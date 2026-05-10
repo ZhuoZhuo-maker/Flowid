@@ -25,7 +25,11 @@ export function useWorkflowRunner({
 }) {
   const [isRunning, setIsRunning] = useState(false)
   const isExecutableNode = useCallback((node: Node<StudioNodeData>) => {
-    return node.data.kind !== 'group' && node.data.kind !== 'panorama'
+    return (
+      node.data.kind !== 'group' &&
+      node.data.kind !== 'panorama' &&
+      node.data.kind !== 'imageCompare'
+    )
   }, [])
   /**
    * 批量更新节点运行状态。

@@ -25,6 +25,28 @@ function yieldToMainForAcBuild(): Promise<void> {
   })
 }
 
+/**
+ * 全量 AC 构建 O(词表规模) 可能占用主线程数百毫秒～数秒；用 idle 时段执行并设 timeout 兜底，
+ * 让关闭弹窗、点击输入框等操作有机会先被浏览器处理。
+ */
+function buildFullEngineWhenIdle(words: readonly SensitiveWord[]): Promise<void> {
+  return new Promise((resolve) => {
+    const go = () => {
+      fullEngine = new AhoCorasick(words)
+      engineReady = true
+      resolve()
+    }
+    const g = globalThis as typeof globalThis & {
+      requestIdleCallback?: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number
+    }
+    if (typeof g.requestIdleCallback === 'function') {
+      g.requestIdleCallback(() => go(), { timeout: 600 })
+    } else {
+      window.setTimeout(go, 0)
+    }
+  })
+}
+
 function currentEngine(): AhoCorasick {
   return fullEngine ?? fallbackEngine
 }
@@ -41,8 +63,7 @@ function startBackgroundLoad(): void {
         const cached = await loadLexiconFromCache(meta.version)
         if (cached && cached.length > 0) {
           await yieldToMainForAcBuild()
-          fullEngine = new AhoCorasick(cached)
-          engineReady = true
+          await buildFullEngineWhenIdle(cached)
           return
         }
       } catch {
@@ -51,8 +72,7 @@ function startBackgroundLoad(): void {
       const data = await fetchLexiconJson(base, cacheBust)
       const words = await persistFetchedLexicon(data)
       await yieldToMainForAcBuild()
-      fullEngine = new AhoCorasick(words)
-      engineReady = true
+      await buildFullEngineWhenIdle(words)
     } catch {
       /* 无 lexicon 文件或 fetch 失败：仅用 fallback */
     }

@@ -3,7 +3,6 @@
   const panels = {
     overview: window.FlowidAdminPanelOverview,
     licenses: window.FlowidAdminPanelLicenses,
-    'cloud-models': window.FlowidAdminPanelCloudModels,
     'cloud-comfyui': window.FlowidAdminPanelCloudComfyui,
     templates: window.FlowidAdminPanelTemplatesPro,
     'inspiration-market': window.FlowidAdminPanelInspirationMarket,
@@ -16,6 +15,7 @@
     'templates-pro': 'templates',
     'prompts-free': 'prompts',
     'prompts-pro': 'prompts',
+    'cloud-models': 'overview',
   }
 
   const NAV = [
@@ -30,14 +30,9 @@
       sub: 'JWT 会员列表、服务状态与授权码录入',
     },
     {
-      id: 'cloud-models',
-      title: '云端模型（辅助模式）',
-      sub: 'Token、Provider、模型路由与 API 表；ComfyUI 见独立页',
-    },
-    {
       id: 'cloud-comfyui',
-      title: '云端 ComfyUI 工作流',
-      sub: '官方工作流 JSON、列表与保存',
+      title: '云端',
+      sub: 'ComfyUI 官方工作流与云端模型辅助线路',
     },
     {
       id: 'templates',

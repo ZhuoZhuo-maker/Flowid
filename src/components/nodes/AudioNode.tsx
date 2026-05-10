@@ -1,11 +1,42 @@
 ﻿import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { Node } from '@xyflow/react'
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useRef, type DragEvent } from 'react'
 import type { AudioNodeData, NodeResultThumbnail } from '../../types'
 import { useCanvasActions } from '../../context/CanvasContext'
 import { parseFlowidMaterialDragPayload, setFlowidMaterialDragData } from '../../lib/materialLibrary'
+import { mirrorUploadToInputDir } from '../../lib/localAssetDiskMirror'
+import {
+  getLocalImageAssetObjectUrl,
+  getLocalImageAssetObjectUrlAfterBump,
+  saveLocalImageAsset,
+} from '../../lib/localImageAssetStore'
 import { NodeChrome } from './NodeChrome'
 import { NodeOutputThumbnailStrip } from './NodeOutputThumbnailStrip'
+
+function StudioAudioPreviewPlayer({
+  src,
+  onDragStart,
+  onRecoverableError,
+}: {
+  src: string
+  onDragStart: (e: DragEvent<HTMLAudioElement>) => void
+  /** 资源已失效（如 blob 被回收）时尝试从 IndexedDB 重建 URL */
+  onRecoverableError?: () => void
+}) {
+  return (
+    <div className="studio-audio-preview__playerWrap">
+      <audio
+        key={src}
+        controls
+        src={src}
+        className="studio-audio-preview__player"
+        draggable
+        onDragStart={onDragStart}
+        onError={() => onRecoverableError?.()}
+      />
+    </div>
+  )
+}
 
 /**
  * 音频节点：配音、配乐或音效占位。
@@ -64,13 +95,31 @@ export function AudioNode({
    */
   const pushAudioResult = useCallback(
     (file: File) => {
-      const url = URL.createObjectURL(file)
-      updateNodeData(id, {
-        kind: data.kind,
-        src: url,
-        srcFileName: file.name,
-        resultSources: [url, ...(data.resultSources ?? []).filter((item) => item !== url)],
-      })
+      void (async () => {
+        try {
+          const srcAssetId = await saveLocalImageAsset(file)
+          const restored = await getLocalImageAssetObjectUrl(srcAssetId)
+          const url = restored || URL.createObjectURL(file)
+          updateNodeData(id, {
+            kind: data.kind,
+            src: url,
+            srcAssetId,
+            srcFileName: file.name,
+            srcDiskPath: undefined,
+            resultSources: [url, ...(data.resultSources ?? []).filter((item) => item !== url)],
+          })
+        } catch {
+          void mirrorUploadToInputDir(file)
+          const url = URL.createObjectURL(file)
+          updateNodeData(id, {
+            kind: data.kind,
+            src: url,
+            srcFileName: file.name,
+            srcDiskPath: undefined,
+            resultSources: [url, ...(data.resultSources ?? []).filter((item) => item !== url)],
+          })
+        }
+      })()
     },
     [data.kind, data.resultSources, id, updateNodeData],
   )
@@ -79,12 +128,40 @@ export function AudioNode({
    * 节点内删除资源：同步删除历史中的同源记录。
    * 说明：这是单向同步；历史面板删除不会反向影响节点。
    */
+  const repairPrimaryAudioObjectUrl = useCallback(() => {
+    const aid = String(data.srcAssetId || '').trim()
+    if (!aid) return
+    void (async () => {
+      try {
+        const next = await getLocalImageAssetObjectUrlAfterBump(aid)
+        if (!next) return
+        const prev = String(data.src || '').trim()
+        if (prev === next) return
+        const rs = data.resultSources?.filter(Boolean).length
+          ? (data.resultSources ?? []).map((u) => (u === prev ? next : u))
+          : [next]
+        updateNodeData(id, {
+          kind: data.kind,
+          src: next,
+          resultSources: rs,
+        })
+      } catch {
+        // ignore
+      }
+    })()
+  }, [data.kind, data.resultSources, data.src, data.srcAssetId, id, updateNodeData])
+
   const removeNodeResult = (targetSrc: string) => {
     const nextSources = resultSources.filter((item) => item !== targetSrc)
+    const nextSrc = nextSources[0] ?? ''
+    const prevSrc = String(data.src || '').trim()
     updateNodeData(id, {
       kind: data.kind,
       resultSources: nextSources,
-      src: nextSources[0] ?? '',
+      src: nextSrc,
+      /** 主音频换成另一条 URL 时旧的 srcAssetId 不可复用 */
+      srcAssetId: nextSrc && nextSrc === prevSrc ? data.srcAssetId : '',
+      srcDiskPath: undefined,
     })
     removeHistoryBySource(targetSrc)
   }
@@ -135,6 +212,7 @@ export function AudioNode({
               updateNodeData(id, {
                 kind: data.kind,
                 src: material.src,
+                srcDiskPath: undefined,
                 resultSources: [material.src, ...(data.resultSources ?? []).filter((s) => s !== material.src)],
               })
               return
@@ -179,11 +257,8 @@ export function AudioNode({
                       </button>
                     </div>
                   </div>
-                  <audio
-                    controls
+                  <StudioAudioPreviewPlayer
                     src={src}
-                    className="studio-audio-preview__player"
-                    draggable
                     onDragStart={(e) => {
                       e.stopPropagation()
                       const titleBase = String(data.title || '').trim() || '音频节点'
@@ -195,6 +270,11 @@ export function AudioNode({
                         src,
                       })
                     }}
+                    onRecoverableError={
+                      index === 0 && String(data.srcAssetId || '').trim()
+                        ? repairPrimaryAudioObjectUrl
+                        : undefined
+                    }
                   />
                 </div>
               ))}

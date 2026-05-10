@@ -10,6 +10,7 @@ import { StudioApp } from './components/StudioApp'
 import { FlowidMark } from './components/FlowidMark'
 import { PresetTemplateCoverImage } from './components/PresetTemplateCoverImage'
 import { loadLocalDiskPathsSettings } from './lib/localDiskPathsSettings'
+import { applyDesktopDefaultFlowidZyPathsIfNeeded } from './lib/applyDesktopDefaultLocalPaths'
 import { parseProjectFile } from './lib/persistence'
 import { computeAccessState, loadLicenseSnapshotV2 } from './lib/licenseAccess'
 import { openStudioSettingsDeviceActivation } from './lib/studioSettingsOpen'
@@ -38,6 +39,7 @@ import {
   InspirationMarketDetailPage,
   InspirationMarketGrid,
 } from './components/home/InspirationMarketPages'
+import { isListableArchiveProjectJsonName } from './lib/projectDiskMirror'
 
 function isDesktopCoverIo(): boolean {
   return Boolean(
@@ -52,6 +54,29 @@ const COVER_UPLOAD_TRIGGER_CLASS =
   'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white/65 backdrop-blur hover:border-orange-400/45 hover:bg-orange-600/22 hover:text-white transition-colors disabled:opacity-40'
 
 type View = 'archive' | 'templates' | 'inspiration' | 'inspiration-detail' | 'workspace'
+
+/** 刷新 / 重载后恢复当前分区，避免「在工作区点生成 → 整页重载 → 又回项目档案」的错觉 */
+const VIEW_SESSION_KEY = 'flowid.app.activeView.v1'
+const VALID_VIEWS = new Set<View>([
+  'archive',
+  'templates',
+  'inspiration',
+  'inspiration-detail',
+  'workspace',
+])
+
+function readInitialView(): View {
+  try {
+    const v = sessionStorage.getItem(VIEW_SESSION_KEY) as View | null
+    if (!v || !VALID_VIEWS.has(v)) return 'archive'
+    /** 详情 id 未入 session，重开标签后无法还原详情页 */
+    if (v === 'inspiration-detail') return 'inspiration'
+    return v
+  } catch {
+    /* ignore */
+  }
+  return 'archive'
+}
 
 interface Project {
   id: string
@@ -512,8 +537,23 @@ function App() {
   })
   const [agreementShowFull, setAgreementShowFull] = useState(false)
 
-  const [view, setView] = useState<View>('archive')
+  const [view, setView] = useState<View>(readInitialView)
   const [inspirationDetailId, setInspirationDetailId] = useState<string | null>(null)
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(VIEW_SESSION_KEY, view)
+    } catch {
+      /* ignore */
+    }
+  }, [view])
+  useEffect(() => {
+    void applyDesktopDefaultFlowidZyPathsIfNeeded()
+  }, [])
+  useEffect(() => {
+    if (view === 'inspiration-detail' && !inspirationDetailId) {
+      setView('inspiration')
+    }
+  }, [view, inspirationDetailId])
   const [selectedCategory, setSelectedCategory] = useState<string>('全部')
   const [projectQuery, setProjectQuery] = useState('')
   const [projectPage, setProjectPage] = useState(0)
@@ -707,7 +747,7 @@ function App() {
       }
       const files = res.files
         .filter((f) => String(f.name || '').toLowerCase().endsWith('.json'))
-        .filter((f) => !/^flowid\.current\.json$/i.test(String(f.name || '').trim()))
+        .filter((f) => isListableArchiveProjectJsonName(String(f.name || '').trim()))
         .sort((a, b) => Number(b.mtimeMs || 0) - Number(a.mtimeMs || 0))
         .slice(0, 60)
       const coverRoot = String(loadLocalDiskPathsSettings().systemPromptCoverPath || '').trim()
@@ -869,25 +909,31 @@ function App() {
     const desk = window.flowidDesktop
     if (fp && desk?.readUtf8File) {
       const res = await desk.readUtf8File(fp)
-      if (res?.ok && res.text) {
-        try {
-          const snap = parseProjectFile(res.text)
-          window.dispatchEvent(
-            new CustomEvent('flowid:archive-open-project', {
-              detail: {
-                name: snap.name || project.name,
-                snapshot: {
-                  nodes: snap.nodes,
-                  edges: snap.edges,
-                  viewport: snap.viewport,
-                },
-                filePath: fp,
+      if (!res?.ok || typeof res.text !== 'string') {
+        window.alert(`无法读取工程文件：${fp}\n${String(res?.error || 'readUtf8File 失败')}`)
+        return
+      }
+      try {
+        const snap = parseProjectFile(res.text)
+        window.dispatchEvent(
+          new CustomEvent('flowid:archive-open-project', {
+            detail: {
+              name: snap.name || project.name,
+              snapshot: {
+                nodes: snap.nodes,
+                edges: snap.edges,
+                viewport: snap.viewport,
               },
-            }),
-          )
-        } catch {
-          // ignore parse errors; still enter workspace
-        }
+              filePath: fp,
+            },
+          }),
+        )
+      } catch (e) {
+        window.alert(
+          `该文件不是有效的 Flowid 工程 JSON（或节点已全部被过滤）：\n${(e as Error)?.message || String(e)}\n\n` +
+            `若这是设置/配置镜像文件，不应出现在「项目档案」；请从列表打开「项目名.json」工程文件。`,
+        )
+        return
       }
     }
     setView('workspace')

@@ -117,6 +117,22 @@ async function fetchWithTimeout(
 }
 
 /**
+ * 同页 `blob:` / `data:` 读取：不用带 Abort 的超时 fetch，避免误报 network_error；
+ * 且部分环境下超时 abort 与 blob 组合会失败（执行前若 blob 已回收仍会失败，需上游刷新 URL）。
+ */
+async function readBlobOrDataUrlAsBlob(url: string): Promise<Blob | null> {
+  const raw = String(url || '').trim()
+  if (!raw.startsWith('blob:') && !raw.startsWith('data:')) return null
+  try {
+    const res = await fetch(raw)
+    if (!res.ok) return null
+    return await res.blob()
+  } catch {
+    return null
+  }
+}
+
+/**
  * 生成“可读取源图”的候选地址。
  * 兼容 `/view?...`、`view?...` 与完整 URL，减少历史数据/旧链接导致的 404。
  */
@@ -264,6 +280,8 @@ export async function uploadComfyInputImageAsPng({
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
   const ioTimeoutMs = Math.max(8, providerConfig.timeoutSec || 30) * 1000
+  let originalBlob: Blob | null = await readBlobOrDataUrlAsBlob(imageUrl)
+  if (!originalBlob) {
   const candidates = buildImageReadCandidates(imageUrl, requestBase)
   let imageResponse: Response | null = null
   let lastStatusText = ''
@@ -293,7 +311,8 @@ export async function uploadComfyInputImageAsPng({
     const triedPreview = tried.slice(0, 8).join(' | ')
     throw new Error(`读取图片失败（${reason}）。候选: ${triedPreview || '（无）'}`)
   }
-  const originalBlob = await imageResponse.blob()
+  originalBlob = await imageResponse.blob()
+  }
   const pngBlob = await blobToPngBlob(originalBlob)
   const safePrefix = sanitizeFilenamePart(filenamePrefix || 'flowid')
   const fileName = `${safePrefix}_${Date.now()}_${buildUploadRandomSuffix()}.png`
@@ -336,6 +355,120 @@ export async function uploadComfyInputImageAsPng({
   }
 }
 
+function guessBinaryUploadExtension(mediaUrl: string, blob: Blob): string {
+  const t = String(blob.type || '').toLowerCase()
+  if (t.includes('wav')) return '.wav'
+  if (t.includes('mpeg') || t.includes('mp3')) return '.mp3'
+  if (t.includes('mp4') || t.includes('m4a')) return '.m4a'
+  if (t.includes('flac')) return '.flac'
+  if (t.includes('ogg')) return '.ogg'
+  if (t.includes('aac')) return '.aac'
+  if (t.includes('opus')) return '.opus'
+  const pathLower = mediaUrl.split('?')[0].toLowerCase()
+  for (const ext of AUDIO_FILE_EXTENSIONS) {
+    if (pathLower.endsWith(ext)) return ext
+  }
+  return '.mp3'
+}
+
+/**
+ * 将音频/二进制 URL 原样上传到 Comfy `input`（走 `/upload/image` 表单字段名 `image`，服务端按字节落盘）。
+ * 供 `LoadAudio` 等节点通过文件名引用。
+ */
+export async function uploadComfyInputBinaryFile({
+  providerConfig,
+  mediaUrl,
+  filenamePrefix,
+  preferredExtension,
+}: {
+  providerConfig: WorkflowProviderConfig
+  mediaUrl: string
+  filenamePrefix?: string
+  preferredExtension?: string
+}): Promise<ComfyUploadedInputImage> {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const ioTimeoutMs = Math.max(8, providerConfig.timeoutSec || 30) * 1000
+  let originalBlob: Blob | null = await readBlobOrDataUrlAsBlob(mediaUrl)
+  if (!originalBlob) {
+  const candidates = buildImageReadCandidates(mediaUrl, requestBase)
+  let mediaResponse: Response | null = null
+  let lastStatusText = ''
+  const tried: string[] = []
+  for (const candidate of candidates) {
+    const headers = isComfyImageUrl(candidate, baseUrl, requestBase)
+      ? getAuthHeaders(providerConfig)
+      : undefined
+    const resp = await fetchWithTimeout(
+      candidate,
+      headers ? { headers } : undefined,
+      ioTimeoutMs,
+    ).catch(() => null)
+    if (!resp) {
+      tried.push(`${candidate} -> network_error`)
+      continue
+    }
+    if (resp.ok) {
+      mediaResponse = resp
+      break
+    }
+    tried.push(`${candidate} -> ${resp.status}`)
+    lastStatusText = `${resp.status}`
+  }
+  if (!mediaResponse) {
+    const reason = lastStatusText || '网络异常'
+    const triedPreview = tried.slice(0, 8).join(' | ')
+    throw new Error(`读取音频失败（${reason}）。候选: ${triedPreview || '（无）'}`)
+  }
+  originalBlob = await mediaResponse.blob()
+  }
+  const extRaw = preferredExtension || guessBinaryUploadExtension(mediaUrl, originalBlob)
+  const ext = extRaw.startsWith('.') ? extRaw : `.${extRaw}`
+  const safePrefix = sanitizeFilenamePart(filenamePrefix || 'flowid_audio')
+  const fileName = `${safePrefix}_${Date.now()}_${buildUploadRandomSuffix()}${ext}`
+  const authHeaders = getAuthHeaders(providerConfig)
+  const uploadOnce = async (path: string) => {
+    const form = new FormData()
+    form.append(
+      'image',
+      new File([originalBlob], fileName, {
+        type: originalBlob.type || 'application/octet-stream',
+      }),
+    )
+    form.append('type', 'input')
+    form.append('overwrite', 'true')
+    return fetchWithTimeout(
+      `${requestBase}${path}`,
+      {
+        method: 'POST',
+        headers: authHeaders,
+        body: form,
+      },
+      ioTimeoutMs,
+    )
+  }
+  let response = await uploadOnce('/upload/image')
+  if (response.status === 404) {
+    response = await uploadOnce('/api/upload/image')
+  }
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => '')
+    throw new Error(`上传音频到 Comfy 失败（${response.status}）${bodyText ? `：${bodyText}` : ''}`)
+  }
+  const payload = (await response.json()) as Record<string, unknown>
+  const uploadedName =
+    (typeof payload.name === 'string' && payload.name) ||
+    (typeof payload.filename === 'string' && payload.filename) ||
+    fileName
+  const subfolder = typeof payload.subfolder === 'string' ? payload.subfolder : ''
+  const imageType = typeof payload.type === 'string' ? payload.type : 'input'
+  return {
+    filename: uploadedName,
+    subfolder,
+    type: imageType,
+  }
+}
+
 /**
  * 尝试访问媒体 URL，过滤 404/鉴权失败等无效链接，避免节点写入破图地址。
  * @param timeoutMs 超时（默认 10s），避免 Comfy 无响应时节点长期卡在「执行中」。
@@ -351,20 +484,36 @@ export async function verifyComfyMediaUrl({
   timeoutMs?: number
 }): Promise<string | null> {
   if (!mediaUrl) return null
+  const url = String(mediaUrl).trim()
+  const auth = getAuthHeaders(providerConfig)
+  const t = Math.max(2000, timeoutMs)
+  const okResponse = (res: Response) => res.ok || res.status === 206
   try {
+    // Comfy `/view` 整文件 GET 在云端长音频上易超时；优先 Range 探测，失败再整包 GET。
+    if (/\/view\?/i.test(url)) {
+      const rangeRes = await fetchWithTimeout(
+        url,
+        {
+          method: 'GET',
+          headers: { ...auth, Range: 'bytes=0-8191' },
+        },
+        t,
+      )
+      if (okResponse(rangeRes)) return mediaUrl
+    }
     const response = await fetchWithTimeout(
-      mediaUrl,
+      url,
       {
         method: 'GET',
-        headers: getAuthHeaders(providerConfig),
+        headers: auth,
       },
-      Math.max(2000, timeoutMs),
+      t,
     )
-    if (!response.ok) return null
-    return mediaUrl
+    if (okResponse(response)) return mediaUrl
   } catch {
     return null
   }
+  return null
 }
 
 /**
@@ -374,6 +523,61 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
 }
 
+/** 仙宫云公网公式：https://{实例ID}-{端口}.container.x-gpu.com */
+function isXgpuContainerPublicHost(hostname: string): boolean {
+  return /\.container\.x-gpu\.com$/i.test(String(hostname || '').trim())
+}
+
+/** 仙宫云容器内网：http://{实例ID}-{端口}.c.x-gpu.com */
+function isXgpuIntranetHost(hostname: string): boolean {
+  return /\.c\.x-gpu\.com$/i.test(String(hostname || '').trim())
+}
+
+function hostnameFromBareBase(bare: string): string {
+  const b = String(bare || '').trim().replace(/^\/+/, '')
+  if (!b) return ''
+  try {
+    return new URL(/^https?:\/\//i.test(b) ? b : `http://${b}`).hostname
+  } catch {
+    return b.split('/')[0]?.split(':')[0] || ''
+  }
+}
+
+/**
+ * 云端 Comfy 执行层地址（设置里展示可保留用户原文）。
+ * - 仙宫云 **公网** `*.container.x-gpu.com`：按文档统一为 **https://**（无协议时自动补全）。
+ * - 仙宫云 **内网** `*.c.x-gpu.com`：按文档统一为 **http://**。
+ * - 其它云：去掉 https/http 前缀后按 **http://** 访问（兼容部分仅开 HTTP 的代理说明）。
+ */
+export function effectiveCloudComfyBaseUrl(stored: string): string {
+  const s = normalizeBaseUrl(String(stored || ''))
+  if (!s) return ''
+  const bare = s.replace(/^https:\/\//i, '').replace(/^http:\/\//i, '').replace(/^\/+/, '')
+  if (!bare) return ''
+  const host = hostnameFromBareBase(bare)
+  if (isXgpuContainerPublicHost(host)) {
+    return `https://${bare}`
+  }
+  if (isXgpuIntranetHost(host)) {
+    return `http://${bare}`
+  }
+  return `http://${bare}`
+}
+
+/**
+ * 无协议时补全 scheme；仙宫云域名与 effectiveCloudComfyBaseUrl 规则一致。
+ */
+function absolutizeComfyBaseForFetch(baseUrl: string): string {
+  const normalized = normalizeBaseUrl(baseUrl)
+  if (!normalized) return normalized
+  if (/^https?:\/\//i.test(normalized)) return normalized
+  const bare = normalized.replace(/^\/+/, '')
+  const host = hostnameFromBareBase(bare)
+  if (isXgpuContainerPublicHost(host)) return `https://${bare}`
+  if (isXgpuIntranetHost(host)) return `http://${bare}`
+  return `http://${bare}`
+}
+
 /**
  * 本地 ComfyUI 在浏览器直连时可能触发 CORS/PNA，开发态走 Vite 同源代理更稳定。
  * 远程 http(s) Comfy（如云 GPU）在开发态同样走 `/__comfy_dev_proxy__/` 同源反代，避免上传/轮询被 CORS 拦截。
@@ -381,11 +585,14 @@ function normalizeBaseUrl(baseUrl: string): string {
  */
 function resolveRequestBase(baseUrl: string): string {
   const normalized = normalizeBaseUrl(baseUrl)
+  const absolute = absolutizeComfyBaseForFetch(normalized)
   if (!import.meta.env.DEV) {
-    return normalized
+    return absolute
   }
+  const baseOrigin =
+    typeof window !== 'undefined' && window.location?.origin ? window.location.origin : 'http://127.0.0.1'
   try {
-    const url = new URL(normalized)
+    const url = new URL(absolute, baseOrigin)
     const isLocalHost =
       url.hostname === '127.0.0.1' || url.hostname === 'localhost'
     const isDefaultComfyPort = url.port === '8188'
@@ -393,12 +600,14 @@ function resolveRequestBase(baseUrl: string): string {
       return '/__comfy_local__'
     }
     if (url.protocol === 'http:' || url.protocol === 'https:') {
-      return `/__comfy_dev_proxy__/${encodeComfyDevProxyBaseSegment(normalized)}`
+      // 始终走同源代理：仙宫云 Comfy 通常不返回 CORS，直连会 Failed to fetch；502 由 Vite 上游 TLS 配置解决
+      const segment = normalizeBaseUrl(url.toString())
+      return `/__comfy_dev_proxy__/${encodeComfyDevProxyBaseSegment(segment)}`
     }
   } catch {
-    // fallback to raw baseUrl
+    // ignore
   }
-  return normalized
+  return absolute
 }
 
 function getJsonHeaders(config: WorkflowProviderConfig): HeadersInit {
@@ -693,6 +902,44 @@ export async function refetchHistoryEntryWithRasterVisual({
   return null
 }
 
+/**
+ * 配音/音乐：首轮 `/history/{id}` 或条目解析时 outputs 尚未含音频引用（部分云端/反代晚写），
+ * 再从全量 `/history` 取与 prompt 匹配且可解析出音频 view 的最新条目（对齐图/视频的二次拉取策略）。
+ */
+export async function refetchHistoryEntryWithAudioOutput({
+  providerConfig,
+  promptId,
+}: {
+  providerConfig: WorkflowProviderConfig
+  promptId: string
+}): Promise<Record<string, unknown> | null> {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const pid = promptId.trim()
+  if (!pid) return null
+  try {
+    const response = await fetchWithTimeout(
+      `${requestBase}/history`,
+      { headers: getAuthHeaders(providerConfig) },
+      Math.min(60000, Math.max(8000, (providerConfig.timeoutSec || 120) * 1000)),
+    )
+    if (!response.ok) return null
+    const payload = (await response.json()) as Record<string, unknown>
+    const matches = collectHistoryEntriesMatchingPrompt(payload, pid)
+    for (let i = matches.length - 1; i >= 0; i -= 1) {
+      const e = matches[i]
+      const out = normalizeHistoryOutputs(e)
+      if (out && Object.keys(out).length > 0 && historyOutputsHaveAudioSignals(out)) {
+        return e
+      }
+      if (pickComfyResultAudioUrl({ providerConfig, historyEntry: e })) return e
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
 function collectAudioFileRefsFromAny(value: unknown, refs: ComfyAudioRef[]) {
   if (!value || typeof value !== 'object') return
   if (Array.isArray(value)) {
@@ -745,12 +992,492 @@ function collectAudioFileRefsFromAny(value: unknown, refs: ComfyAudioRef[]) {
   Object.values(record).forEach((item) => collectAudioFileRefsFromAny(item, refs))
 }
 
-function pickFirstAudioRef(refs: ComfyAudioRef[]): ComfyAudioRef | null {
-  const hit = refs.find((item) => {
+/** 带 Comfy `outputs` 节点 id，便于多路音频时优先取图序较后的最终节点（如 PreviewAudio 晚于 BatchGenerateSpeaker）。 */
+type TaggedAudioRef = ComfyAudioRef & { sourceNodeKey?: string }
+
+function collectAudioFileRefsFromNodeOutputWithKey(
+  nodeKey: string,
+  nodeOutput: unknown,
+  refs: TaggedAudioRef[],
+) {
+  const start = refs.length
+  collectAudioFileRefsFromAny(nodeOutput, refs as ComfyAudioRef[])
+  for (let i = start; i < refs.length; i += 1) {
+    refs[i] = { ...refs[i], sourceNodeKey: nodeKey }
+  }
+}
+
+function collectTaggedAudioRefsFromHistoryEntry(historyEntry: Record<string, unknown>): TaggedAudioRef[] {
+  const refs: TaggedAudioRef[] = []
+  const outputs = normalizeHistoryOutputs(historyEntry)
+  if (outputs) {
+    for (const [nodeKey, nodeOutput] of Object.entries(outputs)) {
+      if (!nodeOutput || typeof nodeOutput !== 'object' || Array.isArray(nodeOutput)) continue
+      collectAudioFileRefsFromNodeOutputWithKey(nodeKey, nodeOutput, refs)
+    }
+  }
+  collectAudioFileRefsFromAny(historyEntry, refs as ComfyAudioRef[])
+  return refs
+}
+
+/** Comfy history 里 `prompt` 可能是 `[n, id, workflowDict]` 或直接是 workflow 对象 */
+function extractWorkflowNodeMapFromHistory(entry: Record<string, unknown>): Record<string, unknown> | null {
+  const p = entry.prompt
+  if (p && typeof p === 'object' && !Array.isArray(p)) {
+    return p as Record<string, unknown>
+  }
+  if (Array.isArray(p) && p.length >= 3 && p[2] && typeof p[2] === 'object' && !Array.isArray(p[2])) {
+    return p[2] as Record<string, unknown>
+  }
+  return null
+}
+
+/**
+ * 最终落盘/试听节点（PreviewAudio、SaveAudio 等），用于在多条 temp 音频中优先取对白成片，而非 BatchGenerateSpeaker 短条。
+ * TD 多人：`TDQwen3TTSMultiDialog` 常在 history 里直接带音频；图里另有 PreviewAudio 接在同一输出上时，
+ * 若只标 Preview 为优先，并列 temp 时会因节点 id 更小而稳定压过 MultiDialog，易误选更短的试听条——故一并纳入。
+ */
+function collectAudioSinkNodeIdsFromHistory(entry: Record<string, unknown>): Set<string> {
+  const wf = extractWorkflowNodeMapFromHistory(entry)
+  const ids = new Set<string>()
+  if (!wf) return ids
+  for (const [nodeId, raw] of Object.entries(wf)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const cls = String((raw as Record<string, unknown>).class_type || '')
+      .toLowerCase()
+      .replace(/\s+/g, '')
+    if (!cls) continue
+    if (
+      cls === 'previewaudio' ||
+      cls.includes('previewaudio') ||
+      cls === 'saveaudio' ||
+      cls.includes('saveaudio')
+    ) {
+      ids.add(nodeId)
+    }
+    if (cls === 'tdqwen3ttsmultidialog' || (cls.includes('multidialog') && cls.includes('qwen'))) {
+      ids.add(nodeId)
+    }
+  }
+  return ids
+}
+
+/**
+ * 多人对白图：合并后的整段音频通常由「DialogueInference → SaveAudio」直连落盘；
+ * 其余 SaveAudio 往往挂在各路 VoiceDesign 上（短条/单路）。优先前者，避免误选最大节点 id 的槽位 SaveAudio。
+ */
+function collectSaveAudioNodeIdsFedByDialogueInference(entry: Record<string, unknown>): Set<string> {
+  const wf = extractWorkflowNodeMapFromHistory(entry)
+  const out = new Set<string>()
+  if (!wf) return out
+  const dialogueIds = new Set<string>()
+  for (const [id, raw] of Object.entries(wf)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const ct = String((raw as Record<string, unknown>).class_type || '').trim()
+    if (!ct) continue
+    const norm = ct.replace(/\s+/g, '')
+    if (
+      norm === 'FB_Qwen3TTSDialogueInference' ||
+      norm.includes('DialogueInference') ||
+      /dialogue.*inference/i.test(ct)
+    ) {
+      dialogueIds.add(id)
+    }
+  }
+  if (dialogueIds.size === 0) return out
+  for (const [id, raw] of Object.entries(wf)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const ct = String((raw as Record<string, unknown>).class_type || '')
+      .toLowerCase()
+      .replace(/\s+/g, '')
+    if (!ct.includes('saveaudio')) continue
+    const ins = (raw as Record<string, unknown>).inputs
+    if (!ins || typeof ins !== 'object' || Array.isArray(ins)) continue
+    const audio = (ins as Record<string, unknown>).audio
+    if (!Array.isArray(audio) || audio.length < 1) continue
+    const srcId = String(audio[0] ?? '').trim()
+    if (srcId && dialogueIds.has(srcId)) out.add(id)
+  }
+  return out
+}
+
+function audioRefIdentityKey(r: ComfyAudioRef): string {
+  const t = String(r.type ?? '').trim().toLowerCase()
+  const s = String(r.subfolder ?? '').trim().toLowerCase()
+  const f = String(r.filename ?? '').trim().toLowerCase()
+  return `${t}|${s}|${f}`
+}
+
+function outputNodeKeyNumeric(key: string | undefined): number {
+  if (!key) return -1
+  const n = Number.parseInt(key, 10)
+  return Number.isFinite(n) ? n : -1
+}
+
+/** 同一文件只保留一条：按与 pickBestAudioRef 相同的优先级合并。 */
+function dedupeTaggedAudioRefs(
+  refs: TaggedAudioRef[],
+  preferred: Set<string>,
+  dialogueMergeSaveIds: Set<string>,
+): TaggedAudioRef[] {
+  const map = new Map<string, TaggedAudioRef>()
+  for (const r of refs) {
+    const k = audioRefIdentityKey(r)
+    const ex = map.get(k)
+    if (!ex) {
+      map.set(k, r)
+      continue
+    }
+    const c = compareTaggedAudioRefPriority(ex, r, preferred, dialogueMergeSaveIds)
+    map.set(k, c <= 0 ? ex : r)
+  }
+  return [...map.values()]
+}
+
+/**
+ * 与 `mediaRefRank` 对齐：优先 SaveAudio 等落在 output 的最终文件，避免误选 PreviewAudio
+ * 等 `temp/ComfyUI_temp_*` 预览（常为不完整/时长与元数据不一致的短文件）。
+ */
+function audioRefRank(item: ComfyAudioRef): number {
+  const normalize = (value: string | undefined) => (value || '').trim().toLowerCase()
+  const t = normalize(item.type)
+  const s = normalize(item.subfolder)
+  if (t === 'output' || s === 'output' || s.startsWith('output/')) return 0
+  if (t === 'temp' || s === 'temp' || s.startsWith('temp/')) return 1
+  if (t === 'input' || s === 'input' || s.startsWith('input/')) return 3
+  return 2
+}
+
+/** 同等级时略压低 Comfy 临时试听文件名（部分网关未正确标 type=temp） */
+function audioTempFilenamePenalty(filename: string): number {
+  const lower = String(filename || '').toLowerCase()
+  if (lower.includes('comfyui_temp')) return 1
+  return 0
+}
+
+function compareTaggedAudioRefPriority(
+  a: TaggedAudioRef,
+  b: TaggedAudioRef,
+  preferred: Set<string>,
+  dialogueMergeSaveIds: Set<string>,
+): number {
+  const ra = audioRefRank(a)
+  const rb = audioRefRank(b)
+  if (ra !== rb) return ra - rb
+  /**
+   * PreviewAudio 产出常为 `ComfyUI_temp_*.flac`，若先比 comfyui_temp 惩罚，会误把
+   * BatchGenerateSpeaker 的短条排在真正的试听节点之前（你控制台里的 4 先于 7）。
+   */
+  if (dialogueMergeSaveIds.size > 0) {
+    const ad = a.sourceNodeKey && dialogueMergeSaveIds.has(String(a.sourceNodeKey)) ? 1 : 0
+    const bd = b.sourceNodeKey && dialogueMergeSaveIds.has(String(b.sourceNodeKey)) ? 1 : 0
+    if (ad !== bd) return bd - ad
+  }
+  if (preferred.size > 0) {
+    const ap = a.sourceNodeKey && preferred.has(String(a.sourceNodeKey)) ? 1 : 0
+    const bp = b.sourceNodeKey && preferred.has(String(b.sourceNodeKey)) ? 1 : 0
+    if (ap !== bp) return bp - ap
+  }
+  const pa = audioTempFilenamePenalty(a.filename)
+  const pb = audioTempFilenamePenalty(b.filename)
+  if (pa !== pb) return pa - pb
+  const ka = outputNodeKeyNumeric(a.sourceNodeKey)
+  const kb = outputNodeKeyNumeric(b.sourceNodeKey)
+  if (ka !== kb) return kb - ka
+  return 0
+}
+
+/** 与 pickBestAudioRef 同序：output > temp、PreviewAudio/SaveAudio 节点先于 comfyui_temp 惩罚、再数字节点 id */
+function listSortedAudioCandidates(
+  refs: TaggedAudioRef[],
+  preferred: Set<string>,
+  dialogueMergeSaveIds: Set<string>,
+): TaggedAudioRef[] {
+  const deduped = dedupeTaggedAudioRefs(refs, preferred, dialogueMergeSaveIds)
+  const audioLike = deduped.filter((item) => {
     const filename = item.filename.toLowerCase()
     return Array.from(AUDIO_FILE_EXTENSIONS).some((ext) => filename.endsWith(ext))
   })
-  return hit ?? null
+  return [...audioLike].sort((a, b) =>
+    compareTaggedAudioRefPriority(a, b, preferred, dialogueMergeSaveIds),
+  )
+}
+
+function audioTieBreakKey(
+  r: TaggedAudioRef,
+  preferred: Set<string>,
+  dialogueMergeSaveIds: Set<string>,
+): string {
+  const dm =
+    dialogueMergeSaveIds.size > 0 && r.sourceNodeKey && dialogueMergeSaveIds.has(String(r.sourceNodeKey))
+      ? 1
+      : 0
+  const pr =
+    preferred.size > 0 && r.sourceNodeKey && preferred.has(String(r.sourceNodeKey)) ? 1 : 0
+  return `${audioRefRank(r)}|${dm}|${pr}|${audioTempFilenamePenalty(r.filename)}|${outputNodeKeyNumeric(r.sourceNodeKey)}`
+}
+
+function pickBestAudioRef(
+  refs: TaggedAudioRef[],
+  preferred: Set<string>,
+  dialogueMergeSaveIds: Set<string>,
+): TaggedAudioRef | null {
+  const list = listSortedAudioCandidates(refs, preferred, dialogueMergeSaveIds)
+  return list[0] ?? null
+}
+
+function headersInitToRecord(h: HeadersInit | undefined): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (!h) return out
+  if (h instanceof Headers) {
+    h.forEach((v, k) => {
+      out[k] = v
+    })
+    return out
+  }
+  if (Array.isArray(h)) {
+    for (const pair of h) {
+      if (pair && pair.length >= 2) out[String(pair[0])] = String(pair[1])
+    }
+    return out
+  }
+  return { ...(h as Record<string, string>) }
+}
+
+/**
+ * 探测 `/view?...` 对应文件大小（HEAD → Range → 桌面 openAiCompatFetch），用于多路 temp 音频并列时选最大文件。
+ * 云端 outputs 键常为 UUID 时节点序号排序失效，字节数更可靠。
+ */
+async function probeComfyViewUrlByteLength(url: string, authHeaders: HeadersInit | undefined): Promise<number> {
+  const tryHead = async (credentials: RequestCredentials) => {
+    const r = await fetchWithTimeout(url, { method: 'HEAD', headers: authHeaders, credentials }, 12_000)
+    if (!r.ok) return 0
+    const cl = r.headers.get('content-length')
+    if (!cl) return 0
+    const n = Number.parseInt(cl, 10)
+    return Number.isFinite(n) && n > 0 ? n : 0
+  }
+  let n = await tryHead('include').catch(() => 0)
+  if (n > 0) return n
+  n = await tryHead('omit').catch(() => 0)
+  if (n > 0) return n
+
+  const flat = headersInitToRecord(authHeaders)
+  const tryRange = async (credentials: RequestCredentials) => {
+    const r = await fetchWithTimeout(
+      url,
+      { headers: { ...flat, Range: 'bytes=0-0' }, credentials },
+      12_000,
+    )
+    if (r.status !== 206) return 0
+    const cr = r.headers.get('content-range')
+    const m = cr && /\/(\d+)\s*$/.exec(cr)
+    if (!m) return 0
+    const v = Number.parseInt(m[1], 10)
+    return Number.isFinite(v) && v > 0 ? v : 0
+  }
+  n = await tryRange('include').catch(() => 0)
+  if (n > 0) return n
+  n = await tryRange('omit').catch(() => 0)
+  if (n > 0) return n
+
+  const desk = typeof window !== 'undefined' ? window.flowidDesktop : undefined
+  if (desk?.openAiCompatFetch) {
+    try {
+      const r = await desk.openAiCompatFetch({
+        url,
+        method: 'GET',
+        headers: {
+          Accept: '*/*',
+          ...flat,
+          Referer: typeof window !== 'undefined' ? window.location.href : '',
+          Origin: typeof window !== 'undefined' ? window.location.origin : '',
+        },
+      })
+      if (r.ok && 'body' in r && r.body.byteLength > 0) return r.body.byteLength
+    } catch {
+      /* ignore */
+    }
+  }
+  return 0
+}
+
+const MAX_AUDIO_LENGTH_PROBE = 12
+
+/** 开发构建默认打印；生产可在控制台执行：localStorage.setItem('flowid.debugComfyAudio','1') 后刷新 */
+function shouldLogComfyAudioPickDebug(): boolean {
+  if (import.meta.env.DEV) return true
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('flowid.debugComfyAudio') === '1'
+  } catch {
+    return false
+  }
+}
+
+function classTypeForWorkflowNodeId(
+  historyEntry: Record<string, unknown>,
+  nodeKey: string | undefined,
+): string {
+  if (!nodeKey) return ''
+  const wf = extractWorkflowNodeMapFromHistory(historyEntry)
+  if (!wf) return ''
+  const raw = wf[nodeKey]
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return ''
+  return String((raw as Record<string, unknown>).class_type || '').trim()
+}
+
+function logComfyAudioPickDebug(args: {
+  stage: 'pick-async' | 'pick-latest-fallback'
+  historyEntry: Record<string, unknown>
+  rawRefCount: number
+  filteredCount: number
+  preferred: Set<string>
+  dialogueMergeSaveIds: Set<string>
+  sorted: TaggedAudioRef[]
+  tied: TaggedAudioRef[]
+  measured: Array<{ outputsNodeId?: string; classType: string; filename: string; bytes: number; urlShort: string }>
+  chosen: TaggedAudioRef
+  finalUrl: string
+  tieKey: string
+}) {
+  if (!shouldLogComfyAudioPickDebug()) return
+  const out = normalizeHistoryOutputs(args.historyEntry)
+  const outKeys = out ? Object.keys(out) : []
+  const urlShort =
+    args.finalUrl.length > 200 ? `${args.finalUrl.slice(0, 200)}…(共${args.finalUrl.length}字符)` : args.finalUrl
+  console.info('[Flowid Comfy · 音频结果选取调试]', {
+    阶段: args.stage,
+    说明: '生产环境调试请执行：localStorage.setItem("flowid.debugComfyAudio","1") 后刷新（开发构建默认已打印）',
+    history里outputs的节点键: outKeys,
+    工作流中认定的试听落盘节点id_PreviewAudio_SaveAudio: [...args.preferred],
+    DialogueInference直连SaveAudio_整段对白优先: [...args.dialogueMergeSaveIds],
+    从history收集到的音频引用条数_过滤前: args.rawRefCount,
+    过滤上传参考等同名后: args.filteredCount,
+    并列分组键_同键才比文件大小: args.tieKey,
+    排序后候选_最多列12条: args.sorted.slice(0, 12).map((r, i) => ({
+      排序: i + 1,
+      outputs节点id: r.sourceNodeKey ?? '（全条目扫描无节点id）',
+      class_type: classTypeForWorkflowNodeId(args.historyEntry, r.sourceNodeKey),
+      filename: r.filename,
+      type: r.type ?? '',
+      subfolder: r.subfolder ?? '',
+      rank输出优先: audioRefRank(r),
+      comfyui_temp惩罚: audioTempFilenamePenalty(r.filename),
+      数字节点键排序值: outputNodeKeyNumeric(r.sourceNodeKey),
+      命中优先试听节点: Boolean(r.sourceNodeKey && args.preferred.has(String(r.sourceNodeKey))),
+      命中对白合并落盘节点: Boolean(
+        r.sourceNodeKey && args.dialogueMergeSaveIds.has(String(r.sourceNodeKey)),
+      ),
+    })),
+    本档并列需测字节时_探测结果: args.measured,
+    最终选用: {
+      outputs节点id: args.chosen.sourceNodeKey ?? '（无）',
+      class_type: classTypeForWorkflowNodeId(args.historyEntry, args.chosen.sourceNodeKey),
+      filename: args.chosen.filename,
+      type: args.chosen.type ?? '',
+      subfolder: args.chosen.subfolder ?? '',
+    },
+    finalViewUrl: urlShort,
+  })
+}
+
+async function resolveBestComfyAudioViewUrl(args: {
+  providerConfig: WorkflowProviderConfig
+  requestBase: string
+  filteredRefs: TaggedAudioRef[]
+  preferred: Set<string>
+  historyEntry: Record<string, unknown>
+  rawRefCount: number
+  debugStage: 'pick-async' | 'pick-latest-fallback'
+}): Promise<string | null> {
+  const dialogueMergeSaveIds = collectSaveAudioNodeIdsFedByDialogueInference(args.historyEntry)
+  const sorted = listSortedAudioCandidates(
+    args.filteredRefs,
+    args.preferred,
+    dialogueMergeSaveIds,
+  )
+  if (!sorted.length) {
+    if (shouldLogComfyAudioPickDebug()) {
+      const out = normalizeHistoryOutputs(args.historyEntry)
+      console.warn('[Flowid Comfy · 音频结果选取调试]', {
+        阶段: args.debugStage,
+        结果: '无可用音频候选（过滤后为空或 history 中无音频扩展名）',
+        history里outputs的节点键: out ? Object.keys(out) : [],
+        从history收集到的音频引用条数_过滤前: args.rawRefCount,
+        过滤后: args.filteredRefs.length,
+        优先试听节点id: [...args.preferred],
+        DialogueInference直连SaveAudio: [...dialogueMergeSaveIds],
+      })
+    }
+    return null
+  }
+  const top = sorted[0]!
+  const key = audioTieBreakKey(top, args.preferred, dialogueMergeSaveIds)
+  const tied = sorted
+    .filter((r) => audioTieBreakKey(r, args.preferred, dialogueMergeSaveIds) === key)
+    .slice(0, MAX_AUDIO_LENGTH_PROBE)
+  let chosen = top
+  let measuredRows: Array<{
+    outputsNodeId?: string
+    classType: string
+    filename: string
+    bytes: number
+    urlShort: string
+  }> = []
+  if (tied.length > 1) {
+    const headers = getAuthHeaders(args.providerConfig)
+    const measured = await Promise.all(
+      tied.map(async (r) => {
+        const u = buildComfyViewUrl(args.requestBase, r)
+        const len = await probeComfyViewUrlByteLength(u, headers)
+        return { r, len, u }
+      }),
+    )
+    measuredRows = measured.map((m) => ({
+      outputsNodeId: m.r.sourceNodeKey,
+      classType: classTypeForWorkflowNodeId(args.historyEntry, m.r.sourceNodeKey),
+      filename: m.r.filename,
+      bytes: m.len,
+      urlShort: m.u.length > 120 ? `${m.u.slice(0, 120)}…` : m.u,
+    }))
+    const best = measured.reduce((a, b) => (b.len > a.len ? b : a))
+    if (best.len > 0) chosen = best.r
+  } else {
+    const r = tied[0]!
+    const u = buildComfyViewUrl(args.requestBase, r)
+    const headers = getAuthHeaders(args.providerConfig)
+    const len = await probeComfyViewUrlByteLength(u, headers)
+    measuredRows = [
+      {
+        outputsNodeId: r.sourceNodeKey,
+        classType: classTypeForWorkflowNodeId(args.historyEntry, r.sourceNodeKey),
+        filename: r.filename,
+        bytes: len,
+        urlShort: u.length > 120 ? `${u.slice(0, 120)}…` : u,
+      },
+    ]
+  }
+  const params = new URLSearchParams({
+    filename: chosen.filename,
+    subfolder: chosen.subfolder ?? '',
+    type: chosen.type ?? 'output',
+  })
+  const finalUrl = `${args.requestBase}/view?${params.toString()}`
+  logComfyAudioPickDebug({
+    stage: args.debugStage,
+    historyEntry: args.historyEntry,
+    rawRefCount: args.rawRefCount,
+    filteredCount: args.filteredRefs.length,
+    preferred: args.preferred,
+    dialogueMergeSaveIds,
+    sorted,
+    tied,
+    measured: measuredRows,
+    chosen,
+    finalUrl,
+    tieKey: key,
+  })
+  return finalUrl
 }
 
 function collectMediaRefsFromAny(value: unknown, refs: ComfyMediaRef[]) {
@@ -1103,16 +1830,15 @@ function isHistoryEntryReady(
   }
 
   if (expectation === 'audio') {
-    if (outObj && Object.keys(outObj).length > 0 && historyOutputsHaveAudioSignals(outObj)) return true
-    if (uiObj && historyUiHasAudioSignals(uiObj)) return true
-    if (outObj && Object.keys(outObj).length > 0 && historyOutputsContainRenderableMedia(outObj)) {
-      return true
-    }
-    if (uiObj && historyUiContainRenderableMedia(uiObj)) return true
-    if (completed && outObj && Object.keys(outObj).length > 0) {
-      return !historyOutputsAreOnlyDimensionLikeText(outObj)
-    }
-    return false
+    const hasAudioOut =
+      Boolean(outObj && Object.keys(outObj).length > 0 && historyOutputsHaveAudioSignals(outObj))
+    const hasAudioUi = Boolean(uiObj && historyUiHasAudioSignals(uiObj))
+    if (!hasAudioOut && !hasAudioUi) return false
+    /**
+     * 必须等 `completed`，否则 TDQwen3TTSBatchGenerateSpeaker 等前置节点会先写入短试听，
+     * 历史里一有音频就误判就绪，随后 `pickComfyResultAudioUrl` 会拿到非最终片段。
+     */
+    return completed === true
   }
 
   // general：文本/脚本等；排除「仅 completed + 尺寸 text」——否则会早于 SaveImage 落库就结束轮询
@@ -1140,7 +1866,12 @@ export async function submitComfyPrompt({
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
   const headers = getJsonHeaders(providerConfig)
-  const body = JSON.stringify({ prompt })
+  const clientId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `flowid-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  /** Comfy 官方支持：便于 WebSocket 进度与队列条目和浏览器会话关联；缺省时部分云端面板会像「空任务」。 */
+  const body = JSON.stringify({ prompt, client_id: clientId })
   const submitTimeoutMs = Math.max(8, providerConfig.timeoutSec || 30) * 1000
   /** 与上传接口一致：部分 ComfyUI / 反代仅暴露 `/api/prompt`，避免 404 时误以为未发任务 */
   let response: Response
@@ -1469,6 +2200,9 @@ export function pickComfyResultImageUrl({
   return buildComfyViewUrl(requestBase, first)
 }
 
+/** 视频节点输出条：排除 PreviewImage/SaveImage 等产生的静态栅格图，避免与 `<video>` 预览组合出现「黑块」。 */
+const COMFY_STATIC_RASTER_FILENAME_RE = /\.(png|jpe?g|webp|bmp)$/i
+
 /**
  * 从 ComfyUI history 提取本次任务全部视觉输出 view URL（多分镜/多 SaveImage 等），排除 input 档与可选文件名黑名单。
  */
@@ -1477,12 +2211,18 @@ export function pickComfyResultImageViewUrls({
   historyEntry,
   allowFullEntryFallback = true,
   excludeFilenames,
+  /**
+   * 为 true 时跳过 png/jpg/webp/bmp 文件名（保留 mp4/mov/webm/gif 等）。
+   * 用于画布「视频节点」底部缩略条：Comfy 图生视频工作流常在 history 里混入大量中间预览图，用 video 标签无法解码静态图会显示全黑。
+   */
+  omitStaticRasterFilenamesForVideoStrip = false,
 }: {
   providerConfig: WorkflowProviderConfig
   historyEntry: Record<string, unknown>
   allowFullEntryFallback?: boolean
   /** 与本次上传注入文件名一致时跳过，避免把参考图回显当输出 */
   excludeFilenames?: Iterable<string>
+  omitStaticRasterFilenamesForVideoStrip?: boolean
 }): string[] {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
@@ -1501,6 +2241,10 @@ export function pickComfyResultImageViewUrls({
     const key = mediaRefDedupeKey(ref)
     if (seen.has(key)) continue
     seen.add(key)
+    const refFn = String(ref.filename || '').trim()
+    if (omitStaticRasterFilenamesForVideoStrip && COMFY_STATIC_RASTER_FILENAME_RE.test(refFn)) {
+      continue
+    }
     const url = buildComfyViewUrl(requestBase, ref)
     const fn = readFilenameFromComfyViewUrl(url)
     if (fn && exclude.has(fn)) continue
@@ -1511,25 +2255,37 @@ export function pickComfyResultImageViewUrls({
 
 /**
  * 从 ComfyUI history 结果提取音频 URL（若有）。
+ * 同步版：不做体积探测；若 outputs 键为 UUID 导致多路 temp 并列，请用 {@link pickComfyResultAudioUrlAsync}。
  */
 export function pickComfyResultAudioUrl({
   providerConfig,
   historyEntry,
+  /** 与图片一致：跳过本次任务上传的参考音频名，避免回填成输入 */
+  excludeFilenames,
 }: {
   providerConfig: WorkflowProviderConfig
   historyEntry: Record<string, unknown>
+  excludeFilenames?: Iterable<string>
 }): string | null {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
 
-  const refs: ComfyAudioRef[] = []
-  const outputs = normalizeHistoryOutputs(historyEntry)
-  if (outputs) {
-    Object.values(outputs).forEach((nodeOutput) => collectAudioFileRefsFromAny(nodeOutput, refs))
-  }
-  // 一些自定义节点不会把结果放在 outputs，直接回退扫描整个 history 条目。
-  collectAudioFileRefsFromAny(historyEntry, refs)
-  const first = pickFirstAudioRef(refs)
+  const refs = collectTaggedAudioRefsFromHistoryEntry(historyEntry)
+  const exclude = new Set(
+    Array.from(excludeFilenames ?? [])
+      .map((s) => String(s || '').trim())
+      .filter(Boolean),
+  )
+  const filtered =
+    exclude.size > 0
+      ? refs.filter((r) => {
+          const fn = String(r.filename || '').trim()
+          return fn && !exclude.has(fn)
+        })
+      : refs
+  const preferred = collectAudioSinkNodeIdsFromHistory(historyEntry)
+  const dialogueMergeSaveIds = collectSaveAudioNodeIdsFedByDialogueInference(historyEntry)
+  const first = pickBestAudioRef(filtered, preferred, dialogueMergeSaveIds)
   if (first) {
     const params = new URLSearchParams({
       filename: first.filename,
@@ -1542,12 +2298,53 @@ export function pickComfyResultAudioUrl({
 }
 
 /**
+ * 异步解析音频 view URL：在优先级并列时用 HEAD/Range/主进程拉取探测 **最大文件**，避免 UUID 节点键下误选 BatchGenerateSpeaker 短试听。
+ */
+export async function pickComfyResultAudioUrlAsync({
+  providerConfig,
+  historyEntry,
+  excludeFilenames,
+}: {
+  providerConfig: WorkflowProviderConfig
+  historyEntry: Record<string, unknown>
+  excludeFilenames?: Iterable<string>
+}): Promise<string | null> {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const refs = collectTaggedAudioRefsFromHistoryEntry(historyEntry)
+  const exclude = new Set(
+    Array.from(excludeFilenames ?? [])
+      .map((s) => String(s || '').trim())
+      .filter(Boolean),
+  )
+  const filtered =
+    exclude.size > 0
+      ? refs.filter((r) => {
+          const fn = String(r.filename || '').trim()
+          return fn && !exclude.has(fn)
+        })
+      : refs
+  const preferred = collectAudioSinkNodeIdsFromHistory(historyEntry)
+  return resolveBestComfyAudioViewUrl({
+    providerConfig,
+    requestBase,
+    filteredRefs: filtered,
+    preferred,
+    historyEntry,
+    rawRefCount: refs.length,
+    debugStage: 'pick-async',
+  })
+}
+
+/**
  * 当本次 prompt 命中缓存且 outputs 为空时，回退扫描全量历史取最近音频。
  */
 export async function pickLatestComfyAudioUrlFromHistory({
   providerConfig,
+  excludeFilenames,
 }: {
   providerConfig: WorkflowProviderConfig
+  excludeFilenames?: Iterable<string>
 }): Promise<string | null> {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
@@ -1560,23 +2357,31 @@ export async function pickLatestComfyAudioUrlFromHistory({
     (item) => item && typeof item === 'object' && !Array.isArray(item),
   ) as Record<string, unknown>[]
   for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const refs: ComfyAudioRef[] = []
     const entry = entries[i]
-    const outputs = entry.outputs as Record<string, unknown> | undefined
-    if (outputs) {
-      Object.values(outputs).forEach((nodeOutput) =>
-        collectAudioFileRefsFromAny(nodeOutput, refs),
-      )
-    }
-    collectAudioFileRefsFromAny(entry, refs)
-    const first = pickFirstAudioRef(refs)
-    if (!first) continue
-    const params = new URLSearchParams({
-      filename: first.filename,
-      subfolder: first.subfolder ?? '',
-      type: first.type ?? 'output',
+    const refs = collectTaggedAudioRefsFromHistoryEntry(entry)
+    const exclude = new Set(
+      Array.from(excludeFilenames ?? [])
+        .map((s) => String(s || '').trim())
+        .filter(Boolean),
+    )
+    const filtered =
+      exclude.size > 0
+        ? refs.filter((r) => {
+            const fn = String(r.filename || '').trim()
+            return fn && !exclude.has(fn)
+          })
+        : refs
+    const preferred = collectAudioSinkNodeIdsFromHistory(entry)
+    const url = await resolveBestComfyAudioViewUrl({
+      providerConfig,
+      requestBase,
+      filteredRefs: filtered,
+      preferred,
+      historyEntry: entry,
+      rawRefCount: refs.length,
+      debugStage: 'pick-latest-fallback',
     })
-    return `${requestBase}/view?${params.toString()}`
+    if (url) return url
   }
   return null
 }
@@ -1628,7 +2433,7 @@ export async function checkComfyHealth({
 }: {
   providerConfig: WorkflowProviderConfig
 }): Promise<ComfyHealthResult> {
-  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const baseUrl = effectiveCloudComfyBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
   if (!baseUrl) {
     return { ok: false, message: '地址为空' }
@@ -1650,13 +2455,22 @@ export async function checkComfyHealth({
       }
     } catch (error) {
       window.clearTimeout(timer)
+      const msg = String((error as Error)?.message || error || '网络或跨域错误')
+      const devProxyHint =
+        import.meta.env.DEV && String(requestBase).includes('__comfy_dev_proxy__')
+          ? ' 若页面提示 [vite] server connection lost，多为开发服务器在代理该请求时异常退出，请查看运行 npm run dev 的终端并重启 dev。'
+          : ''
       if (path === tryPaths[tryPaths.length - 1]) {
         return {
           ok: false,
-          message: `连接失败：${(error as Error)?.message || '网络或跨域错误'}`,
+          message: `连接失败：${msg}${devProxyHint}`,
         }
       }
     }
   }
-  return { ok: false, message: '连接失败，请检查地址、网络或鉴权信息' }
+  const devTail =
+    import.meta.env.DEV && String(requestBase).includes('__comfy_dev_proxy__')
+      ? '（开发态经 Vite 代理；直连 https 云端会触发 CORS。若反复失败请用 Flowid 桌面正式包或看 dev 终端日志。）'
+      : ''
+  return { ok: false, message: `连接失败，请检查地址、网络或鉴权信息${devTail}` }
 }

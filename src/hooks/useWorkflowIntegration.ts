@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Edge, Node } from '@xyflow/react'
 import type {
+  AudioNodeData,
+  CloudWorkflowOverrideEntry,
   ImageNodeData,
+  VideoNodeData,
   NodeRunProgress,
   NodeWorkflowConfig,
   ShortcutCommandId,
@@ -20,8 +23,17 @@ import {
 import {
   parseMentionRefs,
   resolveMentionRefToNode,
+  resolveNodeMentionsInText,
 } from '../lib/nodeMentions'
-import { cloneNodeWithInboundTextPromptPrepended } from '../lib/studioPromptInheritance'
+import {
+  cloneNodeWithInboundTextNotePrepended,
+  cloneNodeWithInboundTextPromptPrepended,
+} from '../lib/studioPromptInheritance'
+import {
+  buildMusicFineTuneInjection,
+  injectMusicWorkflowFineTune,
+  musicFineTuneDraftFromAudioData,
+} from '../lib/musicWorkflowFineTune'
 import { computeAccessState, loadLicenseServerConfig, loadLicenseSnapshotV2, saveLicenseSnapshotV2 } from '../lib/licenseAccess'
 import { verifyLicenseRemote } from '../lib/licenseClient'
 import { matchStudioNodeWorkflow } from '../lib/matchStudioNodeWorkflow'
@@ -30,6 +42,16 @@ import { normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
 import { fetchOpenAICompat } from '../lib/openaiProxy'
 import { appendCloudCallLog } from '../lib/cloudCallLogs'
 import {
+  resolveDashscopeQwenImageSize,
+  resolveOpenAiImageGenerationOutputParams,
+} from '../lib/cloudImageGenerationParams'
+import { getActiveCloudSelfDefaultsForNodeKind } from '../lib/cloudSelfPresets'
+import {
+  getAssistApiKey,
+  studioNodeKindToAssistKind,
+  tryDecodeCloudAssistModelPick,
+} from '../lib/cloudAssistModelCatalog'
+import {
   apiPointsCancel,
   apiPointsConfirm,
   apiPointsConfirmFailure,
@@ -37,21 +59,47 @@ import {
 } from '../lib/licensePointsApi'
 import { emitPointsTaskFailure } from '../lib/pointsService'
 import { buildPointsReserveParams } from '../lib/pointsReserveMetadata'
+import {
+  clampMultiangleHV,
+  clampMultiangleZoom,
+  FLOWID_MULTIANGLE_DEFAULT_H,
+  FLOWID_MULTIANGLE_DEFAULT_V,
+  FLOWID_MULTIANGLE_DEFAULT_ZOOM,
+} from '../lib/comfyMultianglePlaceholders'
+import {
+  applyComfyVoiceTableRowsToPrompt,
+  voiceTableRowHasContent,
+} from '../lib/comfyVoiceTable8'
+import {
+  applyComfyTdRefAudioRoleRowsToPrompt,
+  resolveTdDefineSpeakerNodeIdsForRefSlots,
+} from '../lib/comfyTdRefAudioRoleMap'
+import {
+  applyNoteToTdMultiSpeakerTemplatePrompt,
+  normalizeTtsDialogueRoleColons,
+  splitTdNoteIntoDialogueAndSpeakerJson,
+  tryStructuredVoiceListToMultiDialogLines,
+  workflowJsonUsesTdMultiDialog,
+} from '../lib/comfyTdMultiDialogScript'
+import { resolveComfyWorkflowWidthHeight } from '../lib/comfyWorkflowOutputSize'
 import { readLocalImageAssetBlob, getLocalImageAssetObjectUrl } from '../lib/localImageAssetStore'
 import {
   buildComfyPromptDigest,
   checkComfyHealth,
+  effectiveCloudComfyBaseUrl,
   type ComfyHistoryTaskFingerprint,
   type ComfyHistoryResultExpectation,
   pickLatestComfyAudioUrlFromHistory,
   pickLatestComfyMediaUrlFromHistory,
-  pickComfyResultAudioUrl,
+  pickComfyResultAudioUrlAsync,
   pickComfyResultImageUrl,
   pickComfyResultImageViewUrls,
   readFilenameFromComfyViewUrl,
+  refetchHistoryEntryWithAudioOutput,
   refetchHistoryEntryWithRasterVisual,
   submitComfyPrompt,
   type ComfyUploadedInputImage,
+  uploadComfyInputBinaryFile,
   uploadComfyInputImageAsPng,
   verifyComfyMediaUrl,
   waitComfyHistory,
@@ -59,9 +107,30 @@ import {
 
 type NodeInputRecord = Record<string, unknown>
 
+/**
+ * 用户文案/文件名等插入到「已 JSON.stringify 过的工作流文本」中时，须按 JSON 字符串规则转义，
+ * 否则台本里的换行、引号等会导致 `JSON.parse` 报 Bad control character。
+ */
+function escapeForJsonStringLiteralFragment(raw: string): string {
+  return JSON.stringify(String(raw ?? '')).slice(1, -1)
+}
+
+/**
+ * 音乐节点主文案在 `note`；工作流常用 `__PROMPT__` 占位时须用 note 回填，否则会保留模板默认句。
+ * 配音节点仍以 `prompt` 为主（通常为空），不自动用整段台本顶替 __PROMPT__。
+ */
+function primaryPromptForWorkflowPlaceholder(inputs: NodeInputRecord): string {
+  const p = String(inputs.prompt ?? '').trim()
+  if (p) return String(inputs.prompt ?? '')
+  if (inputs.kind === 'music') {
+    return String(inputs.note ?? '').trim()
+  }
+  return String(inputs.prompt ?? '')
+}
+
 /** 工作流 JSON 字符串中的 `__PROMPTn__`（n≥2）按序替换；`__PROMPT__` 单独处理为第 1 路。 */
 function getIndexedPromptValueForWorkflow(inputs: NodeInputRecord, slot: number): string {
-  if (slot <= 1) return String(inputs.prompt ?? '')
+  if (slot <= 1) return primaryPromptForWorkflowPlaceholder(inputs)
   if (slot === 2) return String((inputs as { prompt2?: string }).prompt2 ?? '')
   if (slot === 3) return String((inputs as { prompt3?: string }).prompt3 ?? '')
   if (slot === 4) return String((inputs as { prompt4?: string }).prompt4 ?? '')
@@ -70,7 +139,10 @@ function getIndexedPromptValueForWorkflow(inputs: NodeInputRecord, slot: number)
 }
 
 function replaceIndexedPromptPlaceholders(serialized: string, nodeInputs: NodeInputRecord): string {
-  let text = serialized.replaceAll('__PROMPT__', String(nodeInputs.prompt ?? ''))
+  let text = serialized.replaceAll(
+    '__PROMPT__',
+    escapeForJsonStringLiteralFragment(primaryPromptForWorkflowPlaceholder(nodeInputs)),
+  )
   const seen = new Set<number>()
   const re = /__PROMPT(\d+)__/g
   let m: RegExpExecArray | null
@@ -80,9 +152,34 @@ function replaceIndexedPromptPlaceholders(serialized: string, nodeInputs: NodeIn
   }
   for (const n of [...seen].sort((a, b) => b - a)) {
     const ph = `__PROMPT${n}__`
-    text = text.split(ph).join(getIndexedPromptValueForWorkflow(nodeInputs, n))
+    text = text.split(ph).join(
+      escapeForJsonStringLiteralFragment(getIndexedPromptValueForWorkflow(nodeInputs, n)),
+    )
   }
   return text
+}
+
+/**
+ * 工作流 JSON 中 `__REF_AUDIO_n__` 的路数 N（须从 1 连续到 N）。
+ * 用户只上传 M 路（1≤M≤N）时仍只向 Comfy 上传 M 个文件；占位符替换时第 M+1…N 槽写入同一 Comfy 文件名（图定死 N 个 LoadAudio，不能留空占位符）。
+ */
+function resolveComfyRefAudioSlotCount(workflowJsonText: string): { count: number; gapError?: string } {
+  const indices = new Set<number>()
+  for (const m of String(workflowJsonText || '').matchAll(/__REF_AUDIO_(\d+)__/g)) {
+    const n = parseInt(m[1] || '0', 10)
+    if (Number.isFinite(n) && n >= 1) indices.add(Math.floor(n))
+  }
+  if (indices.size === 0) return { count: 0 }
+  const max = Math.max(...indices)
+  for (let i = 1; i <= max; i += 1) {
+    if (!indices.has(i)) {
+      return {
+        count: 0,
+        gapError: `工作流中 __REF_AUDIO_*__ 须从 1 连续编号到 ${max}（当前缺少 __REF_AUDIO_${i}__）。多人场景请保持 __REF_AUDIO_1__ … __REF_AUDIO_${max}__ 共 ${max} 路，与 Comfy 中说话人条数一致。`,
+      }
+    }
+  }
+  return { count: max }
 }
 
 /**
@@ -124,6 +221,7 @@ function buildLicenseHeaders(): Record<string, string> | null {
  * 开发诊断日志开关：默认关闭，避免高频执行时控制台刷屏。
  * 需要排查时可在控制台手动开启：
  * localStorage.setItem('flowid.debug.comfy', '1')
+ * 开启后会额外打印台本 __NOTE__ 组装、DialogueInference.script 等专项日志。
  */
 function shouldLogComfyDebug(): boolean {
   if (!import.meta.env.DEV) return false
@@ -131,6 +229,26 @@ function shouldLogComfyDebug(): boolean {
     return window.localStorage.getItem('flowid.debug.comfy') === '1'
   } catch {
     return false
+  }
+}
+
+/** 控制台台本调试：字数、行数、是否仍含未展开的 @[标题](uuid) */
+function devSummarizeNoteForComfyLog(text: string): {
+  字数: number
+  非空行数: number
+  仍含未展开at引用: boolean
+  前160字: string
+  后160字: string
+} {
+  const s = String(text ?? '')
+  const lines = s.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+  const atMention = /@\[[^\]]+\]\([0-9a-fA-F-]{36}\)/.test(s)
+  return {
+    字数: s.length,
+    非空行数: lines.length,
+    仍含未展开at引用: atMention,
+    前160字: s.length <= 160 ? s : `${s.slice(0, 160)}…`,
+    后160字: s.length <= 160 ? '' : `…${s.slice(-160)}`,
   }
 }
 
@@ -207,6 +325,9 @@ async function extractNodeInputs(
     kind: node.data.kind,
   }
   if (node.data.kind === 'group') {
+    return common
+  }
+  if (node.data.kind === 'imageCompare') {
     return common
   }
   if (node.data.kind === 'text' || node.data.kind === 'script') {
@@ -311,6 +432,13 @@ async function extractNodeInputs(
       bbox: [] as number[],
       frame_index: 0,
     })
+    const comfyMultiangleH = clampMultiangleHV(imgMatting.comfyMultiangleH, FLOWID_MULTIANGLE_DEFAULT_H)
+    const comfyMultiangleV = clampMultiangleHV(imgMatting.comfyMultiangleV, FLOWID_MULTIANGLE_DEFAULT_V)
+    const comfyMultiangleZoom = clampMultiangleZoom(imgMatting.comfyMultiangleZoom, FLOWID_MULTIANGLE_DEFAULT_ZOOM)
+    const { width: comfyWorkflowWidth, height: comfyWorkflowHeight } = resolveComfyWorkflowWidthHeight(
+      'image',
+      imgMatting,
+    )
     return {
       ...common,
       prompt: node.data.prompt,
@@ -322,6 +450,12 @@ async function extractNodeInputs(
       mattingPositiveCoordsJson,
       mattingNegativeCoordsJson,
       mattingFrameInfoJson,
+      comfyMultiangleH,
+      comfyMultiangleV,
+      comfyMultiangleZoom,
+      comfyWorkflowWidth,
+      comfyWorkflowHeight,
+      comfyWorkflowStyleTone: String((imgMatting as ImageNodeData).comfyWorkflowStyleTone ?? '').trim(),
     }
   }
   if (node.data.kind === 'video') {
@@ -402,6 +536,14 @@ async function extractNodeInputs(
     const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
     /** 第二路提示词映射到工作流 `__BODY__`（常见于图音视频：__PROMPT__ + __BODY__ 双文本口）。 */
     const bodyForWorkflow = String(p2 || '').trim()
+    const vd = node.data as VideoNodeData
+    const comfyMultiangleH = clampMultiangleHV(vd.comfyMultiangleH, FLOWID_MULTIANGLE_DEFAULT_H)
+    const comfyMultiangleV = clampMultiangleHV(vd.comfyMultiangleV, FLOWID_MULTIANGLE_DEFAULT_V)
+    const comfyMultiangleZoom = clampMultiangleZoom(vd.comfyMultiangleZoom, FLOWID_MULTIANGLE_DEFAULT_ZOOM)
+    const { width: comfyWorkflowWidth, height: comfyWorkflowHeight } = resolveComfyWorkflowWidthHeight(
+      'video',
+      vd,
+    )
     return {
       ...common,
       prompt: node.data.prompt,
@@ -414,6 +556,12 @@ async function extractNodeInputs(
       srcAssetId: primaryAssetId,
       refImages: purePairs.map((p) => p.url).join('\n'),
       refImageAssetIds: purePairs.map((p) => String(p.assetId || '').trim()).filter(Boolean),
+      comfyMultiangleH,
+      comfyMultiangleV,
+      comfyMultiangleZoom,
+      comfyWorkflowWidth,
+      comfyWorkflowHeight,
+      comfyWorkflowStyleTone: String((vd as VideoNodeData).comfyWorkflowStyleTone ?? '').trim(),
     }
   }
   if (node.data.kind === 'panorama') {
@@ -431,40 +579,60 @@ async function extractNodeInputs(
         const hit = resolveMentionRefToNode(ref, allNodes, node.id)
         if (!hit) continue
         const kind = (hit.data as StudioNodeData).kind
-        if (kind !== 'image' && kind !== 'panorama') continue
-        const u =
+        if (kind !== 'image' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music') continue
+        let u =
           kind === 'panorama'
             ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
             : String((hit.data as any)?.src || '').trim()
-        if (!u) continue
         const aid = String((hit.data as any)?.srcAssetId || '').trim()
+        if (!u && aid) {
+          const restored = await getLocalImageAssetObjectUrl(aid)
+          if (restored) u = restored
+        }
+        if (!u) continue
         pairs.push({ url: u, assetId: aid || undefined })
       }
     }
-    refs.forEach((u, i) => {
-      const url = String(u || '').trim()
-      if (!url) return
+    for (let i = 0; i < refs.length; i++) {
+      let url = String(refs[i] || '').trim()
+      if (!url) continue
       const aid = Array.isArray(refIds) && i < refIds.length ? String(refIds[i] || '').trim() : ''
+      if (url.startsWith('blob:') && aid) {
+        const restored = await getLocalImageAssetObjectUrl(aid)
+        if (restored) url = restored
+      }
       pairs.push({ url, assetId: aid || undefined })
-    })
+    }
     const mergedPairs: Array<{ url: string; assetId?: string }> = []
     for (const p of pairs) {
       const existing = mergedPairs.find((x) => x.url === p.url)
       if (!existing) mergedPairs.push(p)
       else if (!existing.assetId && p.assetId) existing.assetId = p.assetId
     }
-    const primarySrc = String(node.data.src || '').trim() || mergedPairs[0]?.url || ''
+    let primarySrc = String(node.data.src || '').trim() || mergedPairs[0]?.url || ''
     const primaryAssetId =
       String((node.data as any)?.srcAssetId || '').trim() ||
       (mergedPairs.find((p) => p.url === primarySrc)?.assetId ?? '')
+    if (primarySrc.startsWith('blob:') && primaryAssetId) {
+      const restored = await getLocalImageAssetObjectUrl(primaryAssetId)
+      if (restored) primarySrc = restored
+    }
     const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
+    const noteResolved =
+      allNodes?.length && noteText
+        ? resolveNodeMentionsInText(noteText, allNodes, node.id)
+        : noteText
     return {
       ...common,
-      note: node.data.note,
+      note: noteResolved,
       src: primarySrc,
       srcAssetId: primaryAssetId,
       refImages: purePairs.map((p) => p.url).join('\n'),
       refImageAssetIds: purePairs.map((p) => String(p.assetId || '').trim()).filter(Boolean),
+      audioOrderedRefEntries: dedupeOrderedAudioRefEntries(
+        { url: primarySrc, assetId: primaryAssetId || undefined },
+        purePairs.map((p) => ({ url: p.url, assetId: p.assetId })),
+      ),
     }
   }
   const noteText = String(node.data.note || '')
@@ -477,41 +645,142 @@ async function extractNodeInputs(
       const hit = resolveMentionRefToNode(ref, allNodes, node.id)
       if (!hit) continue
       const kind = (hit.data as StudioNodeData).kind
-      if (kind !== 'image' && kind !== 'panorama') continue
-      const u =
+      /** 多路 __REF_AUDIO__：台本里 @ 配音/音乐 节点应计入参考音序列（原仅 image/panorama，导致 0 路音频）。 */
+      if (kind !== 'image' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music') continue
+      let u =
         kind === 'panorama'
           ? String((hit.data as any)?.rectilinearSrc || (hit.data as any)?.src || '').trim()
           : String((hit.data as any)?.src || '').trim()
-      if (!u) continue
       const aid = String((hit.data as any)?.srcAssetId || '').trim()
+      if (!u && aid) {
+        const restored = await getLocalImageAssetObjectUrl(aid)
+        if (restored) u = restored
+      }
+      if (!u) continue
       pairs.push({ url: u, assetId: aid || undefined })
     }
   }
-  audioRefs.forEach((u, i) => {
-    const url = String(u || '').trim()
-    if (!url) return
+  for (let i = 0; i < audioRefs.length; i++) {
+    let url = String(audioRefs[i] || '').trim()
+    if (!url) continue
     const aid = Array.isArray(refIds) && i < refIds.length ? String(refIds[i] || '').trim() : ''
+    if (url.startsWith('blob:') && aid) {
+      const restored = await getLocalImageAssetObjectUrl(aid)
+      if (restored) url = restored
+    }
     pairs.push({ url, assetId: aid || undefined })
-  })
+  }
   const mergedPairs: Array<{ url: string; assetId?: string }> = []
   for (const p of pairs) {
     const existing = mergedPairs.find((x) => x.url === p.url)
     if (!existing) mergedPairs.push(p)
     else if (!existing.assetId && p.assetId) existing.assetId = p.assetId
   }
-  const primarySrc = String(node.data.src || mergedPairs[0]?.url || '').trim()
+  let primarySrc = String(node.data.src || mergedPairs[0]?.url || '').trim()
   const primaryAssetId =
     String((node.data as any)?.srcAssetId || '').trim() ||
     (mergedPairs.find((p) => p.url === primarySrc)?.assetId ?? '')
+  if (primarySrc.startsWith('blob:') && primaryAssetId) {
+    const restored = await getLocalImageAssetObjectUrl(primaryAssetId)
+    if (restored) primarySrc = restored
+  }
   const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
+  const noteResolvedAudio =
+    allNodes?.length && noteText
+      ? resolveNodeMentionsInText(noteText, allNodes, node.id)
+      : noteText
   return {
     ...common,
-    note: node.data.note,
+    note: noteResolvedAudio,
     src: primarySrc,
     srcAssetId: primaryAssetId,
     refImages: purePairs.map((p) => p.url).join('\n'),
     refImageAssetIds: purePairs.map((p) => String(p.assetId || '').trim()).filter(Boolean),
+    audioOrderedRefEntries: dedupeOrderedAudioRefEntries(
+      { url: primarySrc, assetId: primaryAssetId || undefined },
+      purePairs.map((p) => ({ url: p.url, assetId: p.assetId })),
+    ),
   }
+}
+
+/** 与参考音频上传序列一致：主槽 + refImages 行（URL 去重保序）。 */
+function dedupeOrderedAudioInputUrls(rawSrc: string, refImageUrlLines: string[]): string[] {
+  const seq = [String(rawSrc || '').trim(), ...refImageUrlLines.map((s) => s.trim()).filter(Boolean)].filter(
+    Boolean,
+  )
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const u of seq) {
+    if (seen.has(u)) continue
+    seen.add(u)
+    out.push(u)
+  }
+  return out
+}
+
+type AudioRefUploadEntry = { url: string; assetId?: string }
+
+/** 主槽 + 参考行，按 URL 去重保序；保留 assetId 供 blob 失效时从 IndexedDB 直读。 */
+function dedupeOrderedAudioRefEntries(
+  primary: { url: string; assetId?: string },
+  refs: Array<{ url: string; assetId?: string }>,
+): AudioRefUploadEntry[] {
+  const seq: AudioRefUploadEntry[] = [
+    { url: String(primary.url || '').trim(), assetId: primary.assetId },
+    ...refs.map((r) => ({
+      url: String(r.url || '').trim(),
+      assetId: r.assetId,
+    })),
+  ].filter((e) => e.url)
+  const seen = new Set<string>()
+  const out: AudioRefUploadEntry[] = []
+  for (const e of seq) {
+    if (seen.has(e.url)) continue
+    seen.add(e.url)
+    out.push(e)
+  }
+  return out
+}
+
+/** 画布上哪路音频节点的 `src` 与待上传 URL 一致，则取其 `srcAssetId`（补全缺失的 IndexedDB 键）。 */
+function resolveAudioSrcAssetIdFromCanvas(
+  url: string,
+  allNodes: Array<Node<StudioNodeData>>,
+): string {
+  const u = String(url || '').trim()
+  if (!u) return ''
+  for (const n of allNodes) {
+    if (n.data.kind !== 'audio' && n.data.kind !== 'music') continue
+    const src = String((n.data as { src?: string }).src || '').trim()
+    if (src === u) {
+      const id = String((n.data as { srcAssetId?: string }).srcAssetId || '').trim()
+      if (id) return id
+    }
+  }
+  return ''
+}
+
+function audioRefEntriesFromNodeInputs(ni: NodeInputRecord): AudioRefUploadEntry[] {
+  const raw = (ni as { audioOrderedRefEntries?: unknown }).audioOrderedRefEntries
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw
+      .map((x) => ({
+        url: String((x as { url?: string }).url ?? '').trim(),
+        assetId: String((x as { assetId?: string }).assetId ?? '').trim() || undefined,
+      }))
+      .filter((e) => e.url)
+  }
+  return dedupeOrderedAudioRefEntries(
+    {
+      url: String(ni.src ?? '').trim(),
+      assetId: String((ni as { srcAssetId?: string }).srcAssetId ?? '').trim() || undefined,
+    },
+    String((ni as { refImages?: string }).refImages ?? '')
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((url) => ({ url })),
+  )
 }
 
 /**
@@ -642,7 +911,8 @@ function pickModelReferenceImages(
  */
 function devSummarizeComfyPromptForLog(
   prompt: Record<string, unknown>,
-  maxNodes = 32,
+  /** 默认放宽：大图工作流常 >32 节点，省略后无法核对尾帧 ImageLoader 等 */
+  maxNodes = 96,
   maxStringPerField = 280,
 ): Array<{
   节点id: string
@@ -689,6 +959,36 @@ function devSummarizeComfyPromptForLog(
       inputs预览: {},
     })
   }
+  return rows
+}
+
+/**
+ * 开发环境：列出 prompt 内所有「加载图片」类节点的 `image` 文件名（不截断节点数量），便于核对首尾帧是否注入到不同节点。
+ */
+function devSummarizeComfyImageLoadNodesForLog(
+  prompt: Record<string, unknown>,
+): Array<{ 节点id: string; class_type: string; image字段: string }> {
+  const rows: Array<{ 节点id: string; class_type: string; image字段: string }> = []
+  for (const [id, raw] of Object.entries(prompt)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const rec = raw as Record<string, unknown>
+    const classType = String(rec.class_type ?? '')
+    if (!/\b(LoadImage|ImageLoader)\b/i.test(classType) && !/Load Image/i.test(classType)) {
+      continue
+    }
+    const inputs = rec.inputs
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
+    const inp = inputs as Record<string, unknown>
+    const img = inp.image
+    const imageStr = typeof img === 'string' ? img : img != null ? JSON.stringify(img) : ''
+    rows.push({ 节点id: id, class_type: classType, image字段: imageStr })
+  }
+  rows.sort((a, b) => {
+    const na = Number(a.节点id)
+    const nb = Number(b.节点id)
+    if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+    return String(a.节点id).localeCompare(String(b.节点id))
+  })
   return rows
 }
 
@@ -793,6 +1093,10 @@ function summarizeForLoopStartTotalForLog(prompt: Record<string, unknown>): Arra
 /**
  * 将音乐节点“描述信息”兜底映射到 ComfyUI 常见正向提示词字段。
  * 优先保留已有占位符替换逻辑；当未使用占位符时再尝试自动注入。
+ *
+ * 注意：如 Ace Step 等图里「风格/歌词」常放在 `PrimitiveStringMultiline` 的 `inputs.value`，
+ * 再以连线接入编码器；此时编码器上的 `tags`/`lyrics` 是 `[nodeId,0]` 而非字符串，
+ * 仅靠 `__PROMPT__` 或 inputs 里的 `lyrics` 字符串无法替换，必须改 primitive 的 `value`。
  */
 function injectMusicPromptFallback(
   prompt: Record<string, unknown>,
@@ -801,29 +1105,39 @@ function injectMusicPromptFallback(
   const trimmedNote = note.trim()
   if (!trimmedNote) return prompt
   const cloned = structuredClone(prompt) as Record<string, unknown>
-  const candidateKeys = [
+  const candidateKeys = new Set([
     'prompt',
     'positive',
     'positive_prompt',
     'main_prompt',
     'lyrics',
     'text',
-  ]
-  let injected = false
+    'caption',
+    'description',
+    'user_prompt',
+    'gpt_prompt',
+    'refined_prompt',
+    'instruction',
+    'instructions',
+  ])
   for (const node of Object.values(cloned)) {
     if (!node || typeof node !== 'object' || Array.isArray(node)) continue
     const nodeRecord = node as Record<string, unknown>
+    const classType = String(nodeRecord.class_type || '').toLowerCase()
     const inputs = nodeRecord.inputs
     if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
     const inputRecord = inputs as Record<string, unknown>
+    if (
+      typeof inputRecord.value === 'string' &&
+      (classType.includes('primitivestringmultiline') || classType === 'primitivestring')
+    ) {
+      inputRecord.value = trimmedNote
+    }
     for (const key of candidateKeys) {
       if (typeof inputRecord[key] === 'string') {
         inputRecord[key] = trimmedNote
-        injected = true
-        break
       }
     }
-    if (injected) break
   }
   return cloned
 }
@@ -973,6 +1287,12 @@ function isComfyFileLoadImageNodeClass(classType: string): boolean {
   const raw = String(classType || '').trim()
   if (!raw) return false
   const compact = raw.toLowerCase().replace(/[\s_-]/g, '')
+  /**
+   * WAS / dzNodes「Load Image Advanced」等：API 常为 `class_type: ImageLoader`（compact=`imageloader`），
+   * 不含子串 `loadimage`。若不识别，会落入通用 `image` 字段注入逻辑且始终用主图文件名，
+   * 导致「首尾帧」等多图工作流两张槽都被写成首帧。
+   */
+  if (compact === 'imageloader') return true
   if (!compact.includes('loadimage')) return false
   if (compact.includes('mask')) return false
   return true
@@ -1965,6 +2285,10 @@ export function useWorkflowIntegration() {
                 workflowName: undefined,
                 workflows: undefined,
                 selectedWorkflowId: undefined,
+                settingsEditTarget: undefined,
+                cloudSettingsSelectedWorkflowId: undefined,
+                cloudWorkflowOverrides: undefined,
+                cloudWorkflowSystemPrompts: undefined,
               }
             : patch
         return {
@@ -2208,9 +2532,9 @@ export function useWorkflowIntegration() {
             }
           : {
               ...snapshot.cloud,
-              baseUrl:
-                snapshot.cloudEndpoints.find((item) => item.enabled && item.baseUrl.trim())
-                  ?.baseUrl ?? '',
+              baseUrl: effectiveCloudComfyBaseUrl(
+                snapshot.cloudEndpoints.find((item) => item.enabled && item.baseUrl.trim())?.baseUrl ?? '',
+              ),
             }
       const result = await checkComfyHealth({ providerConfig })
       const prefix = provider === 'local' ? '本地' : '云端'
@@ -2319,6 +2643,9 @@ export function useWorkflowIntegration() {
       if (node.data.kind === 'panorama') {
         throw new Error('VR360 全景节点为本地预览与导出工具，请在节点内使用「当前视角」，不参与 Comfy 执行')
       }
+      if (node.data.kind === 'imageCompare') {
+        throw new Error('对比节点为本地双图预览，无需执行工作流')
+      }
 
       const reserveParams = buildPointsReserveParams(node, snapshot, {
         executionTarget: options?.executionTarget,
@@ -2343,7 +2670,19 @@ export function useWorkflowIntegration() {
         const snapPoints = loadLicenseSnapshotV2()
         const lc = String(snapPoints?.licenseCode || '').trim()
         const mc = String(snapPoints?.machineId || '').trim()
-        if (!lc || !mc) {
+        /**
+         * 授权码 / 积分：仅绑定「云端 ComfyUI 工作流」。
+         * OpenAI 兼容「云端模型」不校验授权、不预扣积分（用户自备 Key / 线路）。
+         */
+        const requiresLicenseForCloudComfy =
+          executionTarget === 'workflow' && snapshot.executionProvider === 'cloud'
+        const needsPointsReserve = requiresLicenseForCloudComfy
+        if (requiresLicenseForCloudComfy && (!lc || !mc)) {
+          throw new Error(
+            '使用云端 Comfy 工作流前，请先在「设置 → 授权码」中完成激活（需有效授权码与机器码，且积分服务可访问）。',
+          )
+        }
+        if (!needsPointsReserve || !lc || !mc) {
           return await run()
         }
         const dedupeKey = `${lc}_${node.id}_${Date.now()}`
@@ -2426,38 +2765,18 @@ export function useWorkflowIntegration() {
         const nodeBaseUrlRaw = String((node.data as any)?.cloudModelUrl || nodeConfig.cloudModelUrl || '')
         const nodeApiKey = String((node.data as any)?.cloudApiKey || nodeConfig.cloudApiKey || '').trim()
 
-        // 全局自助模式默认（设置面板保存）：配置列表 + 当前“使用”的那一条
-        const loadActiveSelfPreset = (): { model: string; baseUrl: string; apiKey: string } => {
-          try {
-            const listRaw = window.localStorage.getItem('flowid.cloud.self.presets.v1')
-            const activeId = String(window.localStorage.getItem('flowid.cloud.self.activePresetId.v1') || '').trim()
-            const list = listRaw ? (JSON.parse(listRaw) as any[]) : []
-            const normalized = Array.isArray(list) ? list : []
-            const byNodeKind = normalized.filter((x) => {
-              const nk = String(x?.nodeKind || '').trim()
-              return !nk || nk === nodeKind
-            })
-            const hit =
-              (activeId ? byNodeKind.find((x) => String(x?.id || '') === activeId) : null) ||
-              byNodeKind[0] ||
-              (activeId ? normalized.find((x) => String(x?.id || '') === activeId) : null) ||
-              normalized[0] ||
-              null
-            const d = hit || {}
-            return {
-              model: String(d?.model || '').trim(),
-              baseUrl: String(d?.baseUrl || '').trim(),
-              apiKey: String(d?.apiKey || '').trim(),
-            }
-          } catch {
-            return { model: '', baseUrl: '', apiKey: '' }
-          }
-        }
-
-        const self = loadActiveSelfPreset()
+        const self = getActiveCloudSelfDefaultsForNodeKind(nodeKind)
         const model = nodeModel || self.model
         const baseUrl = normalizeOpenAICompatibleBaseUrl(nodeBaseUrlRaw || self.baseUrl || '')
-        const apiKey = nodeApiKey || self.apiKey
+        let apiKey = nodeApiKey || self.apiKey
+        const assistPickRaw = String((node.data as any)?.cloudAssistModelPick || '').trim()
+        if (tryDecodeCloudAssistModelPick(assistPickRaw)) {
+          const ak = studioNodeKindToAssistKind(String(nodeKind))
+          if (ak) {
+            const fromAssist = getAssistApiKey(ak)
+            if (fromAssist) apiKey = fromAssist
+          }
+        }
 
         if (!baseUrl || !model) {
           throw new Error('未配置云端模型（模型名/地址）。请先在「设置 - 云端模型」里填写 API 地址并选择默认模型。')
@@ -2550,6 +2869,14 @@ export function useWorkflowIntegration() {
             return withoutMjArgs.replace(/\s{2,}/g, ' ').trim()
           }
           const promptForImage = normalizePromptForCloudImage(inputText) || inputText
+          const imageNodeData = node.data as ImageNodeData
+          const cloudAspect = imageNodeData.cloudImageAspect
+          const cloudTier = imageNodeData.cloudImageResolutionTier
+          const openAiImgOut = resolveOpenAiImageGenerationOutputParams({
+            model,
+            aspect: cloudAspect,
+            tier: cloudTier,
+          })
           const isDashscopeQwenImage =
             /dashscope\.aliyuncs\.com|dashscope-intl\.aliyuncs\.com/i.test(baseUrl) &&
             /^qwen-image/i.test(model)
@@ -2646,7 +2973,7 @@ export function useWorkflowIntegration() {
                       ],
                     },
                     parameters: {
-                      size: '1024*1024',
+                      size: resolveDashscopeQwenImageSize(cloudAspect, cloudTier),
                       image_count: 1,
                     },
                   },
@@ -2735,6 +3062,8 @@ export function useWorkflowIntegration() {
                   nodeId: node.id,
                   model,
                   endpoint: responsesEndpoint,
+                  size: openAiImgOut.size,
+                  quality: openAiImgOut.quality,
                   refCount: refImages.length,
                   refs: refImages.map((u) => ({ kind: devUrlKind(u), url: devTruncateUrl(u, 140) })),
                 })
@@ -2756,7 +3085,13 @@ export function useWorkflowIntegration() {
                       ],
                     },
                   ],
-                  tools: [{ type: 'image_generation' }],
+                  tools: [
+                    {
+                      type: 'image_generation',
+                      ...(openAiImgOut.quality ? { quality: openAiImgOut.quality } : {}),
+                      ...(openAiImgOut.size ? { size: openAiImgOut.size } : {}),
+                    },
+                  ],
                 },
               })
               const respJson = (await resp.json().catch(() => ({}))) as any
@@ -2781,6 +3116,8 @@ export function useWorkflowIntegration() {
                   nodeId: node.id,
                   model,
                   endpoint,
+                  size: openAiImgOut.size,
+                  quality: openAiImgOut.quality,
                   refCount: refImages.length,
                   note:
                     refImages.length > 0
@@ -2800,7 +3137,8 @@ export function useWorkflowIntegration() {
                     model,
                     prompt: promptForImage,
                     n: 1,
-                    size: '1024x1024',
+                    size: openAiImgOut.size,
+                    ...(openAiImgOut.quality ? { quality: openAiImgOut.quality } : {}),
                     response_format: 'url',
                   },
                 },
@@ -3035,10 +3373,9 @@ export function useWorkflowIntegration() {
             }
           : {
               ...snapshot.cloud,
-              baseUrl:
-                snapshot.cloudEndpoints.find(
-                  (item) => item.enabled && item.baseUrl.trim(),
-                )?.baseUrl ?? '',
+              baseUrl: effectiveCloudComfyBaseUrl(
+                snapshot.cloudEndpoints.find((item) => item.enabled && item.baseUrl.trim())?.baseUrl ?? '',
+              ),
             }
       if (!providerConfig.enabled) {
         throw new Error(
@@ -3215,6 +3552,17 @@ export function useWorkflowIntegration() {
           id: String(wfJson.id || cloudWorkflowEntryId).trim(),
           name: String(wfJson.name || (node.data as { model?: string }).model || cloudWorkflowEntryId).trim(),
         }
+        const ovId = String(remoteCloudPick.id || cloudWorkflowEntryId).trim()
+        const rawOv = ovId ? nodeConfig.cloudWorkflowOverrides?.[ovId] : undefined
+        const ov: CloudWorkflowOverrideEntry | null =
+          rawOv && typeof rawOv === 'object' && String(rawOv.jsonText || '').trim()
+            ? rawOv
+            : rawOv && typeof rawOv === 'string' && rawOv.trim()
+              ? { jsonText: rawOv.trim() }
+              : null
+        if (ov?.jsonText) {
+          workflowSource = ov.jsonText
+        }
       } else if (isCloudCustom && rootWorkflowJson) {
         workflowSource = rootWorkflowJson
       }
@@ -3246,8 +3594,23 @@ export function useWorkflowIntegration() {
           : '') ||
         '（未命名）'
       const wfEntryId = remoteCloudPick?.id || pickedWorkflow?.id || ''
-      const wfResultNodeId = pickedWorkflow?.resultNodeId || nodeConfig.resultNodeId
-      const wfResultFieldPath = pickedWorkflow?.resultFieldPath || nodeConfig.resultFieldPath
+      const cloudOvId = String(wfEntryId || cloudWorkflowEntryId || '').trim()
+      const cloudOvRaw =
+        isCloudCustom && cloudOvId ? nodeConfig.cloudWorkflowOverrides?.[cloudOvId] : undefined
+      const cloudOv: CloudWorkflowOverrideEntry | null =
+        cloudOvRaw && typeof cloudOvRaw === 'object' && String(cloudOvRaw.jsonText || '').trim()
+          ? cloudOvRaw
+          : cloudOvRaw && typeof cloudOvRaw === 'string' && cloudOvRaw.trim()
+            ? { jsonText: cloudOvRaw.trim() }
+            : null
+      const wfResultNodeId =
+        (cloudOv?.resultNodeId ? String(cloudOv.resultNodeId) : '') ||
+        pickedWorkflow?.resultNodeId ||
+        nodeConfig.resultNodeId
+      const wfResultFieldPath =
+        (cloudOv?.resultFieldPath ? String(cloudOv.resultFieldPath) : '') ||
+        pickedWorkflow?.resultFieldPath ||
+        nodeConfig.resultFieldPath
       /** 开发环境：在浏览器控制台（F12 → Console）打印本次实际解析到的工作流，便于核对是否串台 */
       if (shouldLogComfyDebug()) {
         const 匹配来源 = remoteCloudPick
@@ -3268,6 +3631,11 @@ export function useWorkflowIntegration() {
           workflowJson字符数: workflowSource.length,
         })
       }
+      const audioRefResolved = resolveComfyRefAudioSlotCount(workflowSource)
+      const audioRefSlotCount = audioRefResolved.count
+      if (audioRefResolved.gapError) {
+        throw new Error(audioRefResolved.gapError)
+      }
       try {
         prompt = JSON.parse(workflowSource) as Record<string, unknown>
       } catch {
@@ -3284,8 +3652,35 @@ export function useWorkflowIntegration() {
               options.allNodes,
               workflowSource,
             )
-          : node
+          : (nodeKind === 'audio' || nodeKind === 'music') &&
+              options?.studioEdges?.length &&
+              options?.allNodes?.length
+            ? cloneNodeWithInboundTextNotePrepended(
+                node,
+                options.studioEdges,
+                options.allNodes,
+                workflowSource,
+              )
+            : node
       const nodeInputs = await extractNodeInputs(comfyInputNode, options?.allNodes)
+      if (
+        shouldLogComfyDebug() &&
+        (nodeKind === 'audio' || nodeKind === 'music') &&
+        workflowSource.includes('__NOTE__')
+      ) {
+        const noteOnPreparedNode = String((node.data as { note?: string }).note ?? '')
+        const noteAfterEdgeMerge = String((comfyInputNode.data as { note?: string }).note ?? '')
+        const noteResolvedForWf = String((nodeInputs as { note?: string }).note ?? '')
+        console.info('[Flowid Comfy][台本] __NOTE__ 注入链路（extractNodeInputs 之后）', {
+          工作流含__NOTE__: true,
+          入参节点侧栏note: devSummarizeNoteForComfyLog(noteOnPreparedNode),
+          连线合并后note: devSummarizeNoteForComfyLog(noteAfterEdgeMerge),
+          已合并连线文本剧本: noteAfterEdgeMerge !== noteOnPreparedNode,
+          合并原文_尚未TD对白与JSON拆分: devSummarizeNoteForComfyLog(noteResolvedForWf),
+          说明:
+            '本条仍是侧栏/@/连线合并后的全文；TD 无参多人会在组装 JSON 前再拆分「对白」与「说话人 JSON」。实际写入 __NOTE__ 请看稍后日志「TD 分段与最终写入 __NOTE__」。',
+        })
+      }
       const rawSrc = String(nodeInputs.src ?? '').trim()
       const rawRefImages = String(nodeInputs.refImages ?? '')
       const refImageUrls = rawRefImages
@@ -3297,11 +3692,22 @@ export function useWorkflowIntegration() {
        * 使用 extractNodeInputs 返回的已恢复 URL，避免使用失效的 blob URL。
        */
       const nodeInputsRefImages = String((nodeInputs as any)?.refImages || '').trim()
-      const orderedInputImageUrls = (
-        (nodeKind === 'image' || nodeKind === 'video') && nodeInputsRefImages
-          ? [String((nodeInputs as any)?.src || ''), ...nodeInputsRefImages.split('\n')]
-          : [rawSrc, ...refImageUrls]
-      ).filter((url) => String(url || '').trim())
+      const orderedInputImageUrls =
+        nodeKind === 'image' || nodeKind === 'video'
+          ? (
+              nodeInputsRefImages
+                ? [String((nodeInputs as any)?.src || ''), ...nodeInputsRefImages.split('\n')]
+                : [rawSrc, ...refImageUrls]
+            )
+              .map((url) => String(url || '').trim())
+              .filter(Boolean)
+          : []
+      const orderedInputAudioUrls =
+        (nodeKind === 'audio' || nodeKind === 'music') && audioRefSlotCount > 0
+          ? dedupeOrderedAudioInputUrls(rawSrc, refImageUrls)
+          : []
+      /** 实际上传参考音频所用的 URL 序列（上传前可能再 refresh，与 debug 一致） */
+      let audioUploadSourceUrls = orderedInputAudioUrls
       const missingMentionRefs: string[] = []
       if (import.meta.env.DEV && (nodeKind === 'image' || nodeKind === 'video')) {
         console.info('[Flowid Diagnose] 输入图判定详情', {
@@ -3322,6 +3728,39 @@ export function useWorkflowIntegration() {
       if (nodeKind === 'image' || nodeKind === 'video') {
         const summary = `执行输入判定：输入图总数=${orderedInputImageUrls.length}`
         setLastExecutionMessage(summary)
+      }
+      if ((nodeKind === 'audio' || nodeKind === 'music') && audioRefSlotCount > 0) {
+        const nIn = orderedInputAudioUrls.length
+        if (nIn < 1) {
+          throw new Error(
+            `当前工作流含 __REF_AUDIO_1__ … __REF_AUDIO_${audioRefSlotCount}__（模板最多 ${audioRefSlotCount} 路）。请至少在节点主音频槽或底部「本地参考音/图」区提供 1 个有效音频；当前 0 个。`,
+          )
+        }
+        if (nIn > audioRefSlotCount) {
+          throw new Error(
+            `当前工作流最多接收 ${audioRefSlotCount} 路参考音频，本次有 ${nIn} 个。请删减参考条或 @ 引用数量，或换用更多槽位的工作流。`,
+          )
+        }
+        const padHint =
+          nIn < audioRefSlotCount
+            ? `；另 ${audioRefSlotCount - nIn} 个 Comfy 音频槽用末路文件名占位（不多传文件）`
+            : ''
+        setLastExecutionMessage(`执行输入判定：参考音频 ${nIn} 路（模板 ${audioRefSlotCount} 槽${padHint}）`)
+      }
+      if (shouldLogComfyDebug() && (nodeKind === 'audio' || nodeKind === 'music')) {
+        const srcNonEmpty = Boolean(rawSrc)
+        const srcLooksLocal = srcNonEmpty && /^(blob:|file:|data:)/i.test(rawSrc)
+        console.info('[Flowid Comfy][上传] 向 Comfy 上传文件与否（与云端/本地无关，只看工作流占位符）', {
+          工作流__REF_AUDIO槽位数: audioRefSlotCount,
+          将参与上传的参考音频URL数: orderedInputAudioUrls.length,
+          节点主槽src非空: srcNonEmpty,
+          主槽src形态为本地预览: srcLooksLocal,
+          是否执行上传循环: audioRefSlotCount > 0 && orderedInputAudioUrls.length > 0,
+          说明:
+            audioRefSlotCount === 0
+              ? '当前工作流 JSON 里没有 __REF_AUDIO_1__ 等占位符（常见「无参」多人 TTS）。Flowid 只通过 POST /prompt 提交 JSON（台本在 Dialogue 的 script、音色在 RoleBank/VoiceDesign），不会调用上传接口往 Comfy input 丢文件；侧栏 blob:/file: 仅为画布预览，不是「漏传」。若需要参考音，请换带 __REF_AUDIO_n__ 的模板。'
+              : '将把参考音频上传到 Comfy 再替换 __REF_AUDIO_*；请保证主槽或参考区有有效音频 URL。',
+        })
       }
       if (nodeKind === 'image' || nodeKind === 'video') {
         const requiredInputImages = orderedInputImageUrls.length
@@ -3368,7 +3807,8 @@ export function useWorkflowIntegration() {
       const mentionLabelByUrl = new Map<string, string>()
       const uploadFailures: Array<{ index: number; url: string; reason: string }> = []
       const allUploads: ComfyUploadedInputImage[] = []
-      if (orderedInputImageUrls.length > 0) {
+      const audioUploadList: ComfyUploadedInputImage[] = []
+      if (orderedInputImageUrls.length > 0 && (nodeKind === 'image' || nodeKind === 'video')) {
         for (let i = 0; i < orderedInputImageUrls.length; i += 1) {
           const url = orderedInputImageUrls[i]!
           const sourceLabel = mentionLabelByUrl.get(url) || `图${i + 1}`
@@ -3385,6 +3825,64 @@ export function useWorkflowIntegration() {
               url,
               reason: String((error as Error)?.message || error || '未知错误'),
             })
+          }
+        }
+      }
+      if (
+        (nodeKind === 'audio' || nodeKind === 'music') &&
+        audioRefSlotCount > 0 &&
+        orderedInputAudioUrls.length > 0
+      ) {
+        let audioEntries = audioRefEntriesFromNodeInputs(nodeInputs as NodeInputRecord)
+        try {
+          const refreshedInputs = await extractNodeInputs(comfyInputNode, options?.allNodes)
+          const next = audioRefEntriesFromNodeInputs(refreshedInputs as NodeInputRecord)
+          if (next.length > 0) {
+            audioEntries = next
+          }
+        } catch {
+          // 保持首次 extract；有 assetId 时仍可从 IndexedDB 直读
+        }
+        audioUploadSourceUrls = audioEntries.map((e) => e.url)
+        const audioRefUploadCache = new Map<string, ComfyUploadedInputImage>()
+        for (let i = 0; i < audioEntries.length; i += 1) {
+          const { url, assetId } = audioEntries[i]!
+          let aid = String(assetId || '').trim()
+          if (!aid && /^(blob:|file:)/i.test(url) && options?.allNodes?.length) {
+            aid = resolveAudioSrcAssetIdFromCanvas(url, options.allNodes)
+          }
+          const cacheKey = `${url}\0${aid}`
+          options?.onProgress?.({
+            percent: 3,
+            label: `正在上传参考音频 ${i + 1}/${audioEntries.length}…`,
+          })
+          const hit = audioRefUploadCache.get(cacheKey)
+          if (hit) {
+            audioUploadList.push(hit)
+            continue
+          }
+          const currentLabel =
+            String(options?.runNodeTitle || node.data.title || node.id).trim() || '当前节点'
+          const prefix = `${currentLabel}_ref_audio_${i + 1}`
+          let mediaUrl = url
+          let revokeAfter: string | null = null
+          if (aid && /^(blob:|file:)/i.test(url)) {
+            const fromDb = await readLocalImageAssetBlob(aid)
+            if (fromDb && fromDb.size > 0) {
+              revokeAfter = URL.createObjectURL(fromDb)
+              mediaUrl = revokeAfter
+            }
+          }
+          try {
+            const uploaded = await uploadComfyInputBinaryFile({
+              providerConfig: effectiveProviderConfig,
+              mediaUrl,
+              filenamePrefix: prefix,
+            })
+            audioRefUploadCache.set(cacheKey, uploaded)
+            audioUploadList.push(uploaded)
+          } finally {
+            if (revokeAfter) URL.revokeObjectURL(revokeAfter)
           }
         }
       }
@@ -3411,6 +3909,7 @@ export function useWorkflowIntegration() {
       const comfyInjectUploads: ComfyUploadedInputImage[] = [
         ...(primaryUpload ? [primaryUpload] : []),
         ...refUploads,
+        ...audioUploadList,
       ]
       // 仅对“接入主链路”的多 LoadImage 做参考图缺失拦截；未连线占位节点不参与判断。
       if (nodeKind === 'image' || nodeKind === 'video') {
@@ -3434,20 +3933,31 @@ export function useWorkflowIntegration() {
             : nodeKind === 'text' || nodeKind === 'script'
               ? String(nodeInputs.body ?? '')
               : String((nodeInputs as { note?: string }).note ?? '')
-        console.info('[Flowid Comfy] 组装前：节点提取的输入（占位符替换前）', {
-          文本字数: extractedText.length,
-          文本预览:
-            extractedText.length > 500
-              ? `${extractedText.slice(0, 500)}…(共${extractedText.length}字)`
-              : extractedText || '（无）',
-          主图原始地址: rawSrc ? devTruncateUrl(rawSrc) : '（无）',
-          参考图原始条数: refImageUrls.length,
-          Comfy主图文件名: comfySrc || '（无）',
-          Comfy参考图文件名: refUploads.map((item) => item.filename),
-        })
-        console.info('[Flowid Comfy] 参考图上传顺序明细（原始URL -> Comfy文件名）', refUploadDebugRows)
         console.info(
-          '[Flowid Comfy] 最终注入顺序（primary + refs）',
+          `[Flowid Comfy] 组装前：节点提取的输入（占位符替换前${nodeKind === 'audio' ? '；TD 多人台本的对白/JSON 拆分在下一步' : ''}）`,
+          {
+            文本字数: extractedText.length,
+            文本预览:
+              extractedText.length > 500
+                ? `${extractedText.slice(0, 500)}…(共${extractedText.length}字)`
+                : extractedText || '（无）',
+            主图原始地址: rawSrc ? devTruncateUrl(rawSrc) : '（无）',
+            参考图原始条数: refImageUrls.length,
+            Comfy主图文件名: comfySrc || '（无）',
+            Comfy参考图文件名: refUploads.map((item) => item.filename),
+          },
+        )
+        console.info('[Flowid Comfy] 参考图上传顺序明细（原始URL -> Comfy文件名）', refUploadDebugRows)
+        const audioInjectDebugRows =
+          nodeKind === 'audio' || nodeKind === 'music'
+            ? audioUploadSourceUrls.map((url, idx) => ({
+                序号: idx + 1,
+                原始URL: devTruncateUrl(url),
+                Comfy文件名: audioUploadList[idx]?.filename || '（未上传/空）',
+              }))
+            : []
+        console.info(
+          '[Flowid Comfy] 最终注入顺序（主图 + 参考图 + 参考音频；无槽位时数组为空属正常）',
           [
             ...(primaryUpload
               ? [{ 类型: '主图', 原始URL: devTruncateUrl(rawSrc), Comfy文件名: primaryUpload.filename }]
@@ -3457,39 +3967,257 @@ export function useWorkflowIntegration() {
               原始URL: row.原始URL,
               Comfy文件名: row.Comfy文件名,
             })),
+            ...audioInjectDebugRows.map((row) => ({
+              类型: '参考音频',
+              原始URL: row.原始URL,
+              Comfy文件名: row.Comfy文件名,
+            })),
           ],
         )
       }
       options?.onProgress?.({ percent: 4, label: '输入已准备，正在组装工作流…' })
       // 兼容简单占位符：把 "__PROMPT__"、"__PROMPTn__"、"__BODY__"、"__SRC__" 自动替换。
       const serializedBefore = JSON.stringify(prompt)
-      const text = replaceIndexedPromptPlaceholders(serializedBefore, nodeInputs)
-        .replaceAll('__MATTING_POINTS_JSON__', String((nodeInputs as { mattingPointsJson?: string }).mattingPointsJson ?? '[]'))
+      const noteInputMerged = String(nodeInputs.note ?? '')
+      let noteForWorkflow = noteInputMerged
+      /** 有参/无参 TD：对白与说话人 JSON 分段；JSON 只更新 CR Text，勿拼进 MultiDialog。 */
+      let noteRawPreservedForTdCrText = noteInputMerged
+      if (nodeKind === 'audio' && workflowJsonUsesTdMultiDialog(serializedBefore)) {
+        const split = splitTdNoteIntoDialogueAndSpeakerJson(noteInputMerged)
+        noteRawPreservedForTdCrText = split.speakerJsonCandidate?.trim()
+          ? split.speakerJsonCandidate.trim()
+          : noteInputMerged
+        if (split.dialogue.trim()) {
+          noteForWorkflow = normalizeTtsDialogueRoleColons(split.dialogue.trim())
+        } else {
+          const fromStruct = tryStructuredVoiceListToMultiDialogLines(split.speakerJsonCandidate ?? '')
+          noteForWorkflow = (fromStruct ?? split.speakerJsonCandidate ?? noteInputMerged).trim()
+        }
+      }
+      if (
+        (nodeKind === 'audio' || nodeKind === 'music') &&
+        serializedBefore.includes('__NOTE__') &&
+        workflowJsonUsesTdMultiDialog(serializedBefore)
+      ) {
+        const beforeNote = noteForWorkflow
+        const converted = tryStructuredVoiceListToMultiDialogLines(beforeNote)
+        if (converted) {
+          noteForWorkflow = converted
+          if (shouldLogComfyDebug()) {
+            console.info('[Flowid Comfy][台本] TD MultiDialog：已将结构化列表转为「角色名: 台词」行（避免整段 JSON/Python 列表被当成一句对白）', {
+              转换前预览: devSummarizeNoteForComfyLog(beforeNote),
+              转换后预览: devSummarizeNoteForComfyLog(converted),
+            })
+          }
+        }
+      }
+      if (
+        shouldLogComfyDebug() &&
+        nodeKind === 'audio' &&
+        workflowSource.includes('__NOTE__') &&
+        workflowJsonUsesTdMultiDialog(serializedBefore)
+      ) {
+        console.info('[Flowid Comfy][台本] TD 分段与最终写入 __NOTE__', {
+          实际替换__NOTE__: devSummarizeNoteForComfyLog(noteForWorkflow),
+          CR_Text说话人表原料: devSummarizeNoteForComfyLog(noteRawPreservedForTdCrText),
+          说明:
+            '「实际替换__NOTE__」应只有对白行（约十几行），不应再含 JSON；「CR_Text」在含说话人列表时应为整段 [...] JSON。',
+        })
+      }
+      let text = replaceIndexedPromptPlaceholders(serializedBefore, nodeInputs)
+        .replaceAll(
+          '__MATTING_POINTS_JSON__',
+          escapeForJsonStringLiteralFragment(
+            String((nodeInputs as { mattingPointsJson?: string }).mattingPointsJson ?? '[]'),
+          ),
+        )
         .replaceAll(
           '__MATTING_POSITIVE_COORDS_JSON__',
-          String((nodeInputs as { mattingPositiveCoordsJson?: string }).mattingPositiveCoordsJson ?? '[]'),
+          escapeForJsonStringLiteralFragment(
+            String((nodeInputs as { mattingPositiveCoordsJson?: string }).mattingPositiveCoordsJson ?? '[]'),
+          ),
         )
         .replaceAll(
           '__MATTING_NEGATIVE_COORDS_JSON__',
-          String((nodeInputs as { mattingNegativeCoordsJson?: string }).mattingNegativeCoordsJson ?? '[]'),
+          escapeForJsonStringLiteralFragment(
+            String((nodeInputs as { mattingNegativeCoordsJson?: string }).mattingNegativeCoordsJson ?? '[]'),
+          ),
         )
         .replaceAll(
           '__MATTING_FRAME_INFO_JSON__',
-          String(
-            (nodeInputs as { mattingFrameInfoJson?: string }).mattingFrameInfoJson ??
-              '{"positive_coords":[],"negative_coords":[],"bbox":[],"frame_index":0}',
+          escapeForJsonStringLiteralFragment(
+            String(
+              (nodeInputs as { mattingFrameInfoJson?: string }).mattingFrameInfoJson ??
+                '{"positive_coords":[],"negative_coords":[],"bbox":[],"frame_index":0}',
+            ),
           ),
         )
-        .replaceAll('__BODY__', String(nodeInputs.body ?? ''))
-        .replaceAll('__SRC__', comfySrc)
-        .replaceAll('__NOTE__', String(nodeInputs.note ?? ''))
-        .replaceAll('__REF_IMAGE__', comfyFirstRefImage)
-        .replaceAll('__REF_IMAGES__', comfyRefImages)
+        .replaceAll('__BODY__', escapeForJsonStringLiteralFragment(String(nodeInputs.body ?? '')))
+        .replaceAll(
+          '__SYSTEM_PROMPT__',
+          escapeForJsonStringLiteralFragment(
+            (() => {
+              const k = String(wfEntryId || cloudWorkflowEntryId || '').trim()
+              if (!(nodeKind === 'text' || nodeKind === 'script') || !k) return ''
+              return String(snapshot.nodeConfigs.text.cloudWorkflowSystemPrompts?.[k] ?? '')
+            })(),
+          ),
+        )
+        .replaceAll('__SRC__', escapeForJsonStringLiteralFragment(comfySrc))
+        .replaceAll('__NOTE__', escapeForJsonStringLiteralFragment(noteForWorkflow))
+        .replaceAll('__REF_IMAGE__', escapeForJsonStringLiteralFragment(comfyFirstRefImage))
+        .replaceAll('__REF_IMAGES__', escapeForJsonStringLiteralFragment(comfyRefImages))
+        .replaceAll(
+          '__STYLE_TONE__',
+          escapeForJsonStringLiteralFragment(String((nodeInputs as NodeInputRecord).comfyWorkflowStyleTone ?? '')),
+        )
+        .replaceAll(
+          '__CAM_PARAM_LINE__',
+          escapeForJsonStringLiteralFragment(
+            `(horizontal: ${clampMultiangleHV((nodeInputs as NodeInputRecord).comfyMultiangleH, FLOWID_MULTIANGLE_DEFAULT_H)}, vertical: ${clampMultiangleHV((nodeInputs as NodeInputRecord).comfyMultiangleV, FLOWID_MULTIANGLE_DEFAULT_V)}, zoom: ${clampMultiangleZoom((nodeInputs as NodeInputRecord).comfyMultiangleZoom, FLOWID_MULTIANGLE_DEFAULT_ZOOM)})`,
+          ),
+        )
+      // 仅上传 M 个文件时：1…M 一一对应；M+1…N 仍须替换占位符（静态工作流有 N 个 LoadAudio），沿用末路 Comfy 文件名，不触发额外上传。
+      if (audioRefSlotCount > 0 && audioUploadList.length > 0) {
+        for (let slot = 1; slot <= audioRefSlotCount; slot += 1) {
+          const idx = Math.min(slot - 1, audioUploadList.length - 1)
+          text = text.replaceAll(
+            `__REF_AUDIO_${slot}__`,
+            escapeForJsonStringLiteralFragment(audioUploadList[idx]!.filename),
+          )
+        }
+      }
       prompt = JSON.parse(text) as Record<string, unknown>
+      if (nodeKind === 'audio') {
+        applyNoteToTdMultiSpeakerTemplatePrompt(prompt, {
+          dialogueText: noteForWorkflow,
+          speakerListRaw: noteRawPreservedForTdCrText,
+          hadNotePlaceholder: serializedBefore.includes('__NOTE__'),
+        })
+        const vtRows = (node.data as AudioNodeData).comfyVoiceTableRows
+        if (
+          shouldLogComfyDebug() &&
+          serializedBefore.includes('__NOTE__') &&
+          Array.isArray(vtRows) &&
+          vtRows.length > 0
+        ) {
+          const rowsDbg = vtRows.map((r, i) => {
+            if (!voiceTableRowHasContent(r)) return null
+            return {
+              表格行: i + 1,
+              角色名称: String(r.roleName || '').trim() || '（空）',
+              样句字数: String(r.sampleLine || '').trim().length,
+              声音设定字数: String(r.voiceInstruct || '').trim().length,
+              语言: String(r.language || '').trim() || 'Auto',
+            }
+          })
+          console.info('[Flowid Comfy][台本] 8路音色表（仅列有内容的行；样句进 VoiceDesign，全剧台本在 __NOTE__）', {
+            有内容行数: rowsDbg.filter(Boolean).length,
+            各行: rowsDbg.filter(Boolean),
+          })
+        }
+        if (Array.isArray(vtRows) && vtRows.some(voiceTableRowHasContent)) {
+          applyComfyVoiceTableRowsToPrompt(prompt, vtRows)
+        }
+        const tdRefRows = (node.data as AudioNodeData).comfyTdRefAudioRoleRows
+        const tdSpeakerIds = resolveTdDefineSpeakerNodeIdsForRefSlots(serializedBefore)
+        if (
+          tdSpeakerIds &&
+          tdSpeakerIds.length > 0 &&
+          Array.isArray(tdRefRows) &&
+          tdRefRows.some((r) => String(r?.roleName ?? '').trim())
+        ) {
+          applyComfyTdRefAudioRoleRowsToPrompt(prompt, tdRefRows, tdSpeakerIds, {
+            skipLeadingSlots: 0,
+          })
+        }
+        if (shouldLogComfyDebug() && serializedBefore.includes('__NOTE__')) {
+          const rbNode = prompt['18'] as
+            | { class_type?: string; inputs?: Record<string, unknown> }
+            | undefined
+          if (rbNode?.class_type === 'FB_Qwen3TTSRoleBank' && rbNode.inputs) {
+            const roleNames: Record<string, string> = {}
+            for (let i = 1; i <= 8; i += 1) {
+              roleNames[`role_name_${i}`] = String(rbNode.inputs[`role_name_${i}`] ?? '').trim()
+            }
+            console.info(
+              '[Flowid Comfy][台本] RoleBank 最终角色名（Comfy 只认这些前缀；未在表里的台本行可能被跳过）',
+              roleNames,
+            )
+          }
+        }
+        if (shouldLogComfyDebug() && serializedBefore.includes('__NOTE__')) {
+          const dlgEntry = Object.entries(prompt).find(
+            ([, v]) =>
+              v &&
+              typeof v === 'object' &&
+              !Array.isArray(v) &&
+              (v as { class_type?: string }).class_type === 'FB_Qwen3TTSDialogueInference',
+          )
+          if (dlgEntry) {
+            const [, dlgNode] = dlgEntry
+            const script = String((dlgNode as { inputs?: { script?: unknown } }).inputs?.script ?? '')
+            const sum = devSummarizeNoteForComfyLog(script)
+            const scriptLinePrefixes = [
+              ...new Set(
+                script
+                  .split(/\r?\n/)
+                  .map((l) => l.trim())
+                  .filter(Boolean)
+                  .map((l) => {
+                    const m = /^([^:：]+)[:：]/.exec(l)
+                    return m ? String(m[1]).trim() : ''
+                  })
+                  .filter(Boolean),
+              ),
+            ]
+            console.info('[Flowid Comfy][台本] FB_Qwen3TTSDialogueInference 最终 script（已进 Comfy prompt）', {
+              prompt节点id: dlgEntry[0],
+              ...sum,
+              台本行首角色去重列表: scriptLinePrefixes,
+              对白行首格式提示:
+                '每行须为「角色名:台词」或「角色名：台词」；行首角色名须出现在上方 RoleBank 最终角色名中，否则该句可能不合成。',
+              全文预览:
+                script.length > 900
+                  ? `${script.slice(0, 420)}\n…(中略 ${script.length - 420 - 200} 字)…\n${script.slice(-200)}`
+                  : script || '（空 — 检查 __NOTE__ 与 @ 引用）',
+            })
+          } else {
+            console.info(
+              '[Flowid Comfy][台本] 未找到 FB_Qwen3TTSDialogueInference 节点（当前工作流可能不是多人对白图）',
+            )
+          }
+        }
+      }
       prompt = replacePlaceholderStringWithNumber(prompt, '__REF_COUNT__', comfyRefCount) as Record<
         string,
         unknown
       >
+      prompt = replacePlaceholderStringWithNumber(
+        prompt,
+        '__CAM_H__',
+        clampMultiangleHV((nodeInputs as NodeInputRecord).comfyMultiangleH, FLOWID_MULTIANGLE_DEFAULT_H),
+      ) as Record<string, unknown>
+      prompt = replacePlaceholderStringWithNumber(
+        prompt,
+        '__CAM_V__',
+        clampMultiangleHV((nodeInputs as NodeInputRecord).comfyMultiangleV, FLOWID_MULTIANGLE_DEFAULT_V),
+      ) as Record<string, unknown>
+      prompt = replacePlaceholderStringWithNumber(
+        prompt,
+        '__CAM_Z__',
+        clampMultiangleZoom((nodeInputs as NodeInputRecord).comfyMultiangleZoom, FLOWID_MULTIANGLE_DEFAULT_ZOOM),
+      ) as Record<string, unknown>
+      if (nodeKind === 'image' || nodeKind === 'video') {
+        const w = Number((nodeInputs as NodeInputRecord).comfyWorkflowWidth)
+        const h = Number((nodeInputs as NodeInputRecord).comfyWorkflowHeight)
+        const dataWH = node.data as ImageNodeData | VideoNodeData
+        const fallback = resolveComfyWorkflowWidthHeight(nodeKind, dataWH)
+        const safeW = Number.isFinite(w) ? w : fallback.width
+        const safeH = Number.isFinite(h) ? h : fallback.height
+        prompt = replacePlaceholderStringWithNumber(prompt, '__WIDTH__', safeW) as Record<string, unknown>
+        prompt = replacePlaceholderStringWithNumber(prompt, '__HEIGHT__', safeH) as Record<string, unknown>
+      }
       // 图片/视频节点兜底：若工作流未写 __SRC__/__REF_IMAGES__，自动注入常见图片输入字段。
       if (
         (nodeKind === 'image' || nodeKind === 'video') &&
@@ -3521,13 +4249,13 @@ export function useWorkflowIntegration() {
       prompt = repairComfyWorkflowTensorLinks(prompt)
       // 补全 VAEDecode / VAEEncode* 上丢失的 vae 连线（常见于 API 导出断链）
       prompt = injectMissingVaeInputLinks(prompt)
-      // 音乐节点兜底：若工作流未使用 __NOTE__ 占位符，自动映射到常见正向提示词字段。
-      if (
-        nodeKind === 'music' &&
-        typeof nodeInputs.note === 'string' &&
-        !serializedBefore.includes('__NOTE__')
-      ) {
+      // 音乐节点：除 __PROMPT__/__NOTE__ 占位替换外，仍把侧栏/连线合并后的正文扫入常见文本槽，覆盖模板里写死的默认提示词。
+      if (nodeKind === 'music' && typeof nodeInputs.note === 'string' && nodeInputs.note.trim()) {
         prompt = injectMusicPromptFallback(prompt, nodeInputs.note)
+      }
+      if (nodeKind === 'music') {
+        const draft = musicFineTuneDraftFromAudioData(node.data as AudioNodeData)
+        prompt = injectMusicWorkflowFineTune(prompt, buildMusicFineTuneInjection(draft))
       }
       // 文本/剧本兜底：未使用 __BODY__ 时，有输入就覆盖工作流默认文本输入。
       if (
@@ -3599,6 +4327,10 @@ export function useWorkflowIntegration() {
           '[Flowid Comfy] 即将提交：各节点 inputs 预览（最终 prompt；tensor 联线显示为 [联线/对象]）',
           devSummarizeComfyPromptForLog(prompt),
         )
+        const imageLoads = devSummarizeComfyImageLoadNodesForLog(prompt)
+        if (imageLoads.length) {
+          console.info('[Flowid Comfy] 图片加载节点全量列表（首尾帧请核对各节点 image 是否不同）', imageLoads)
+        }
       }
       const qwenLikeSummary = summarizeQwenLikeNodesForLog(prompt)
       if (shouldLogComfyDebug() && qwenLikeSummary.length) {
@@ -3613,10 +4345,42 @@ export function useWorkflowIntegration() {
       const taskFingerprint: ComfyHistoryTaskFingerprint = {
         promptDigest: buildComfyPromptDigest(prompt),
       }
+      if (shouldLogComfyDebug()) {
+        const dlg = Object.entries(prompt).find(
+          ([, v]) =>
+            v &&
+            typeof v === 'object' &&
+            !Array.isArray(v) &&
+            (v as { class_type?: string }).class_type === 'FB_Qwen3TTSDialogueInference',
+        )
+        const scriptLen = dlg
+          ? String((dlg[1] as { inputs?: { script?: unknown } }).inputs?.script ?? '').length
+          : 0
+        const promptJsonChars = JSON.stringify(prompt).length
+        console.info('[Flowid Comfy] POST /prompt 实际提交体量（核对云端是否「像空的」）', {
+          顶层节点数: Object.keys(prompt).length,
+          Dialogue节点id: dlg?.[0] ?? '（未找到）',
+          DialogueInference_script字数: scriptLen,
+          prompt字段序列化字符数: promptJsonChars,
+          说明1:
+            '网页队列里不显示画布连线 ≠ 没提交：标准 API 只送 JSON，界面常常「看起来像空卡片」。',
+          说明2:
+            '请在云端 Comfy 打开 History，用本次 promptId 找条目，展开 outputs；若 script 字数与侧栏台本接近，则正文已在服务端。',
+        })
+      }
       const promptId = await submitComfyPrompt({
         providerConfig: effectiveProviderConfig,
         prompt,
       })
+      if (shouldLogComfyDebug()) {
+        console.info('[Flowid Comfy] 本次任务提交目标（请与 Comfy 终端所属服务对照）', {
+          执行提供方: targetProvider,
+          baseUrl: String(effectiveProviderConfig.baseUrl || '').trim() || '（空）',
+          promptId,
+          说明:
+            '若此处 baseUrl 与本机 Comfy 启动地址（含端口）不一致，你看到的 got prompt / 耗时不代表本次 Flowid 提交；云端/反代时应在对应服务器上看日志。',
+        })
+      }
       options?.onProgress?.({ percent: 9, label: '任务已提交，等待执行…' })
       /** 与 `isHistoryEntryReady` 对齐：图/视频必须等 SaveImage 等真正写入，避免仅节点 14 的 `text: ["1371x765"]` + completed 误判 */
       const historyResultExpectation: ComfyHistoryResultExpectation =
@@ -3682,10 +4446,25 @@ export function useWorkflowIntegration() {
           }
         }
       }
-      const audioUrl = pickComfyResultAudioUrl({
+      let audioUrl = await pickComfyResultAudioUrlAsync({
         providerConfig: effectiveProviderConfig,
         historyEntry,
+        excludeFilenames: uploadedInputFilenameSet,
       })
+      if (!audioUrl && (nodeKind === 'audio' || nodeKind === 'music')) {
+        const recovered = await refetchHistoryEntryWithAudioOutput({
+          providerConfig: effectiveProviderConfig,
+          promptId,
+        })
+        if (recovered) {
+          historyEntry = recovered
+          audioUrl = await pickComfyResultAudioUrlAsync({
+            providerConfig: effectiveProviderConfig,
+            historyEntry: recovered,
+            excludeFilenames: uploadedInputFilenameSet,
+          })
+        }
+      }
       /**
        * 仅配音/音乐节点需要「全量历史里找最近音频」兜底；图/视频节点不要扫，
        * 否则历史条目极多时 `fetch(/history)` 会长时间阻塞，界面卡在队列阶段的进度（如 48%）。
@@ -3700,6 +4479,7 @@ export function useWorkflowIntegration() {
         (shouldScanHistoryForAudioFallback
           ? await pickLatestComfyAudioUrlFromHistory({
               providerConfig: effectiveProviderConfig,
+              excludeFilenames: uploadedInputFilenameSet,
             })
           : null)
       /**
@@ -3716,6 +4496,7 @@ export function useWorkflowIntegration() {
       const verifiedAudioUrl = await verifyComfyMediaUrl({
         providerConfig: effectiveProviderConfig,
         mediaUrl: fallbackAudioUrl,
+        timeoutMs: nodeKind === 'audio' || nodeKind === 'music' ? 25_000 : 10_000,
       })
       const verifiedMediaUrl = await verifyComfyMediaUrl({
         providerConfig: effectiveProviderConfig,
@@ -3728,7 +4509,11 @@ export function useWorkflowIntegration() {
       const effectiveMediaUrl =
         verifiedMediaUrl ||
         (nodeKind === 'image' || nodeKind === 'video' ? fallbackMediaUrl : null)
-      const finalResultUrl = verifiedAudioUrl || effectiveMediaUrl
+      /** 配音/音乐：与图/视频一致，校验失败（CORS/超时）时仍回填 history 解析出的 URL，交由播放器/桌面镜像处理。 */
+      const effectiveAudioUrl =
+        verifiedAudioUrl ||
+        ((nodeKind === 'audio' || nodeKind === 'music') && fallbackAudioUrl ? fallbackAudioUrl : null)
+      const finalResultUrl = effectiveAudioUrl || effectiveMediaUrl
       if (!finalResultUrl) {
         const issue = extractComfyValidationIssue(historyEntry)
         if (issue) {
@@ -3756,6 +4541,7 @@ export function useWorkflowIntegration() {
           historyEntry,
           allowFullEntryFallback: true,
           excludeFilenames: uploadedInputFilenameSet,
+          omitStaticRasterFilenamesForVideoStrip: nodeKind === 'video',
         })
         multi = multi.filter((u) => !isInputEchoPreview(u))
         if (!multi.length && effectiveMediaUrl) {
@@ -3765,7 +4551,7 @@ export function useWorkflowIntegration() {
       }
       return {
         previewUrl: effectiveMediaUrl,
-        audioUrl: verifiedAudioUrl,
+        audioUrl: effectiveAudioUrl,
         resultUrl: finalResultUrl,
         textResult,
         historyEntry,

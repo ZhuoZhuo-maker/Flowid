@@ -33,11 +33,12 @@ export function TextNode({
       >
         {isEditingBody ? (
           <textarea
-            className="studio-textarea studio-cardEmpty studio-cardEmpty--text studio-cardEmpty--editor nodrag nowheel"
+            className="studio-textarea studio-cardEmpty studio-cardEmpty--text studio-cardEmpty--editor nodrag nopan nowheel"
             rows={4}
             autoFocus
             value={data.body}
             placeholder=""
+            onWheel={(e) => e.stopPropagation()}
             onChange={(e) => updateNodeData(id, { body: e.target.value, kind: 'text' })}
             onBlur={() => setIsEditingBody(false)}
             onKeyDown={(event) => {
@@ -48,7 +49,8 @@ export function TextNode({
           />
         ) : (
           <div
-            className={`studio-cardEmpty studio-cardEmpty--text studio-cardEmpty--preview ${data.body?.trim() ? '' : 'studio-cardEmpty--placeholder'}`}
+            className={`studio-cardEmpty studio-cardEmpty--text studio-cardEmpty--preview nodrag nopan nowheel ${data.body?.trim() ? '' : 'studio-cardEmpty--placeholder'}`}
+            onWheel={(e) => e.stopPropagation()}
             onDoubleClick={() => setIsEditingBody(true)}
             title="双击编辑"
           >

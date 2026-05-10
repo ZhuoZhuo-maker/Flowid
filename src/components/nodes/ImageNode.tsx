@@ -176,6 +176,7 @@ export function ImageNode({
           src: restored || URL.createObjectURL(file),
           srcAssetId,
           srcFileName: file.name,
+          srcDiskPath: undefined,
           mattingPoints: [],
           mattingRefWidth: undefined,
           mattingRefHeight: undefined,
@@ -185,6 +186,7 @@ export function ImageNode({
           kind: 'image',
           src: URL.createObjectURL(file),
           srcFileName: file.name,
+          srcDiskPath: undefined,
           mattingPoints: [],
           mattingRefWidth: undefined,
           mattingRefHeight: undefined,
@@ -229,6 +231,7 @@ export function ImageNode({
         updateNodeData(id, {
           kind: 'image',
           src: material.src,
+          srcDiskPath: undefined,
           mattingPoints: [],
           mattingRefWidth: undefined,
           mattingRefHeight: undefined,
