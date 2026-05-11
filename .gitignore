@@ -17,6 +17,8 @@ deliverables
 dist-ssr
 *.local
 .env
+# 本地打包用的后端地址（勿提交）
+pack-flowid-user-config.bat
 data/*.db
 data/*.db-shm
 data/*.db-wal

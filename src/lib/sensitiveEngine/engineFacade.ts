@@ -40,7 +40,8 @@ function buildFullEngineWhenIdle(words: readonly SensitiveWord[]): Promise<void>
       requestIdleCallback?: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number
     }
     if (typeof g.requestIdleCallback === 'function') {
-      g.requestIdleCallback(() => go(), { timeout: 600 })
+      // 词表较大时 AC 构建仍可能 >600ms；略放宽 timeout，减少「点了发送却迟迟无反应」的体感
+      g.requestIdleCallback(() => go(), { timeout: 1800 })
     } else {
       window.setTimeout(go, 0)
     }

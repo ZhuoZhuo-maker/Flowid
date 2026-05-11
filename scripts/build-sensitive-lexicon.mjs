@@ -26,11 +26,13 @@ const SOURCES = [
   { path: '%E8%89%B2%E6%83%85%E7%B1%BB%E5%9E%8B.txt', level: 'block', category: 'porn' },
   { path: '%E6%B6%89%E6%9E%AA%E6%B6%89%E7%88%86.txt', level: 'block', category: 'violence' },
   { path: '%E8%B4%AA%E8%85%90%E8%AF%8D%E5%BA%93.txt', level: 'block', category: 'illegal' },
-  { path: '%E5%85%B6%E4%BB%96%E8%AF%8D%E5%BA%93.txt', level: 'block', category: 'other' },
-  { path: '%E8%A1%A5%E5%85%85%E8%AF%8D%E5%BA%93.txt', level: 'block', category: 'illegal' },
+  // 以下两表体量极大、长尾误伤多，且会拖慢 AC 构建；若需更严可取消注释后重新 gen:sensitive-lexicon
+  // { path: '%E5%85%B6%E4%BB%96%E8%AF%8D%E5%BA%93.txt', level: 'block', category: 'other' },
+  // { path: '%E8%A1%A5%E5%85%85%E8%AF%8D%E5%BA%93.txt', level: 'block', category: 'illegal' },
 ]
 
-const MAX_TOTAL = 14_000
+/** 开源拉取上限（与 build:lexicon 阶段 FLOWID_LEXICON_MAX 二选一配合，先减源再裁剪） */
+const MAX_TOTAL = 6000
 const MIN_LEN = 2
 const MAX_LEN = 28
 

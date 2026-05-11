@@ -78,9 +78,13 @@
     "vitest": "^3.2.4",
     "wait-on": "^9.0.5"
   },
+  "flowidDesktop": {
+    "disableAutoUpdate": true,
+    "deliverablesLabel": "内测"
+  },
   "build": {
     "appId": "com.flowid.desktop",
-    "productName": "Flowid",
+    "productName": "Flowid（内测版）",
     "directories": {
       "buildResources": "build",
       "output": "release"
@@ -104,13 +108,9 @@
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
       "createDesktopShortcut": true,
-      "shortcutName": "Flowid",
+      "shortcutName": "Flowid（内测版）",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico"
-    },
-    "publish": {
-      "provider": "generic",
-      "url": "https://flowid-updates-1348874420.cos.ap-chengdu.myqcloud.com/flowid/win/"
     }
   }
 }

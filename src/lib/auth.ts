@@ -13,6 +13,13 @@ export type AuthSession = {
 const AUTH_SESSION_STORAGE_KEY = 'flowid.auth.session.v1'
 const AUTH_API_CONFIG_STORAGE_KEY = 'flowid.auth.api.config.v1'
 
+function buildTimePublicServerOrigin(): string {
+  const u = import.meta.env.VITE_FLOWID_PUBLIC_SERVER_ORIGIN
+  return String(u || '')
+    .trim()
+    .replace(/\/+$/, '')
+}
+
 export type AuthApiConfig = {
   baseUrl: string
 }
@@ -50,14 +57,16 @@ export function clearAuthSession(): void {
  * 读取认证服务配置。
  */
 export function loadAuthApiConfig(): AuthApiConfig {
+  const fallback = buildTimePublicServerOrigin()
   try {
     const raw = localStorage.getItem(AUTH_API_CONFIG_STORAGE_KEY)
-    if (!raw) return { baseUrl: '' }
+    if (!raw) return { baseUrl: fallback }
     const parsed = JSON.parse(raw) as AuthApiConfig
-    if (!parsed || typeof parsed !== 'object') return { baseUrl: '' }
-    return { baseUrl: String(parsed.baseUrl || '').trim() }
+    if (!parsed || typeof parsed !== 'object') return { baseUrl: fallback }
+    const b = String(parsed.baseUrl || '').trim()
+    return { baseUrl: b || fallback }
   } catch {
-    return { baseUrl: '' }
+    return { baseUrl: fallback }
   }
 }
 

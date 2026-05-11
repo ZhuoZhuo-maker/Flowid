@@ -49,44 +49,10 @@ export function makePresetThumbDataUri(seed: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
 }
 
-export const PRESET_TEMPLATE_MOCKS: PresetTemplate[] = [
-  {
-    id: 't1',
-    name: '极简流线型建筑',
-    category: '建筑',
-    image:
-      'https://images.unsplash.com/photo-1506146332389-18140ed74d5a?q=80&w=2564&auto=format&fit=crop',
-    description: '采用参数化设计风格，强调流动感与现代性。',
-    tier: 'free',
-  },
-  {
-    id: 't2',
-    name: '赛博朋克工业组件',
-    category: '工业',
-    image:
-      'https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=2564&auto=format&fit=crop',
-    description: '硬表面建模参考，包含复杂的机械刻线与发光原件。',
-    tier: 'pro',
-  },
-  {
-    id: 't3',
-    name: '超现实有机生命体',
-    category: '角色',
-    image:
-      'https://images.unsplash.com/photo-1614728263952-84ea206f99b6?q=80&w=2564&auto=format&fit=crop',
-    description: '结合生物形态与几何结构的奇幻物种设计。',
-    tier: 'pro',
-  },
-  {
-    id: 't4',
-    name: '未来城市景观',
-    category: '景观',
-    image:
-      'https://images.unsplash.com/photo-1605142127394-ba5f403063f1?q=80&w=2564&auto=format&fit=crop',
-    description: '多层级城市架构，光影效果针对夜景极致优化。',
-    tier: 'free',
-  },
-]
+/** 预设模板列表仅从后端拉取，不再使用本地占位假数据 */
+export type PresetTemplateCatalogResult =
+  | { ok: true; items: PresetTemplate[] }
+  | { ok: false; reason: 'no_base_url' | 'request_failed'; message: string }
 
 export function buildPresetTemplateCategoryTabs(
   templates: PresetTemplate[],
@@ -113,11 +79,18 @@ export function filterPresetTemplatesByCategory(
   return byCat
 }
 
-export async function fetchPresetTemplatesFromServer(): Promise<{ ok: true; items: PresetTemplate[] } | null> {
+export async function fetchPresetTemplatesFromServer(): Promise<PresetTemplateCatalogResult> {
   const base = String(loadLicenseServerConfig().baseUrl || '')
     .trim()
     .replace(/\/+$/, '')
-  if (!base) return null
+  if (!base) {
+    return {
+      ok: false,
+      reason: 'no_base_url',
+      message:
+        '未配置授权服务地址，无法加载预设模板。请在「设置 → 授权」中填写后端根地址（与浏览器能打开 /healthz 的地址一致）；使用内测安装包时通常已内置，若仍出现本提示可联系管理员。',
+    }
+  }
   const snap = loadLicenseSnapshotV2()
   const headers: Record<string, string> = {}
   if (snap?.licenseCode && snap?.machineId) {
@@ -131,7 +104,7 @@ export async function fetchPresetTemplatesFromServer(): Promise<{ ok: true; item
       message?: string
     }
     if (!res.ok) {
-      throw new Error(String(json.message || `拉取模板列表失败：${res.status}`))
+      throw new Error(String(json.message || `拉取模板列表失败：HTTP ${res.status}`))
     }
     const groups = Array.isArray(json.groups) ? json.groups : []
     const items: PresetTemplate[] = []
@@ -155,8 +128,13 @@ export async function fetchPresetTemplatesFromServer(): Promise<{ ok: true; item
       }
     }
     return { ok: true, items }
-  } catch {
-    return null
+  } catch (e) {
+    const msg = String(e instanceof Error ? e.message : e || '未知错误')
+    return {
+      ok: false,
+      reason: 'request_failed',
+      message: `无法从后端获取预设模板列表（${msg}）。请检查网络、后端是否运行，以及 GET ${base}/templates/groups 是否可访问。`,
+    }
   }
 }
 

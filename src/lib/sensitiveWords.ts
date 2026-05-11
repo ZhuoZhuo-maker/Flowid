@@ -14,16 +14,10 @@ import {
   replaceSensitiveWordsSync,
 } from './sensitiveEngine/engineFacade'
 import type { SensitiveWord } from './sensitiveEngine/types'
-import { isSensitiveWordFilterEnabled } from './sensitiveWordFilterSettings'
 
 export type { SensitiveCategory, SensitiveLevel, SensitiveWord } from './sensitiveEngine/types'
 
 export { awaitSensitiveLexiconSettled, ensureLexiconLoading, isLexiconReady } from './sensitiveEngine/engineFacade'
-export {
-  isSensitiveWordFilterEnabled,
-  setSensitiveWordFilterEnabled,
-  SENSITIVE_FILTER_CHANGED_EVENT,
-} from './sensitiveWordFilterSettings'
 
 /**
  * 首包内置核心词（与 `public/lexicon/sensitive.json` 合并前的 fast path 子集）。
@@ -38,21 +32,11 @@ export function checkSensitiveWords(text: string): {
   blockedCount: number
   warningCount: number
 } {
-  if (!isSensitiveWordFilterEnabled()) {
-    return {
-      hasSensitive: false,
-      words: [],
-      level: 'clean',
-      blockedCount: 0,
-      warningCount: 0,
-    }
-  }
   ensureLexiconLoading()
   return checkSensitiveWordsSync(text)
 }
 
 export function replaceSensitiveWords(text: string, replaceChar: string = '*'): string {
-  if (!isSensitiveWordFilterEnabled()) return text
   ensureLexiconLoading()
   return replaceSensitiveWordsSync(text, replaceChar)
 }
@@ -62,7 +46,6 @@ export function replaceSensitiveWordsByLevel(
   levels: Array<'block' | 'warning'>,
   replaceChar: string = '*',
 ): string {
-  if (!isSensitiveWordFilterEnabled()) return text
   ensureLexiconLoading()
   return replaceSensitiveWordsByLevelSync(text, levels, replaceChar)
 }

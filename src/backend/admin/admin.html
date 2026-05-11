@@ -555,7 +555,7 @@
             </div>
           </div>
 
-          <a class="pts-card" href="http://127.0.0.1:3721/admin.html" target="_blank" rel="noopener">
+          <a class="pts-card" id="flowidAuthConsoleCard" href="/admin.html" target="_blank" rel="noopener">
             <div class="pts-card__head">
               <div class="pts-card__icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
@@ -564,7 +564,10 @@
               </div>
               <h3 class="pts-card__title">Auth 服务后台（3721）</h3>
             </div>
-            <p class="pts-card__desc">签发 / 续期 / 模板与协议等。需单独运行 <code>npm run auth:dev</code>。</p>
+            <p class="pts-card__desc">
+              签发 / 续期 / 模板与协议等。需运行 <code>npm run auth:dev</code>（或与 Vite 同启的 <code>npm run dev</code>）。经 Vite
+              打开本页时会自动跳到 Auth 端口。
+            </p>
             <span class="pts-card__go">进入</span>
           </a>
         </div>
@@ -627,6 +630,7 @@
     </div>
 
     <script src="/pts/admin/static/pts-admin-token.js"></script>
+    <script src="/pts/admin/static/pts-auth-console-link.js"></script>
     <script>
       const apiBase = location.origin + '/pts'
       let listPage = 1

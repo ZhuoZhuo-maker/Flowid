@@ -7,6 +7,14 @@ const { autoUpdater } = require('electron-updater')
 
 const isDev = !app.isPackaged
 
+/** package.json 中 flowidDesktop.disableAutoUpdate：内测手动发包装关闭自动更新 */
+let flowidDesktopFlags = {}
+try {
+  flowidDesktopFlags = require(path.join(__dirname, '..', 'package.json')).flowidDesktop || {}
+} catch {
+  flowidDesktopFlags = {}
+}
+
 // 将 Chromium 磁盘缓存放到 userData 下，减少 Windows 上「Unable to move the cache / 拒绝访问」与多实例争用默认目录的问题。
 try {
   const fsSync = require('node:fs')
@@ -199,6 +207,7 @@ function createMainWindow() {
  */
 function setupAutoUpdate() {
   if (isDev) return
+  if (flowidDesktopFlags.disableAutoUpdate) return
   // 未配置更新源/未生成 app-update.yml 时，electron-updater 会报 ENOENT，影响首启体验；此时直接跳过。
   try {
     const updateYml = path.join(process.resourcesPath || '', 'app-update.yml')
@@ -211,11 +220,17 @@ function setupAutoUpdate() {
   autoUpdater.autoInstallOnAppQuit = false
 
   autoUpdater.on('error', (error) => {
+    const msg = String(error?.message || error || '')
+    // 未部署更新源（如 COS 上无 latest.yml）时常见 404；手动分发安装包不必打扰用户。
+    if (/404|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|HttpError/i.test(msg)) {
+      console.warn('[autoUpdater]', msg)
+      return
+    }
     dialog.showMessageBox({
       type: 'warning',
       title: '自动更新提示',
       message: '检测更新失败，可稍后重试。',
-      detail: String(error?.message || error || '未知错误'),
+      detail: msg || '未知错误',
     })
   })
 
@@ -720,6 +735,7 @@ ipcMain.handle('flowid:fs-ensure-subdirectory', async (_event, basePath, childNa
 
 ipcMain.handle('desktop:check-for-updates', async () => {
   if (isDev) return { ok: false, reason: 'dev-mode' }
+  if (flowidDesktopFlags.disableAutoUpdate) return { ok: false, reason: 'auto-update-disabled' }
   const result = await autoUpdater.checkForUpdates()
   return { ok: true, hasUpdate: Boolean(result?.updateInfo?.version) }
 })

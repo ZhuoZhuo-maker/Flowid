@@ -42,6 +42,45 @@ export async function attachPointsRoutes(app, opts = {}) {
     ).trim()
     const proMembershipNodeKinds = String(process.env.POINTS_PRO_MEMBERSHIP_NODE_KINDS || '').trim()
 
+    r.get('/api/public/auth-console', (req, res) => {
+      res.set('Cache-Control', 'no-store')
+      const explicit = String(process.env.AUTH_CONSOLE_PUBLIC_URL || '').trim()
+      if (explicit) {
+        return res.json({ authConsoleUrl: explicit, source: 'env', authListenPort: null })
+      }
+      if (process.env.FLOWID_POINTS_STANDALONE === '1') {
+        return res.json({
+          authConsoleUrl: null,
+          source: 'standalone',
+          authListenPort: null,
+          message:
+            '当前为独立积分服务（npm run points:dev），本进程没有 Auth 控制台。请另起 npm run auth:dev，或设置环境变量 AUTH_CONSOLE_PUBLIC_URL 为可访问的完整地址（以 /admin.html 结尾）。',
+        })
+      }
+      const authListenPort = Number(process.env.AUTH_SERVER_PORT || 3721) || 3721
+      const host = String(req.get('x-forwarded-host') || req.get('host') || '').trim()
+      const protoHeader = String(req.get('x-forwarded-proto') || '')
+        .split(',')[0]
+        .trim()
+      const proto =
+        protoHeader ||
+        (String(req.protocol || 'http').replace(/:$/, '').endsWith('s') ? 'https' : 'http')
+      if (host) {
+        return res.json({
+          authConsoleUrl: `${proto}://${host}/admin.html`,
+          source: 'colocated',
+          authListenPort,
+          sameHost: true,
+        })
+      }
+      return res.json({
+        authConsoleUrl: `http://127.0.0.1:${authListenPort}/admin.html`,
+        source: 'colocated',
+        authListenPort,
+        sameHost: false,
+      })
+    })
+
     r.use('/api/license', createLicenseRouter(db))
     r.use(
       '/api/points',

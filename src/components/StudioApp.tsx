@@ -290,6 +290,7 @@ import {
   ICON_NODE_TEXT,
   ICON_NODE_VIDEO,
 } from '../assets/studioIcons'
+import { AI_ASSISTANT_AVATAR_MEDIA_URLS } from '../assets/ai-assistant/avatarWebmUrls'
 
 const nodeTypes = {
   text: TextNode,
@@ -313,16 +314,7 @@ function refChipUseImagePreview(url: string): boolean {
   return /\.(png|jpe?g|webp|gif|bmp|svg)(\?|#|$)/i.test(String(url || '').trim())
 }
 
-const AI_ASSISTANT_AVATAR_MEDIA = {
-  listening: '/src/assets/ai-assistant/倾听 listening（用户输入中）.webm',
-  thinking: '/src/assets/ai-assistant/思考 thinking（请求模型中）.webm',
-  acting: '/src/assets/ai-assistant/执行 acting（调用工具中）.webm',
-  talking: '/src/assets/ai-assistant/说话 talking（回复中）.webm',
-  success: '/src/assets/ai-assistant/成功 success.webm',
-  error: '/src/assets/ai-assistant/失败报错 error_但不吓人.webm',
-} as const
-
-type AssistantAvatarState = keyof typeof AI_ASSISTANT_AVATAR_MEDIA
+type AssistantAvatarState = keyof typeof AI_ASSISTANT_AVATAR_MEDIA_URLS
 type AvatarDockPointerAction =
   | {
       mode: 'drag'
@@ -1984,6 +1976,22 @@ const StudioTdRefRoleModalPortal = memo(function StudioTdRefRoleModalPortal(prop
 })
 
 /**
+ * 仅节点 / 连线 id 集合，用于判断是否为「纯位移」拖拽。
+ * `nodeCanvasDragActiveRef` 为 true 时仍要在加删节点后写入撤销栈，否则 Ctrl+Z 无条目可退。
+ */
+function canvasSnapshotTopologyKey(snapshot: Omit<ProjectSnapshot, 'version' | 'name'>): string {
+  const nk = snapshot.nodes
+    .map((n) => n.id)
+    .sort()
+    .join('\0')
+  const ek = snapshot.edges
+    .map((e) => e.id)
+    .sort()
+    .join('\0')
+  return `${nk}\n${ek}`
+}
+
+/**
  * 画布与顶栏、节点面板的组合体（需在 ReactFlowProvider 内）。
  */
 function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
@@ -2503,6 +2511,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const viewport = useViewport()
   /** 覆盖框选命中后，避免 setNodes 触发 selectionChange 递归循环 */
   const selectionOverrideInFlightRef = useRef(false)
+  /** 仅在为 true 时用 userSelectionRect 覆盖选中；松手后须为 false，否则 Ctrl+点无法从多选里取消单个节点 */
+  const isMarqueeGestureActiveRef = useRef(false)
 
   useEffect(() => {
     return subscribePointsTaskFailure((detail) => {
@@ -6125,9 +6135,16 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       return
     }
     if (isRestoringHistoryRef.current) return
-    if (nodeCanvasDragActiveRef.current) return
-    const next = cloneCanvasSnapshot(getCanvasSnapshot())
     const last = undoStackRef.current[undoStackRef.current.length - 1]
+    if (nodeCanvasDragActiveRef.current && last) {
+      const liveTopo = canvasSnapshotTopologyKey({
+        nodes,
+        edges,
+        viewport: last.viewport,
+      })
+      if (canvasSnapshotTopologyKey(last) === liveTopo) return
+    }
+    const next = cloneCanvasSnapshot(getCanvasSnapshot())
     if (JSON.stringify(last) === JSON.stringify(next)) return
     undoStackRef.current.push(next)
     if (undoStackRef.current.length > 100) {
@@ -6630,6 +6647,19 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
    */
   const onNodeDragStart = useCallback((event: DomMouseEvent | ReactMouseEvent, node: Node<StudioNodeData>) => {
     nodeCanvasDragActiveRef.current = true
+    /**
+     * 极少数情况下 React Flow 不会触发 onNodeDragStop（失焦、异常中断等），
+     * `nodeCanvasDragActiveRef` 会一直为 true，导致后续加节点无法压入撤销栈。用 pointer 结束兜底解锁。
+     */
+    const failSafeEnd = () => {
+      queueMicrotask(() => {
+        if (!nodeCanvasDragActiveRef.current) return
+        nodeCanvasDragActiveRef.current = false
+        setPostDragUndoTick((n) => n + 1)
+      })
+    }
+    window.addEventListener('pointerup', failSafeEnd, { capture: true, once: true })
+    window.addEventListener('pointercancel', failSafeEnd, { capture: true, once: true })
     if (!event.altKey) {
       altDragCloneRef.current = {
         active: false,
@@ -6814,9 +6844,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
 
       /**
        * 关键修复：React Flow 在某些环境下框选命中会漂移，导致“框一点选一大片”。
-       * 若当前存在 userSelectionRect，则以我们自己换算的 flowRect + 节点 bbox 重新计算命中结果并覆盖 selected。
+       * 仅在**正在拖框**时用 userSelectionRect 覆盖；框选结束后 store 里 rect 可能仍在，
+       * 若继续覆盖会把 Ctrl+点击（从多选里去掉某个节点）立刻打回成整框命中结果。
        */
-      if (rect && root) {
+      if (rect && root && isMarqueeGestureActiveRef.current) {
         const bounds = root.getBoundingClientRect()
         const p1 = screenToFlowPosition({ x: bounds.left + rect.x, y: bounds.top + rect.y })
         const p2 = screenToFlowPosition({
@@ -6904,6 +6935,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
    */
   const onSelectionStart = useCallback(
     (event: ReactMouseEvent) => {
+      isMarqueeGestureActiveRef.current = true
       const native = event.nativeEvent as MouseEvent
       // 注意：部分键盘右 Alt(AltGr) 会以 Ctrl+Alt 的形式上报；
       // 若把 ctrlKey 直接当作“追加多选”，会导致按了 Alt 后框选不清空旧选区。
@@ -6919,6 +6951,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     [setEdges, setNodes],
   )
 
+  const onSelectionEnd = useCallback(() => {
+    isMarqueeGestureActiveRef.current = false
+  }, [])
+
   /**
    * 兜底：按住「框选键」（默认 Shift，可在设置改为 Alt）在画布空白处准备框选时，先清空旧选区（除非 Ctrl/Meta 追加）。
    * 某些情况下（例如命中 RF 的 selection-rect 层）不会触发 `onSelectionStart`，导致旧选区残留。
@@ -6933,6 +6969,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       if (!nativeHasMarqueeModifier(native, marqueeKey)) return
       const isAdditive = Boolean((native?.ctrlKey && !native?.altKey) || native?.metaKey)
       if (isAdditive) return
+      isMarqueeGestureActiveRef.current = true
       setNodes((prev) =>
         prev.some((n) => n.selected) ? prev.map((n) => (n.selected ? { ...n, selected: false } : n)) : prev,
       )
@@ -6942,6 +6979,173 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     },
     [setEdges, setNodes, shortcuts.bindings.marqueeSelect],
   )
+
+  /**
+   * 多选时 RF 会在节点上方叠一层 `react-flow__nodesselection-rect`，普通点击落在该层，
+   * `onNodeClick` / 内部多选切换拿不到事件，Ctrl+点击无法从多选里去掉某个节点。
+   * 在捕获阶段：若 Ctrl/Cmd + 点中该层，则用 elementsFromPoint 跳过该层命中下方节点并手动切换 selected。
+   *
+   * 注意：仅拦 `pointerdown` 不够——鼠标仍会派发 `mousedown`，会传到该层上的 d3-drag，
+   * 可能触发内部 `unselectNodesAndEdges` 等逻辑，表现成「一点击整组选区全被取消」。
+   * 因此需同步拦截 `mousedown`，并吞掉紧随的 `click`。
+   */
+  const additiveChromeGestureRef = useRef<{
+    t: number
+    x: number
+    y: number
+    toggled: boolean
+    swallowClickUntil: number
+  } | null>(null)
+
+  useEffect(() => {
+    const resolveRawIdUnderNodesSelection = (clientX: number, clientY: number): string | null => {
+      const stack = document.elementsFromPoint(clientX, clientY)
+      for (const el of stack) {
+        if (!(el instanceof HTMLElement)) continue
+        if (
+          el.classList.contains('react-flow__nodesselection') ||
+          el.classList.contains('react-flow__nodesselection-rect')
+        ) {
+          continue
+        }
+        const hit = el.closest('.react-flow__node[data-id]')
+        if (hit instanceof HTMLElement) {
+          return hit.getAttribute('data-id')?.trim() || null
+        }
+      }
+      return null
+    }
+
+    const shouldHandleChromeAdditive = (e: PointerEvent | MouseEvent): boolean => {
+      const root = reactFlowRootRef.current
+      if (!root) return false
+      const t = e.target
+      if (!(t instanceof Node) || !root.contains(t)) return false
+      if (e.button !== 0) return false
+      if (!e.metaKey && !(e.ctrlKey && !e.altKey)) return false
+      const path = e.composedPath()
+      const hitChrome = path.some(
+        (el): el is HTMLElement =>
+          el instanceof HTMLElement &&
+          (el.classList.contains('react-flow__nodesselection') ||
+            el.classList.contains('react-flow__nodesselection-rect')),
+      )
+      if (!hitChrome) return false
+      if (e.target instanceof HTMLElement) {
+        const deep = e.target.closest('button, input, textarea, select, a[href]')
+        if (deep && root.contains(deep)) return false
+      }
+      return true
+    }
+
+    const blockEvent = (e: Event) => {
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+    }
+
+    const onPointerDownCapture = (e: PointerEvent) => {
+      if (!shouldHandleChromeAdditive(e)) return
+      const rawId = resolveRawIdUnderNodesSelection(e.clientX, e.clientY)
+      const cur = rawId ? nodesRef.current.find((n) => n.id === rawId) : null
+      if (rawId && cur && cur.type !== 'ghost' && cur.type !== 'group') {
+        blockEvent(e)
+        const now = performance.now()
+        additiveChromeGestureRef.current = {
+          t: now,
+          x: e.clientX,
+          y: e.clientY,
+          toggled: true,
+          swallowClickUntil: now + 500,
+        }
+        setNodes((prev) => {
+          const next = prev.map((n) => (n.id === rawId ? { ...n, selected: !n.selected } : n))
+          const eligible = next.filter((n) => n.selected && n.type !== 'ghost' && n.type !== 'group')
+          queueMicrotask(() => {
+            if (eligible.length === 1) {
+              setSelectedNodeId(eligible[0]!.id)
+            } else {
+              setSelectedNodeId(null)
+            }
+          })
+          return next
+        })
+        return
+      }
+      /** 点在多选层空白处：仍阻止穿透到 d3，避免误触整组逻辑 */
+      blockEvent(e)
+      additiveChromeGestureRef.current = {
+        t: performance.now(),
+        x: e.clientX,
+        y: e.clientY,
+        toggled: false,
+        swallowClickUntil: performance.now() + 500,
+      }
+    }
+
+    const onMouseDownCapture = (e: MouseEvent) => {
+      if (!shouldHandleChromeAdditive(e)) return
+      const g = additiveChromeGestureRef.current
+      const now = performance.now()
+      if (
+        g &&
+        g.toggled &&
+        now - g.t < 200 &&
+        Math.hypot(e.clientX - g.x, e.clientY - g.y) < 12
+      ) {
+        blockEvent(e)
+        return
+      }
+      const rawId = resolveRawIdUnderNodesSelection(e.clientX, e.clientY)
+      const cur = rawId ? nodesRef.current.find((n) => n.id === rawId) : null
+      if (rawId && cur && cur.type !== 'ghost' && cur.type !== 'group') {
+        blockEvent(e)
+        additiveChromeGestureRef.current = {
+          t: now,
+          x: e.clientX,
+          y: e.clientY,
+          toggled: true,
+          swallowClickUntil: now + 500,
+        }
+        setNodes((prev) => {
+          const next = prev.map((n) => (n.id === rawId ? { ...n, selected: !n.selected } : n))
+          const eligible = next.filter((n) => n.selected && n.type !== 'ghost' && n.type !== 'group')
+          queueMicrotask(() => {
+            if (eligible.length === 1) {
+              setSelectedNodeId(eligible[0]!.id)
+            } else {
+              setSelectedNodeId(null)
+            }
+          })
+          return next
+        })
+        return
+      }
+      blockEvent(e)
+    }
+
+    const onClickCapture = (e: MouseEvent) => {
+      const g = additiveChromeGestureRef.current
+      if (!g || e.button !== 0) return
+      if (performance.now() > g.swallowClickUntil) {
+        additiveChromeGestureRef.current = null
+        return
+      }
+      if (Math.hypot(e.clientX - g.x, e.clientY - g.y) > 14) return
+      const root = reactFlowRootRef.current
+      if (!root || !(e.target instanceof Node) || !root.contains(e.target)) return
+      blockEvent(e)
+    }
+
+    window.addEventListener('pointerdown', onPointerDownCapture, true)
+    window.addEventListener('mousedown', onMouseDownCapture, true)
+    window.addEventListener('click', onClickCapture, true)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDownCapture, true)
+      window.removeEventListener('mousedown', onMouseDownCapture, true)
+      window.removeEventListener('click', onClickCapture, true)
+    }
+  }, [setNodes, setSelectedNodeId])
 
   /**
    * 从字符串中提取「分镜」编号（支持 `分镜12`、`分镜5-1` 等）。
@@ -9925,7 +10129,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       }),
     [agentWorkspaceSending, aiBusy, aiMessages],
   )
-  const dockAvatarMedia = AI_ASSISTANT_AVATAR_MEDIA[dockAvatarState]
+  const dockAvatarMedia = AI_ASSISTANT_AVATAR_MEDIA_URLS[dockAvatarState]
   const aiAssistantDockStyle = useMemo(() => {
     const panelWidth = 360
     const panelHeight = 520
@@ -11509,6 +11713,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             onDrop={onCanvasDrop}
             onSelectionChange={onSelectionChange}
             onSelectionStart={onSelectionStart}
+            onSelectionEnd={onSelectionEnd}
             onMouseDown={onCanvasMouseDown}
             onPaneClick={onPaneClick}
             onPaneContextMenu={onPaneContextMenu}

@@ -424,7 +424,7 @@ export function LicenseActivationPanel({ active, layout, onClose }: LicenseActiv
           role="status"
           className="flex items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-[13px] text-amber-100/95"
         >
-          <span>积分余额不足 100，即将用尽，请购买新授权码</span>
+          <span>积分余额不足 100，即将用尽，请加交流群或联系管理员</span>
           <button type="button" className={LA_BTN_COMPACT} onClick={() => setBalanceAlertDismissed(true)} aria-label="关闭提示">
             关闭
           </button>
@@ -468,7 +468,7 @@ export function LicenseActivationPanel({ active, layout, onClose }: LicenseActiv
         <div className="space-y-5">
           <div className={`${LA_CARD} overflow-hidden p-2`}>
             <div className="border-b border-white/5 p-6">
-              <div className="text-[15px] font-black uppercase tracking-[0.2em] text-white/70">购买与激活</div>
+              <div className="text-[15px] font-black uppercase tracking-[0.2em] text-white/70">授权与激活</div>
             </div>
             <div className="space-y-5 p-6">
               <p className="m-0 text-[13px] leading-relaxed text-white/25">
@@ -477,19 +477,15 @@ export function LicenseActivationPanel({ active, layout, onClose }: LicenseActiv
 
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
                 <div className="w-24 shrink-0 px-1">
-                  <div className="text-[14px] font-black uppercase text-white/80">购买</div>
-                  <div className="font-mono text-[11px] uppercase text-white/25">link</div>
+                  <div className="text-[14px] font-black uppercase text-white/80">交流群</div>
+                  <div className="font-mono text-[11px] uppercase text-white/25">qq</div>
                 </div>
                 <div className="min-w-0 flex-1 sm:text-left">
-                  {String(cfg.purchaseUrl || '').trim() ? (
-                    <a
-                      href={String(cfg.purchaseUrl || '').trim()}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="break-all text-[14px] font-bold text-orange-400/95 underline-offset-4 hover:text-orange-300 hover:underline"
-                    >
-                      {String(cfg.purchaseUrl || '').trim()}
-                    </a>
+                  {String(cfg.exchangeGroupQq || '').trim() ? (
+                    <span className="break-all text-[14px] font-bold text-white/70">
+                      <span className="font-sans text-white/55">QQ群：</span>
+                      <span className="font-mono">{String(cfg.exchangeGroupQq || '').trim()}</span>
+                    </span>
                   ) : (
                     <span className="text-[14px] text-white/25">-</span>
                   )}

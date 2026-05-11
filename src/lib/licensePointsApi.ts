@@ -2,7 +2,7 @@
  * 调用积分 HTTP 服务：与 Auth 同机时默认 `http://127.0.0.1:3721/pts`（前缀 `/pts`），可通过 `VITE_LICENSE_API_URL` 覆盖。
  */
 const baseUrl = (): string => {
-  const u = typeof import.meta !== 'undefined' && import.meta.env?.VITE_LICENSE_API_URL
+  const u = import.meta.env.VITE_LICENSE_API_URL
   return String(u || 'http://127.0.0.1:3721/pts').replace(/\/+$/, '')
 }
 

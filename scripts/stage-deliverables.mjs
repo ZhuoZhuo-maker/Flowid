@@ -11,8 +11,10 @@ const root = path.resolve(__dirname, '..')
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
 const version = String(pkg.version || '0.0.0').trim()
 const productName = String(pkg.build?.productName || pkg.name || 'Flowid').trim()
+const deliverablesLabel = String(pkg.flowidDesktop?.deliverablesLabel || '').trim()
+const labelSeg = deliverablesLabel ? `_${deliverablesLabel}` : ''
 const releaseDir = path.join(root, 'release')
-const destDir = path.join(root, 'deliverables', `Flowid_v${version}_windows_x64_installer`)
+const destDir = path.join(root, 'deliverables', `Flowid_v${version}${labelSeg}_windows_x64_installer`)
 
 const base = `${productName}_v${version}`
 const candidates = [

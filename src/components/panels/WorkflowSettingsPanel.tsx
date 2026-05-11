@@ -105,12 +105,6 @@ import {
   readDraggedPlainText,
   readDraggedPlainTextSync,
 } from '../../lib/textareaInsertAtCaret'
-import {
-  isSensitiveWordFilterEnabled,
-  setSensitiveWordFilterEnabled,
-  SENSITIVE_FILTER_CHANGED_EVENT,
-} from '../../lib/sensitiveWords'
-
 const KIND_LABELS: Record<StudioNodeKind, string> = {
   text: '文本',
   script: '脚本',
@@ -423,19 +417,6 @@ export function WorkflowSettingsPanel({
     }
   })
   const [aiCorePresets, setAiCorePresets] = useState<AiAssistantCorePreset[]>(() => loadAiAssistantCorePresets())
-  const [sensitiveFilterEnabled, setSensitiveFilterEnabledUi] = useState(() => isSensitiveWordFilterEnabled())
-  useEffect(() => {
-    const onChanged = (ev: Event) => {
-      const ce = ev as CustomEvent<{ enabled?: boolean }>
-      if (typeof ce.detail?.enabled === 'boolean') {
-        setSensitiveFilterEnabledUi(ce.detail.enabled)
-        return
-      }
-      setSensitiveFilterEnabledUi(isSensitiveWordFilterEnabled())
-    }
-    window.addEventListener(SENSITIVE_FILTER_CHANGED_EVENT, onChanged as EventListener)
-    return () => window.removeEventListener(SENSITIVE_FILTER_CHANGED_EVENT, onChanged as EventListener)
-  }, [])
   const [ttsPresets, setTtsPresets] = useState<TtsPreset[]>(() => loadTtsPresets())
   const [editingAiCoreId, setEditingAiCoreId] = useState<string | null>(null)
   const [aiCoreDraft, setAiCoreDraft] = useState<AiAssistantCorePreset>({
@@ -2397,26 +2378,6 @@ export function WorkflowSettingsPanel({
                 自动保存：修改任一字段后立即生效并写入本地配置。云端推荐使用 GPT-4o-mini。
               </p>
               <div className="space-y-8">
-                <div className="space-y-2 rounded-2xl border border-white/10 bg-black/30 p-4">
-                  <label className="flex cursor-pointer items-center gap-3">
-                    <input
-                      type="checkbox"
-                      className="h-5 w-5 shrink-0 accent-orange-600 rounded"
-                      checked={sensitiveFilterEnabled}
-                      onChange={(e) => {
-                        const v = e.target.checked
-                        setSensitiveWordFilterEnabled(v)
-                        setSensitiveFilterEnabledUi(v)
-                      }}
-                    />
-                    <span className="text-[14px] font-black uppercase tracking-widest text-white/50">
-                      启用敏感词检测（拦截与替换）
-                    </span>
-                  </label>
-                  <p className="m-0 pl-8 text-[11px] leading-relaxed text-white/35">
-                    开发构建默认关闭；关闭后助手聊天与节点文案不再被敏感词拦截或打星号。正式构建默认开启，可在此强制打开或关闭。
-                  </p>
-                </div>
                 <div className="space-y-2 rounded-2xl border border-white/10 bg-black/30 p-4">
                   <label className="flex cursor-pointer items-center gap-3">
                     <input

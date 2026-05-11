@@ -5,11 +5,11 @@ import type { StudioNodeData } from '../../types'
 import { PresetTemplateCoverImage } from '../PresetTemplateCoverImage'
 import {
   FLOWID_PRESET_TEMPLATE_DRAG_MIME,
-  PRESET_TEMPLATE_MOCKS,
   buildPresetTemplateCategoryTabs,
   fetchPresetTemplatesFromServer,
   filterPresetTemplatesByCategory,
   type PresetTemplate,
+  type PresetTemplateCatalogResult,
   type PresetTemplateDragPayload,
 } from '../../lib/templateCatalog'
 
@@ -102,7 +102,7 @@ export function DownloadPanel({
   canvasDayMode?: boolean
 }) {
   const [licenseTick, setLicenseTick] = useState(0)
-  const [catalog, setCatalog] = useState<{ ok: true; items: PresetTemplate[] } | null>(null)
+  const [catalog, setCatalog] = useState<PresetTemplateCatalogResult | null>(null)
   const [catalogLoading, setCatalogLoading] = useState(true)
   const [selectedCategory, setSelectedCategory] = useState('全部')
 
@@ -127,10 +127,7 @@ export function DownloadPanel({
     }
   }, [licenseTick])
 
-  const baseList = useMemo(
-    () => (catalog?.ok ? catalog.items : PRESET_TEMPLATE_MOCKS),
-    [catalog],
-  )
+  const baseList = useMemo(() => (catalog?.ok ? catalog.items : []), [catalog])
 
   const categoryTabs = useMemo(() => buildPresetTemplateCategoryTabs(baseList, true), [baseList])
 
@@ -144,10 +141,11 @@ export function DownloadPanel({
   )
 
   const emptyHint = useMemo(() => {
-    if (catalogLoading) return '正在加载预设模板…'
-    if (!filtered.length) return '暂无预设模板'
+    if (catalogLoading) return '正在从后端加载预设模板…'
+    if (catalog && !catalog.ok) return catalog.message
+    if (!filtered.length) return '后端暂无预设模板；请在 Auth 管理端配置后重试。'
     return ''
-  }, [catalogLoading, filtered.length])
+  }, [catalogLoading, catalog, filtered.length])
 
   const setDragPayload = (event: React.DragEvent, t: PresetTemplate) => {
     const payload: PresetTemplateDragPayload = { id: t.id, name: t.name, tier: t.tier }
@@ -216,16 +214,21 @@ export function DownloadPanel({
           拖到画布空白处即可合并节点；封面上传在「预设模板」页
         </p>
         {catalogLoading || !filtered.length ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center opacity-40">
-            <h4
+          <div
+            className={`flex flex-col items-center justify-center px-2 py-12 text-center ${
+              catalog && !catalog.ok ? 'opacity-100' : 'opacity-45'
+            }`}
+          >
+            <p
               className={
                 canvasDayMode
-                  ? 'text-sm font-black uppercase tracking-widest text-[#525252]'
-                  : 'text-sm font-black uppercase tracking-widest text-white/50'
+                  ? 'm-0 max-w-[220px] text-[11px] font-semibold leading-relaxed text-[#525252]'
+                  : 'm-0 max-w-[220px] text-[11px] font-semibold leading-relaxed text-white/55'
               }
+              style={{ whiteSpace: 'pre-wrap' }}
             >
               {emptyHint}
-            </h4>
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-3 content-start gap-2">

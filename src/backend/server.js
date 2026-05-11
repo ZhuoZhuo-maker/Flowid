@@ -7,6 +7,8 @@ import cors from 'cors'
 import express from 'express'
 import { attachPointsRoutes } from './createPointsApp.mjs'
 
+process.env.FLOWID_POINTS_STANDALONE = '1'
+
 const PORT = Number(process.env.PORT || 3001)
 const app = express()
 app.use(cors({ origin: true, credentials: true }))

@@ -52,6 +52,16 @@
     }
   }
 
+  function resolveUrl(path) {
+    const p = String(path || '')
+    if (/^https?:\/\//i.test(p)) return p
+    try {
+      return new URL(p, window.location.origin).href
+    } catch {
+      return p
+    }
+  }
+
   async function request(method, path, body) {
     setLoading(true)
     try {
@@ -63,13 +73,24 @@
         opts.headers['Content-Type'] = 'application/json'
         opts.body = JSON.stringify(body)
       }
-      const res = await fetch(path, opts)
+      if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+        opts.signal = AbortSignal.timeout(30000)
+      }
+      const res = await fetch(resolveUrl(path), opts)
       const json = await parseBody(res)
       if (!res.ok) {
         const msg = json && json.message ? String(json.message) : `HTTP ${res.status}`
         throw new Error(msg)
       }
       return json
+    } catch (e) {
+      const name = e && e.name
+      if (name === 'TimeoutError' || name === 'AbortError') {
+        throw new Error(
+          '请求超时（30s）。请在新标签打开「当前站点 /healthz」确认接口可达；若经反代，需放行 /healthz、/admin/* 等到同一 Node 进程。',
+        )
+      }
+      throw e
     } finally {
       setLoading(false)
     }

@@ -120,7 +120,7 @@
     <p class="sub">
       本页属于<strong>积分 SQLite 服务</strong>，与 Auth 同端口时路径为 <code>/pts/admin</code>（启动 <code>npm run auth:dev</code> 或与 Vite 同启的 <code>npm run dev</code>）。
       与桌面脚本检查的 <strong>3721 Auth 服务</strong>（<code>npm run auth:dev</code> →
-      <a href="http://127.0.0.1:3721/admin.html" target="_blank" rel="noopener">3721 管理台</a>）是<strong>两个不同进程</strong>，口令也可能不同（本服务用
+      <a href="/admin.html" target="_blank" rel="noopener">Auth 根路径管理台</a>）是<strong>两个不同进程</strong>，口令也可能不同（本服务用
       <code>ADMIN_TOKEN</code>）。下方子页请求头均为 <code>x-admin-token</code>。
     </p>
 
@@ -145,9 +145,9 @@
         <h2>服务健康检查</h2>
         <p>可视化状态页（<code>/status</code>）；原始 JSON 仍为 <code>GET /healthz</code>。</p>
       </a>
-      <a class="tile" href="http://127.0.0.1:3721/admin.html" target="_blank" rel="noopener">
+      <a class="tile" id="flowidAuthConsoleCard" href="/admin.html" target="_blank" rel="noopener">
         <h2>Auth 服务后台（3721）</h2>
-        <p>签发/续期/解绑、用户与模板、云端模型、用户协议等。需单独运行 <code>npm run auth:dev</code>。</p>
+        <p>签发/续期/解绑、用户与模板、云端模型、用户协议等。需运行 <code>npm run auth:dev</code> 或与 Vite 同启；经 Vite 打开时会自动跳到 Auth 端口。</p>
       </a>
     </div>
 
@@ -172,6 +172,7 @@
       </thead>
       <tbody id="body"></tbody>
     </table>
+    <script src="/pts/admin/static/pts-auth-console-link.js"></script>
     <script>
       const apiBase = location.origin + '/pts'
       document.getElementById('load').onclick = async () => {

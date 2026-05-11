@@ -9,7 +9,8 @@ export type LicenseEntitlements = {
 
 export type LicenseServerConfig = {
   baseUrl: string
-  purchaseUrl: string
+  /** QQ 群号（仅数字）；授权页「交流群」展示，不用易过期的分享链接 */
+  exchangeGroupQq: string
 }
 
 export type LicenseSnapshotV2 = {
@@ -45,9 +46,32 @@ export type LicenseSnapshotV2 = {
 const SNAPSHOT_KEY = 'flowid.license.snapshot.v2'
 const SERVER_CONFIG_KEY = 'flowid.license.server.config.v1'
 
+function buildTimePublicServerOrigin(): string {
+  /** 须用静态 `import.meta.env.XXX`，Vite 才能打包时注入；勿写 `import.meta.env?.XXX`。 */
+  const u = import.meta.env.VITE_FLOWID_PUBLIC_SERVER_ORIGIN
+  return String(u || '')
+    .trim()
+    .replace(/\/+$/, '')
+}
+
+function buildTimeExchangeGroupQq(): string {
+  const u = import.meta.env.VITE_FLOWID_EXCHANGE_GROUP_QQ
+  return String(u || '').trim()
+}
+
+/** qun.qq.com 等分享链会过期，配置里若误填链接则忽略并回退默认群号 */
+function normalizeExchangeGroupQq(raw: string): string {
+  const t = String(raw || '').trim()
+  if (!t) return ''
+  if (/^https?:\/\//i.test(t) || /^tencent:/i.test(t) || /^mqqapi:/i.test(t)) return ''
+  return t
+}
+
+const DEFAULT_FLOWID_QQ_GROUP_NUMBER = '1103016040'
+
 const DEFAULT_SERVER_CONFIG: LicenseServerConfig = {
-  baseUrl: 'http://127.0.0.1:3721',
-  purchaseUrl: 'https://example.com/buy',
+  baseUrl: buildTimePublicServerOrigin() || 'http://127.0.0.1:3721',
+  exchangeGroupQq: normalizeExchangeGroupQq(buildTimeExchangeGroupQq()) || DEFAULT_FLOWID_QQ_GROUP_NUMBER,
 }
 
 function safeJsonParse<T>(raw: string): T | null {
@@ -64,9 +88,12 @@ export function loadLicenseServerConfig(): LicenseServerConfig {
     if (!raw) return DEFAULT_SERVER_CONFIG
     const parsed = safeJsonParse<Partial<LicenseServerConfig>>(raw)
     if (!parsed || typeof parsed !== 'object') return DEFAULT_SERVER_CONFIG
+    const exchangeGroupQq = normalizeExchangeGroupQq(
+      String((parsed as { exchangeGroupQq?: unknown }).exchangeGroupQq ?? ''),
+    )
     return {
       baseUrl: String(parsed.baseUrl || DEFAULT_SERVER_CONFIG.baseUrl).trim(),
-      purchaseUrl: String(parsed.purchaseUrl || DEFAULT_SERVER_CONFIG.purchaseUrl).trim(),
+      exchangeGroupQq: exchangeGroupQq || DEFAULT_SERVER_CONFIG.exchangeGroupQq,
     }
   } catch {
     return DEFAULT_SERVER_CONFIG
@@ -77,7 +104,9 @@ export function saveLicenseServerConfig(patch: Partial<LicenseServerConfig>): Li
   const prev = loadLicenseServerConfig()
   const next: LicenseServerConfig = {
     baseUrl: String(patch.baseUrl ?? prev.baseUrl).trim(),
-    purchaseUrl: String(patch.purchaseUrl ?? prev.purchaseUrl).trim(),
+    exchangeGroupQq:
+      normalizeExchangeGroupQq(String(patch.exchangeGroupQq ?? prev.exchangeGroupQq)) ||
+      DEFAULT_FLOWID_QQ_GROUP_NUMBER,
   }
   localStorage.setItem(SERVER_CONFIG_KEY, JSON.stringify(next))
   window.dispatchEvent(new CustomEvent('flowid:license-changed'))

@@ -21,12 +21,12 @@ import {
 } from './lib/userAgreement'
 import './App.css'
 import {
-  PRESET_TEMPLATE_MOCKS,
   buildPresetTemplateCategoryTabs,
   fetchPresetTemplatesFromServer,
   fetchPresetTemplateWorkflowText,
   makePresetThumbDataUri,
   type PresetTemplate,
+  type PresetTemplateCatalogResult,
 } from './lib/templateCatalog'
 import { imageMimeTypeFromPath } from './lib/materialLibrary'
 import {
@@ -561,10 +561,8 @@ function App() {
   const [projects, setProjects] = useState<Project[]>(MOCK_PROJECTS)
   const [projectsLoading, setProjectsLoading] = useState(false)
   const [licenseSnap, setLicenseSnap] = useState(() => loadLicenseSnapshotV2())
-  const [templateCatalogFromServer, setTemplateCatalogFromServer] = useState<{
-    ok: true
-    items: Template[]
-  } | null>(null)
+  const [templateCatalog, setTemplateCatalog] = useState<PresetTemplateCatalogResult | null>(null)
+  const [templateCatalogLoading, setTemplateCatalogLoading] = useState(true)
   const [templateInvokeBusyId, setTemplateInvokeBusyId] = useState<string | null>(null)
   const [coverUploadBusyId, setCoverUploadBusyId] = useState<string | null>(null)
   const [presetTemplateCoverBusyId, setPresetTemplateCoverBusyId] = useState<string | null>(null)
@@ -610,13 +608,18 @@ function App() {
   }, [])
 
   const refreshTemplateCatalog = useCallback(async () => {
-    const fromServer = await fetchPresetTemplatesFromServer()
-    setTemplateCatalogFromServer(fromServer)
+    setTemplateCatalogLoading(true)
+    try {
+      const r = await fetchPresetTemplatesFromServer()
+      setTemplateCatalog(r)
+    } finally {
+      setTemplateCatalogLoading(false)
+    }
   }, [])
 
   const baseTemplateSource = useMemo(() => {
-    return templateCatalogFromServer?.ok ? templateCatalogFromServer.items : PRESET_TEMPLATE_MOCKS
-  }, [templateCatalogFromServer])
+    return templateCatalog?.ok ? templateCatalog.items : []
+  }, [templateCatalog])
 
   const templateCategoryOptions = useMemo(
     () => buildPresetTemplateCategoryTabs(baseTemplateSource, true),
@@ -643,6 +646,9 @@ function App() {
     // 参考 @flowid (2)：三列网格时一页两行更舒适（6 个）
     const pageSize = 6
     const total = filteredTemplates.length
+    if (total === 0) {
+      return { page: 0, pageSize, total: 0, totalPages: 0, items: [] as Template[] }
+    }
     const totalPages = Math.max(1, Math.ceil(total / pageSize))
     const page = Math.max(0, Math.min(totalPages - 1, Math.floor(Number(templatePage || 0) || 0)))
     const start = page * pageSize
@@ -1351,23 +1357,60 @@ function App() {
                 ))}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {pagedTemplates.items.map((t) => (
-                  <TemplateCard
-                    key={t.id}
-                    template={t}
-                    busy={templateInvokeBusyId === t.id}
-                    onInvoke={openTemplateAsProject}
-                    coverUploadBusy={presetTemplateCoverBusyId === t.id}
-                    onUploadCover={
-                      isDesktopCoverIo() &&
-                      String(loadLocalDiskPathsSettings().systemPromptCoverPath || '').trim()
-                        ? () => requestPresetTemplateCoverUpload(t)
-                        : undefined
-                    }
-                  />
-                ))}
-              </div>
+              {templateCatalogLoading ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-8 py-16 text-center text-white/55">
+                  <p className="text-[15px] font-bold tracking-wide">正在从后端加载预设模板…</p>
+                </div>
+              ) : templateCatalog && !templateCatalog.ok ? (
+                <div className="rounded-2xl border border-orange-500/25 bg-orange-950/20 px-8 py-12 text-left">
+                  <p className="text-[13px] font-black uppercase tracking-widest text-orange-400/90 mb-3">
+                    无法加载预设模板
+                  </p>
+                  <p className="text-[14px] leading-relaxed text-white/70 whitespace-pre-wrap">
+                    {templateCatalog.message}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void refreshTemplateCatalog()}
+                    className="mt-6 rounded-full border border-white/15 bg-white/10 px-6 py-2.5 text-[12px] font-black uppercase tracking-widest text-white/85 hover:bg-white/15"
+                  >
+                    重新加载
+                  </button>
+                </div>
+              ) : baseTemplateSource.length === 0 ? (
+                <div className="rounded-2xl border border-white/10 bg-white/5 px-8 py-16 text-center">
+                  <p className="text-[15px] font-bold text-white/70 mb-2">后端暂无预设模板</p>
+                  <p className="text-[13px] text-white/45 max-w-xl mx-auto">
+                    请在 Auth 服务管理后台维护 templates 索引与 workflow 文件；列表接口为{' '}
+                    <code className="text-orange-400/90">GET /templates/groups</code>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void refreshTemplateCatalog()}
+                    className="mt-6 rounded-full border border-white/15 bg-white/10 px-6 py-2.5 text-[12px] font-black uppercase tracking-widest text-white/85 hover:bg-white/15"
+                  >
+                    重新加载
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                  {pagedTemplates.items.map((t) => (
+                    <TemplateCard
+                      key={t.id}
+                      template={t}
+                      busy={templateInvokeBusyId === t.id}
+                      onInvoke={openTemplateAsProject}
+                      coverUploadBusy={presetTemplateCoverBusyId === t.id}
+                      onUploadCover={
+                        isDesktopCoverIo() &&
+                        String(loadLocalDiskPathsSettings().systemPromptCoverPath || '').trim()
+                          ? () => requestPresetTemplateCoverUpload(t)
+                          : undefined
+                      }
+                    />
+                  ))}
+                </div>
+              )}
 
               {pagedTemplates.totalPages > 1 ? (
                 <div className="mt-16 flex items-center justify-center gap-3 pointer-events-auto">

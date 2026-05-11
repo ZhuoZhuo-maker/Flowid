@@ -10,6 +10,10 @@ rem   then fetch + pull --rebase --autostash + push (avoids "fetch first" reject
 rem   Optional: --no-pause  close window without "Press any key"
 rem             --yes / --auto  same as no-arg for message/skip confirm
 rem             custom message: quick-push.bat "your message"
+rem
+rem   Large folders: uses "git add ." which honors .gitignore — release/,
+rem   deliverables/, dist/, node_modules/ are not staged. Do not "git add -f"
+rem   installers; if something was committed earlier, git rm --cached then commit.
 rem =============================================================================
 
 set "EXIT_CODE=0"
@@ -84,7 +88,7 @@ if defined AUTO_MSG (
 )
 
 echo.
-echo [STEP 4/7] Stage changes...
+echo [STEP 4/7] Stage changes ^(release/ deliverables/ dist/ etc. ignored via .gitignore^)...
 call git add .
 if errorlevel 1 (
   echo [ERR] git add failed.
