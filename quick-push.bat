@@ -6,12 +6,13 @@ cd /d "%~dp0"
 rem =============================================================================
 rem quick-push.bat — one-click sync to Gitee (origin, current branch)
 rem   Double-click (no args): auto message "chore: update", no confirm prompt,
-rem   then fetch + pull --rebase --autostash + push (avoids "fetch first" reject).
+rem   then fetch origin ^<branch^> + rebase --autostash onto origin/^<branch^> + push (avoids "fetch first" reject).
 rem   Optional: --no-pause  close window without "Press any key"
 rem             --yes / --auto  same as no-arg for message/skip confirm
 rem             custom message: quick-push.bat "your message"
 rem
 rem   Large folders: uses "git add ." which honors .gitignore — release/,
+rem   Fetch is per-branch only so rebase does not see multi-branch FETCH_HEAD.
 rem   deliverables/, dist/, node_modules/ are not staged. Do not "git add -f"
 rem   installers; if something was committed earlier, git rm --cached then commit.
 rem =============================================================================
@@ -119,9 +120,10 @@ echo [OK ] Committed.
 
 :push_only
 echo.
-echo [STEP 6/7] Fetch origin and pull --rebase before push ^(avoids Gitee fetch-first reject^)
-rem Nested parentheses + git.cmd on Windows can corrupt ERRORLEVEL; use CALL and flat flow.
-call git fetch origin
+echo [STEP 6/7] Fetch origin/%BRANCH% and rebase ^(avoids Gitee fetch-first reject^)
+rem Fetch only this branch so FETCH_HEAD is single-branch; full "git fetch origin" + pull can hit:
+rem   fatal: Cannot rebase onto multiple branches.
+call git fetch origin %BRANCH%
 if errorlevel 1 (
   echo [WARN] git fetch failed; push may still fail. Check network / SSH key / remote URL.
   goto :qp_push
@@ -129,14 +131,14 @@ if errorlevel 1 (
 
 call git show-ref --verify --quiet "refs/remotes/origin/%BRANCH%"
 if errorlevel 1 (
-  echo [INFO] No remote-tracking branch origin/%BRANCH% yet - skipping pull, typical on first push.
+  echo [INFO] No remote-tracking branch origin/%BRANCH% yet - skipping rebase, typical on first push.
   goto :qp_push
 )
 
-rem --autostash: temp stash during pull when needed; requires Git 2.14+
-call git pull --rebase --autostash origin %BRANCH%
+rem --autostash: temp stash during rebase when needed; requires Git 2.14+
+call git rebase --autostash origin/%BRANCH%
 if errorlevel 1 (
-  echo [ERR] git pull --rebase failed. Likely merge conflicts or autostash pop conflicts.
+  echo [ERR] git rebase onto origin/%BRANCH% failed. Likely merge conflicts or autostash pop conflicts.
   echo [HINT] Run: git status
   echo [HINT] Fix files, then: git add -A
   echo [HINT] Then: git rebase --continue
