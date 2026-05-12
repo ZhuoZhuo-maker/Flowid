@@ -129,7 +129,10 @@ export function DownloadPanel({
 
   const baseList = useMemo(() => (catalog?.ok ? catalog.items : []), [catalog])
 
-  const categoryTabs = useMemo(() => buildPresetTemplateCategoryTabs(baseList, true), [baseList])
+  const categoryTabs = useMemo(
+    () => buildPresetTemplateCategoryTabs(baseList, catalog?.ok ? catalog.categoryOrder : undefined),
+    [baseList, catalog],
+  )
 
   useEffect(() => {
     setSelectedCategory((cur) => (categoryTabs.includes(cur) ? cur : '全部'))

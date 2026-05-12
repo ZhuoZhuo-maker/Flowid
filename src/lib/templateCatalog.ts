@@ -1,6 +1,7 @@
 import type { ProjectSnapshot } from '../types'
 import { parseProjectFile } from './persistence'
 import { loadLicenseServerConfig, loadLicenseSnapshotV2 } from './licenseAccess'
+import { fetchBundledJson, isLocalGalleryBundleEnabled, resolveBundledGalleryUrl } from './localGalleryBundle'
 
 /** 画布拖拽预设卡片时使用 */
 export const FLOWID_PRESET_TEMPLATE_DRAG_MIME = 'application/x-flowid-preset-template' as const
@@ -51,13 +52,12 @@ export function makePresetThumbDataUri(seed: string): string {
 
 /** 预设模板列表仅从后端拉取，不再使用本地占位假数据 */
 export type PresetTemplateCatalogResult =
-  | { ok: true; items: PresetTemplate[] }
+  | { ok: true; items: PresetTemplate[]; categoryOrder?: string[] }
   | { ok: false; reason: 'no_base_url' | 'request_failed'; message: string }
 
 export function buildPresetTemplateCategoryTabs(
   templates: PresetTemplate[],
-  /** @deprecated 已不再按会员过滤，保留参数以兼容旧调用 */
-  _accessValid?: boolean,
+  categoryOrder?: string[] | null,
 ): string[] {
   const visible = templates
   const set = new Set<string>()
@@ -65,7 +65,20 @@ export function buildPresetTemplateCategoryTabs(
     const c = String(t.category || '').trim()
     if (c) set.add(c)
   }
-  return ['全部', ...[...set].sort((a, b) => a.localeCompare(b, 'zh-CN'))]
+  const ordered: string[] = []
+  const seen = new Set<string>()
+  if (categoryOrder && categoryOrder.length) {
+    for (const raw of categoryOrder) {
+      const c = String(raw || '').trim()
+      if (!c || seen.has(c)) continue
+      seen.add(c)
+      ordered.push(c)
+    }
+  }
+  const rest = [...set]
+    .filter((c) => !seen.has(c))
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  return ['全部', ...ordered, ...rest]
 }
 
 export function filterPresetTemplatesByCategory(
@@ -79,7 +92,92 @@ export function filterPresetTemplatesByCategory(
   return byCat
 }
 
+/** 预设 workflow 可能较大；过短易误杀，过长仍应给出可感知上限避免按钮永久「加载中」 */
+const PRESET_WORKFLOW_FETCH_TIMEOUT_MS = 120_000
+
+type PresetGroupsPayload = {
+  groups?: Array<{ items?: unknown[] }>
+  message?: string
+  categoryOrder?: unknown[]
+}
+
+function parsePresetCategoryOrder(payload: PresetGroupsPayload | null): string[] | undefined {
+  if (!payload) return undefined
+  const raw = payload.categoryOrder
+  if (!Array.isArray(raw) || !raw.length) return undefined
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const x of raw) {
+    const s = String(x || '').trim()
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    out.push(s)
+  }
+  return out.length ? out : undefined
+}
+
+function presetItemsFromGroupsPayload(json: PresetGroupsPayload | null): PresetTemplate[] {
+  if (!json) return []
+  const groups = Array.isArray(json.groups) ? json.groups : []
+  const items: PresetTemplate[] = []
+  for (const g of groups) {
+    const rowItems = Array.isArray(g.items) ? g.items : []
+    for (const raw of rowItems) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const row = raw as Record<string, unknown>
+      const id = String(row.id || '').trim()
+      if (!id) continue
+      const tierRaw = String(row.tier || 'free').toLowerCase()
+      const tier: PresetTemplate['tier'] = tierRaw === 'pro' ? 'pro' : 'free'
+      items.push({
+        id,
+        name: String(row.name || id),
+        category: String(row.category || 'image').trim() || 'image',
+        image: makePresetThumbDataUri(id),
+        description: String(row.description || ''),
+        tier,
+      })
+    }
+  }
+  return items
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const ctrl = new AbortController()
+  const id = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal })
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(`加载预设超时（${Math.round(timeoutMs / 1000)} 秒），请检查网络或后端是否卡住：${url}`)
+    }
+    if (e instanceof Error && e.name === 'AbortError') {
+      throw new Error(`加载预设超时（${Math.round(timeoutMs / 1000)} 秒），请检查网络或后端是否卡住：${url}`)
+    }
+    throw e
+  } finally {
+    clearTimeout(id)
+  }
+}
+
 export async function fetchPresetTemplatesFromServer(): Promise<PresetTemplateCatalogResult> {
+  if (isLocalGalleryBundleEnabled()) {
+    const json = await fetchBundledJson<PresetGroupsPayload>('flowid-bundled/preset-groups.json')
+    if (json && Array.isArray(json.groups)) {
+      return {
+        ok: true,
+        items: presetItemsFromGroupsPayload(json),
+        categoryOrder: parsePresetCategoryOrder(json),
+      }
+    }
+    return {
+      ok: false,
+      reason: 'request_failed',
+      message:
+        '已启用本地画廊（VITE_FLOWID_LOCAL_GALLERY=1），但未找到或无法解析 flowid-bundled/preset-groups.json。请将 public/flowid-bundled/preset-groups.json 纳入构建后重试。',
+    }
+  }
+
   const base = String(loadLicenseServerConfig().baseUrl || '')
     .trim()
     .replace(/\/+$/, '')
@@ -99,35 +197,15 @@ export async function fetchPresetTemplatesFromServer(): Promise<PresetTemplateCa
   }
   try {
     const res = await fetch(`${base}/templates/groups`, { headers })
-    const json = (await res.json().catch(() => ({}))) as {
-      groups?: Array<{ items?: unknown[] }>
-      message?: string
-    }
+    const json = (await res.json().catch(() => ({}))) as PresetGroupsPayload
     if (!res.ok) {
       throw new Error(String(json.message || `拉取模板列表失败：HTTP ${res.status}`))
     }
-    const groups = Array.isArray(json.groups) ? json.groups : []
-    const items: PresetTemplate[] = []
-    for (const g of groups) {
-      const rowItems = Array.isArray(g.items) ? g.items : []
-      for (const raw of rowItems) {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
-        const row = raw as Record<string, unknown>
-        const id = String(row.id || '').trim()
-        if (!id) continue
-        const tierRaw = String(row.tier || 'free').toLowerCase()
-        const tier: PresetTemplate['tier'] = tierRaw === 'pro' ? 'pro' : 'free'
-        items.push({
-          id,
-          name: String(row.name || id),
-          category: String(row.category || 'image').trim() || 'image',
-          image: makePresetThumbDataUri(id),
-          description: String(row.description || ''),
-          tier,
-        })
-      }
+    return {
+      ok: true,
+      items: presetItemsFromGroupsPayload(json),
+      categoryOrder: parsePresetCategoryOrder(json),
     }
-    return { ok: true, items }
   } catch (e) {
     const msg = String(e instanceof Error ? e.message : e || '未知错误')
     return {
@@ -139,6 +217,21 @@ export async function fetchPresetTemplatesFromServer(): Promise<PresetTemplateCa
 }
 
 export async function fetchPresetTemplateWorkflowText(templateId: string): Promise<string> {
+  if (isLocalGalleryBundleEnabled()) {
+    const url = resolveBundledGalleryUrl(
+      `flowid-bundled/presets/workflows/${encodeURIComponent(templateId)}.json`,
+    )
+    const res = await fetchWithTimeout(url, {}, PRESET_WORKFLOW_FETCH_TIMEOUT_MS)
+    if (res.ok) return res.text()
+    if (res.status === 404) {
+      throw new Error(
+        `本地预设 workflow 缺失：public/flowid-bundled/presets/workflows/${encodeURIComponent(templateId)}.json（与 preset-groups 中 id 对应）`,
+      )
+    }
+    const j = (await res.json().catch(() => ({}))) as { message?: string }
+    throw new Error(String(j.message || `加载本地预设失败（HTTP ${res.status}）`))
+  }
+
   const base = String(loadLicenseServerConfig().baseUrl || '')
     .trim()
     .replace(/\/+$/, '')
@@ -159,7 +252,7 @@ export async function fetchPresetTemplateWorkflowText(templateId: string): Promi
   ]
   let res: Response | null = null
   for (const u of workflowUrls) {
-    const r = await fetch(u, { headers })
+    const r = await fetchWithTimeout(u, { headers }, PRESET_WORKFLOW_FETCH_TIMEOUT_MS)
     res = r
     if (r.ok) break
     if (r.status !== 404) break

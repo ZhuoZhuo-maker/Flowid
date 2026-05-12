@@ -21,6 +21,7 @@ import {
   type WorkflowConfigSnapshot,
 } from '../lib/workflowConfigStorage'
 import {
+  collectUpstreamNodeIds,
   parseMentionRefs,
   resolveMentionRefToNode,
   resolveNodeMentionsInText,
@@ -191,7 +192,10 @@ export type RunNodeWorkflowOptions = {
   allNodes?: Array<Node<StudioNodeData>>
   /** 画布连线：执行前把已连线的文字/剧本正文合并进单槽提示（见 `cloneNodeWithInboundTextPromptPrepended`）。 */
   studioEdges?: Edge[]
-  /** 执行前的原始提示词文本（未做 @ 引用解析），用于准确诊断参考图是否进入上传链路。 */
+  /**
+   * 执行前画布上该节点的原始提示词（未做 `withResolvedNodeMentions` 正文展开）。
+   * 亦用于图节点 `extractNodeInputs` 的 @→参考图扫描：避免展开后的 JSON/长文里出现 `@图1` 等被误当成参考图。
+   */
   rawPromptText?: string
   /** 执行前的原始说明文本（未做 @ 引用解析）。 */
   rawNoteText?: string
@@ -316,14 +320,35 @@ function validatePromptNodes(prompt: Record<string, unknown>) {
  *
  * @param allNodes 传入时可合并提示词/描述中的 @ 引用图片 URL，避免仅改文案未同步 `src` 时 Comfy 收不到图。
  */
+type ExtractNodeInputsOpts = {
+  /**
+   * 仅图节点：用于解析 @→参考图 的文本。
+   * 应传 `RunNodeWorkflowOptions.rawPromptText`（展开前）；若省略则退回 `node.data.prompt`（可能已是展开后的长 JSON）。
+   */
+  imageMentionRefPromptOverride?: string
+  /**
+   * 为 true 时：仅 `@[标题](节点uuid)` 带 id 的 @ 可进入参考图 URL 列表。
+   * 用于云端多模态计费路径，避免无 id 的 `@[标题]` / `@图1` 仅靠标题撞名误绑到别的图节点。
+   * （Comfy 工作流不传此项，仍允许旧式无 id 引用。）
+   */
+  imageMentionRefsRequireStableNodeId?: boolean
+  /** 有边时：无 uuid 的 @ 仅在沿边向上的祖先节点中解析（与画布执行一致） */
+  studioEdges?: Edge[]
+}
+
 async function extractNodeInputs(
   node: Node<StudioNodeData>,
   allNodes?: Array<Node<StudioNodeData>>,
+  extractOpts?: ExtractNodeInputsOpts,
 ): Promise<NodeInputRecord> {
   const common: NodeInputRecord = {
     title: node.data.title,
     kind: node.data.kind,
   }
+  const mentionUpstreamScope =
+    extractOpts?.studioEdges?.length && node.id
+      ? collectUpstreamNodeIds(node.id, extractOpts.studioEdges)
+      : undefined
   if (node.data.kind === 'group') {
     return common
   }
@@ -335,15 +360,20 @@ async function extractNodeInputs(
   }
   if (node.data.kind === 'image') {
     const promptText = String(node.data.prompt || '')
+    const mentionScanText =
+      String(extractOpts?.imageMentionRefPromptOverride || '').trim() || promptText
     const refs = node.data.referenceImageSources?.filter(Boolean) ?? []
     const refIds = (node.data as any)?.referenceImageAssetIds as string[] | undefined
 
     const pairs: Array<{ url: string; assetId?: string }> = []
     // 1) @ 引用：按 nodeId 精确解析，尽量带上被引用节点的 srcAssetId
-    if (allNodes?.length && promptText.includes('@')) {
-      const mentionRefs = parseMentionRefs(promptText)
+    if (allNodes?.length && mentionScanText.includes('@')) {
+      const mentionRefs = parseMentionRefs(mentionScanText)
       for (const ref of mentionRefs) {
-        const hit = resolveMentionRefToNode(ref, allNodes, node.id)
+        if (extractOpts?.imageMentionRefsRequireStableNodeId && !String(ref.nodeId || '').trim()) {
+          continue
+        }
+        const hit = resolveMentionRefToNode(ref, allNodes, node.id, undefined, mentionUpstreamScope)
         if (!hit) continue
         const kind = (hit.data as StudioNodeData).kind
         /** 仅静态图可进 LoadImage；视频/音频/音乐的 src 不是单张图输入 */
@@ -474,7 +504,7 @@ async function extractNodeInputs(
     if (allNodes?.length && promptText.includes('@')) {
       const mentionRefs = parseMentionRefs(promptText)
       for (const ref of mentionRefs) {
-        const hit = resolveMentionRefToNode(ref, allNodes, node.id)
+        const hit = resolveMentionRefToNode(ref, allNodes, node.id, undefined, mentionUpstreamScope)
         if (!hit) continue
         const kind = (hit.data as StudioNodeData).kind
         /** 仅静态图可进 LoadImage；@视频 / @音频 等不走此链 */
@@ -576,7 +606,7 @@ async function extractNodeInputs(
     if (allNodes?.length && noteText.includes('@')) {
       const mentionRefs = parseMentionRefs(noteText)
       for (const ref of mentionRefs) {
-        const hit = resolveMentionRefToNode(ref, allNodes, node.id)
+        const hit = resolveMentionRefToNode(ref, allNodes, node.id, undefined, mentionUpstreamScope)
         if (!hit) continue
         const kind = (hit.data as StudioNodeData).kind
         if (kind !== 'image' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music') continue
@@ -620,7 +650,7 @@ async function extractNodeInputs(
     const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
     const noteResolved =
       allNodes?.length && noteText
-        ? resolveNodeMentionsInText(noteText, allNodes, node.id)
+        ? resolveNodeMentionsInText(noteText, allNodes, node.id, extractOpts?.studioEdges)
         : noteText
     return {
       ...common,
@@ -642,7 +672,7 @@ async function extractNodeInputs(
   if (allNodes?.length && noteText.includes('@')) {
     const mentionRefs = parseMentionRefs(noteText)
     for (const ref of mentionRefs) {
-      const hit = resolveMentionRefToNode(ref, allNodes, node.id)
+      const hit = resolveMentionRefToNode(ref, allNodes, node.id, undefined, mentionUpstreamScope)
       if (!hit) continue
       const kind = (hit.data as StudioNodeData).kind
       /** 多路 __REF_AUDIO__：台本里 @ 配音/音乐 节点应计入参考音序列（原仅 image/panorama，导致 0 路音频）。 */
@@ -687,7 +717,7 @@ async function extractNodeInputs(
   const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
   const noteResolvedAudio =
     allNodes?.length && noteText
-      ? resolveNodeMentionsInText(noteText, allNodes, node.id)
+      ? resolveNodeMentionsInText(noteText, allNodes, node.id, extractOpts?.studioEdges)
       : noteText
   return {
     ...common,
@@ -860,6 +890,7 @@ async function ensureOpenAiImageUrl(raw: string): Promise<string> {
 function pickModelReferenceImages(
   nodeInputs: { src?: string; srcAssetId?: string; refImages?: string; refImageAssetIds?: string[] },
   max = 6,
+  opts?: { includePrimaryCanvasImage?: boolean },
 ): Array<{ url?: string; assetId?: string }> {
   const out: Array<{ url?: string; assetId?: string }> = []
   const push = (item: { url?: string; assetId?: string }) => {
@@ -871,10 +902,18 @@ function pickModelReferenceImages(
     out.push({ url: url || undefined, assetId: assetId || undefined })
   }
 
-  const srcAssetId = String((nodeInputs as any)?.srcAssetId || '').trim()
-  const src = String((nodeInputs as any)?.src || '').trim()
-  if (srcAssetId) push({ assetId: srcAssetId, url: src })
-  else if (src) push({ url: src })
+  /**
+   * 云端多模态计费按「参考图」张数与像素计；主预览 `src` 往往是**上一轮成图**。
+   * 默认附带会导致每次生图都把整张旧图再当 vision 输入 → token/费用暴涨，且易产出异常黑图/混图。
+   * 仅 @ 引用与「参考图条」应进入 refImages；需以当前主图作 img2img 时用户应显式加入参考条或 @ 自己链路。
+   */
+  const includePrimary = opts?.includePrimaryCanvasImage !== false
+  if (includePrimary) {
+    const srcAssetId = String((nodeInputs as any)?.srcAssetId || '').trim()
+    const src = String((nodeInputs as any)?.src || '').trim()
+    if (srcAssetId) push({ assetId: srcAssetId, url: src })
+    else if (src) push({ url: src })
+  }
 
   const refUrls = String((nodeInputs as any)?.refImages || '')
     .split('\n')
@@ -2928,8 +2967,14 @@ export function useWorkflowIntegration() {
             const isIntl = /dashscope-intl\.aliyuncs\.com/i.test(baseUrl)
             const host = isIntl ? 'https://dashscope-intl.aliyuncs.com' : 'https://dashscope.aliyuncs.com'
             const endpoint = `${host}/api/v1/services/aigc/multimodal-generation/generation`
-            const nodeInputs = await extractNodeInputs(node, options?.allNodes)
-            const refCandidates = pickModelReferenceImages(nodeInputs as any, 4)
+            const nodeInputs = await extractNodeInputs(node, options?.allNodes, {
+              studioEdges: options?.studioEdges,
+              imageMentionRefPromptOverride: options?.rawPromptText,
+              imageMentionRefsRequireStableNodeId: true,
+            })
+            const refCandidates = pickModelReferenceImages(nodeInputs as any, 4, {
+              includePrimaryCanvasImage: false,
+            })
             const dashscopeRefImages = (
               await Promise.all(
                 refCandidates.map(async (c) => {
@@ -3039,8 +3084,14 @@ export function useWorkflowIntegration() {
           } else {
             const endpoint = `${baseUrl}/v1/images/generations`
             // 若存在参考图，优先走 Responses 多模态（input_image + image_generation tool）
-            const nodeInputs = await extractNodeInputs(node, options?.allNodes)
-            const refCandidates = pickModelReferenceImages(nodeInputs as any, 4)
+            const nodeInputs = await extractNodeInputs(node, options?.allNodes, {
+              studioEdges: options?.studioEdges,
+              imageMentionRefPromptOverride: options?.rawPromptText,
+              imageMentionRefsRequireStableNodeId: true,
+            })
+            const refCandidates = pickModelReferenceImages(nodeInputs as any, 4, {
+              includePrimaryCanvasImage: false,
+            })
             const refImages = (
               await Promise.all(
                 refCandidates.map(async (c) => {
@@ -3302,7 +3353,9 @@ export function useWorkflowIntegration() {
               ? '你是分镜/脚本生成助手。请根据用户输入输出结构清晰、可直接用于短片/漫剧的脚本正文，输出纯文本，不要解释。'
               : '你是 Flowid 文本节点助手。请直接输出最终文本，不要输出额外解释。'
         options?.onProgress?.({ percent: 8, label: '正在调用云端模型…' })
-        const nodeInputs = await extractNodeInputs(node, options?.allNodes)
+        const nodeInputs = await extractNodeInputs(node, options?.allNodes, {
+          studioEdges: options?.studioEdges,
+        })
         const refCandidates = pickModelReferenceImages(nodeInputs as any, 6)
         const refImages = (
           await Promise.all(
@@ -3410,7 +3463,9 @@ export function useWorkflowIntegration() {
                 undefined,
               )
             : node
-        const nodeInputs = await extractNodeInputs(officialInputNode, options?.allNodes)
+        const nodeInputs = await extractNodeInputs(officialInputNode, options?.allNodes, {
+          studioEdges: options?.studioEdges,
+        })
         const rawRefImages = String(nodeInputs.refImages ?? '')
         const refImageUrls = rawRefImages
           .split('\n')
@@ -3662,7 +3717,9 @@ export function useWorkflowIntegration() {
                 workflowSource,
               )
             : node
-      const nodeInputs = await extractNodeInputs(comfyInputNode, options?.allNodes)
+      const nodeInputs = await extractNodeInputs(comfyInputNode, options?.allNodes, {
+        studioEdges: options?.studioEdges,
+      })
       if (
         shouldLogComfyDebug() &&
         (nodeKind === 'audio' || nodeKind === 'music') &&
@@ -3835,7 +3892,9 @@ export function useWorkflowIntegration() {
       ) {
         let audioEntries = audioRefEntriesFromNodeInputs(nodeInputs as NodeInputRecord)
         try {
-          const refreshedInputs = await extractNodeInputs(comfyInputNode, options?.allNodes)
+          const refreshedInputs = await extractNodeInputs(comfyInputNode, options?.allNodes, {
+            studioEdges: options?.studioEdges,
+          })
           const next = audioRefEntriesFromNodeInputs(refreshedInputs as NodeInputRecord)
           if (next.length > 0) {
             audioEntries = next
@@ -4128,7 +4187,8 @@ export function useWorkflowIntegration() {
           tdRefRows.some((r) => String(r?.roleName ?? '').trim())
         ) {
           applyComfyTdRefAudioRoleRowsToPrompt(prompt, tdRefRows, tdSpeakerIds, {
-            skipLeadingSlots: 0,
+            /** 匹配表不含主预览（__REF_AUDIO_1__），行从第 2 路参考音起写 DefineSpeaker */
+            skipLeadingSlots: 1,
           })
         }
         if (shouldLogComfyDebug() && serializedBefore.includes('__NOTE__')) {

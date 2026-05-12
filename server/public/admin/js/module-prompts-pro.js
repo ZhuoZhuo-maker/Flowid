@@ -14,6 +14,14 @@
     let selectedId = ''
     let list = []
 
+    function newRowId() {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+      return `spo-c-${Date.now()}-${Math.floor(Math.random() * 1e9)}`
+    }
+
+    /** @type {{ id: string, name: string, originalName: string }[]} */
+    let spoCatOrderRows = []
+
     root.innerHTML = `
 <section class="spo-page" aria-label="系统提示词管理">
   <header class="spo-crumb">
@@ -25,6 +33,18 @@
     列表：<code>GET /admin/system-prompts</code>；保存：<code>PUT /admin/system-prompts/:id</code> 会落盘正文并重算 <code>sha256</code> 与签名。
     后端无独立「全局」字段：上方正文为<strong>当前选中条目</strong>的文件内容；产品侧可将固定 ID 作为全对话默认。
   </p>
+
+  <div class="spo-card spo-card--catorder" style="margin-bottom:16px">
+    <h3 class="spo-card__title">分类标签</h3>
+    <p class="hint" style="margin:0 0 12px">
+      新增、改名、删除或排序后保存。画布右侧「系统提示词」顶部分类 Tab 按此列表；可先添加尚无条目的分类（空 Tab）。删除某分类且仍有提示词使用时，保存后这些条目的 category 会改为列表第一项。改名会更新索引中所有该分类条目（不重算正文签名）。
+    </p>
+    <div id="spo-cat-order-rows" class="im-cat-rows"></div>
+    <div class="im-cats__actions">
+      <button type="button" class="im-btn-ghost" id="spo-cat-order-add">+ 添加分类</button>
+      <button type="button" class="btn btn-primary" id="spo-cat-order-save">保存分类</button>
+    </div>
+  </div>
 
   <div class="spo-card spo-card--body">
     <h3 class="spo-card__title">正文 · SYSTEM PROMPT TEXT</h3>
@@ -137,6 +157,115 @@
       return CAT_LABEL[catKey] || catKey
     }
 
+    function countPromptsForCategory(label) {
+      const n = String(label || '').trim()
+      if (!n) return 0
+      return list.filter((p) => U.normalizeCategoryLabel(p.category) === n).length
+    }
+
+    function hydrateSpoCatOrderFromList(savedOrder, prompts) {
+      const used = new Set()
+      for (const p of prompts || []) used.add(U.normalizeCategoryLabel(p.category))
+      const order = Array.isArray(savedOrder) ? savedOrder : []
+      const rows = []
+      const seen = new Set()
+      for (const c of order) {
+        const k = String(c || '').trim()
+        if (!k || seen.has(k)) continue
+        seen.add(k)
+        rows.push({ id: newRowId(), name: k, originalName: k })
+      }
+      const rest = Array.from(used)
+        .filter((k) => !seen.has(k))
+        .sort((a, b) => String(a).localeCompare(String(b), 'zh-CN'))
+      for (const k of rest) rows.push({ id: newRowId(), name: k, originalName: k })
+      spoCatOrderRows = rows
+    }
+
+    function renderSpoCatOrderRows() {
+      const host = q('#spo-cat-order-rows')
+      if (!host) return
+      host.innerHTML = ''
+      spoCatOrderRows.forEach((row, idx) => {
+        const wrap = document.createElement('div')
+        wrap.className = 'im-cat-row'
+        const move = document.createElement('div')
+        move.className = 'im-cat-row__move'
+        const btnUp = document.createElement('button')
+        btnUp.type = 'button'
+        btnUp.className = 'im-btn-ghost im-cat-row__movebtn'
+        btnUp.textContent = '↑'
+        btnUp.title = '上移'
+        btnUp.disabled = idx <= 0
+        btnUp.onclick = () => {
+          if (idx <= 0) return
+          const t = spoCatOrderRows[idx - 1]
+          spoCatOrderRows[idx - 1] = spoCatOrderRows[idx]
+          spoCatOrderRows[idx] = t
+          renderSpoCatOrderRows()
+          rebuildCategoryFilter()
+        }
+        const btnDown = document.createElement('button')
+        btnDown.type = 'button'
+        btnDown.className = 'im-btn-ghost im-cat-row__movebtn'
+        btnDown.textContent = '↓'
+        btnDown.title = '下移'
+        btnDown.disabled = idx >= spoCatOrderRows.length - 1
+        btnDown.onclick = () => {
+          if (idx >= spoCatOrderRows.length - 1) return
+          const t = spoCatOrderRows[idx + 1]
+          spoCatOrderRows[idx + 1] = spoCatOrderRows[idx]
+          spoCatOrderRows[idx] = t
+          renderSpoCatOrderRows()
+          rebuildCategoryFilter()
+        }
+        move.appendChild(btnUp)
+        move.appendChild(btnDown)
+        wrap.appendChild(move)
+        const inp = document.createElement('input')
+        inp.type = 'text'
+        inp.className = 'im-input im-cat-row__input'
+        inp.value = row.name
+        inp.placeholder = '分类名（如 general、绘画）'
+        inp.autocomplete = 'off'
+        inp.addEventListener('input', () => {
+          row.name = inp.value
+          rebuildCategoryFilter()
+        })
+        wrap.appendChild(inp)
+        const meta = document.createElement('span')
+        meta.className = 'im-cat-row__meta'
+        const key = String(row.originalName || '').trim() || String(row.name || '').trim()
+        if (key) meta.textContent = `${countPromptsForCategory(key)} 条`
+        wrap.appendChild(meta)
+        const btnDel = document.createElement('button')
+        btnDel.type = 'button'
+        btnDel.className = 'im-btn-ghost im-cat-row__del'
+        btnDel.textContent = '删除'
+        btnDel.onclick = () => {
+          if (spoCatOrderRows.length <= 1) {
+            window.FlowidAdminToast('至少保留一个分类', true)
+            return
+          }
+          const lab = String(row.originalName || row.name || '').trim()
+          const n = lab ? countPromptsForCategory(lab) : 0
+          if (
+            n > 0 &&
+            !window.confirm(
+              `「${lab}」正被 ${n} 条提示词使用。保存后这些条目的分类将改为列表第一项。确定从列表移除？`,
+            )
+          ) {
+            return
+          }
+          spoCatOrderRows = spoCatOrderRows.filter((r) => r.id !== row.id)
+          renderSpoCatOrderRows()
+          rebuildCategoryFilter()
+        }
+        wrap.appendChild(btnDel)
+        host.appendChild(wrap)
+      })
+    }
+
     function itemsForCategorySource() {
       const tf = q('#spo-tier-filter').value
       if (tf === 'all') return list
@@ -148,7 +277,18 @@
       const prev = sel.value || ALL
       const cats = new Set()
       for (const p of itemsForCategorySource()) cats.add(U.normalizeCategoryLabel(p.category))
-      const sorted = Array.from(cats).sort((a, b) => String(a).localeCompare(String(b), 'zh-CN'))
+      const fromRows = spoCatOrderRows.map((r) => String(r.name || '').trim()).filter(Boolean)
+      const seen = new Set()
+      const sorted = []
+      for (const c of fromRows) {
+        if (seen.has(c)) continue
+        seen.add(c)
+        sorted.push(c)
+      }
+      const rest = Array.from(cats)
+        .filter((c) => !seen.has(c))
+        .sort((a, b) => String(a).localeCompare(String(b), 'zh-CN'))
+      sorted.push(...rest)
       sel.innerHTML = ''
       const opt0 = document.createElement('option')
       opt0.value = ALL
@@ -246,6 +386,8 @@
       const keep = selectedId
       const res = await api.get('/admin/system-prompts')
       list = res.prompts || []
+      hydrateSpoCatOrderFromList(res.categoryOrder, list)
+      renderSpoCatOrderRows()
       rebuildCategoryFilter()
       if (keep && list.some((p) => p.id === keep)) {
         await selectOne(keep)
@@ -286,6 +428,46 @@
       try {
         await api.delete('/admin/system-prompts/' + encodeURIComponent(id))
         window.FlowidAdminToast('已删除')
+        await loadList()
+      } catch (e) {
+        window.FlowidAdminToast(String(e.message || e), true)
+      }
+    }
+
+    q('#spo-cat-order-add').onclick = () => {
+      spoCatOrderRows.push({ id: newRowId(), name: '', originalName: '' })
+      renderSpoCatOrderRows()
+      rebuildCategoryFilter()
+    }
+
+    q('#spo-cat-order-save').onclick = async () => {
+      const names = []
+      const seen = new Set()
+      for (const row of spoCatOrderRows) {
+        const s = String(row.name || '').trim()
+        if (!s) {
+          window.FlowidAdminToast('请填写所有分类名称，或删除空行', true)
+          return
+        }
+        if (seen.has(s)) {
+          window.FlowidAdminToast('分类名称不能重复', true)
+          return
+        }
+        seen.add(s)
+        names.push(s)
+      }
+      const renames = []
+      for (const row of spoCatOrderRows) {
+        const nm = String(row.name || '').trim()
+        const orig = String(row.originalName || '').trim()
+        if (orig && nm && orig !== nm) renames.push({ from: orig, to: nm })
+      }
+      try {
+        await api.put('/admin/system-prompt-categories', { categories: names, renames })
+        window.FlowidAdminToast('分类已保存')
+        spoCatOrderRows.forEach((r) => {
+          r.originalName = String(r.name || '').trim()
+        })
         await loadList()
       } catch (e) {
         window.FlowidAdminToast(String(e.message || e), true)

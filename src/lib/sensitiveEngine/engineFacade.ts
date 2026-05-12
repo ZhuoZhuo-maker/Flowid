@@ -14,6 +14,21 @@ let fullEngine: AhoCorasick | null = null
 
 const fallbackEngine = new AhoCorasick(SENSITIVE_CORE)
 
+/** 单次同步插入的最大词条数；再大则分帧插入，减轻「加载完词库后整页卡死」 */
+const PATTERN_INSERT_CHUNK = 450
+
+async function buildFullEngineBatched(words: readonly SensitiveWord[]): Promise<AhoCorasick> {
+  const ac = new AhoCorasick([], { deferFailureLinks: true })
+  for (let i = 0; i < words.length; i += PATTERN_INSERT_CHUNK) {
+    ac.appendPatterns(words.slice(i, Math.min(i + PATTERN_INSERT_CHUNK, words.length)))
+    if (i + PATTERN_INSERT_CHUNK < words.length) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()))
+    }
+  }
+  ac.seal()
+  return ac
+}
+
 /** 让出主线程，避免 `alert()` 刚关闭或用户刚点击输入框时立刻跑大词表 AC 构建把 UI 卡死数秒 */
 function yieldToMainForAcBuild(): Promise<void> {
   return new Promise((resolve) => {
@@ -31,19 +46,31 @@ function yieldToMainForAcBuild(): Promise<void> {
  */
 function buildFullEngineWhenIdle(words: readonly SensitiveWord[]): Promise<void> {
   return new Promise((resolve) => {
-    const go = () => {
-      fullEngine = new AhoCorasick(words)
-      engineReady = true
-      resolve()
+    const run = async () => {
+      try {
+        await yieldToMainForAcBuild()
+        fullEngine =
+          words.length <= PATTERN_INSERT_CHUNK
+            ? new AhoCorasick(words)
+            : await buildFullEngineBatched(words)
+      } catch {
+        fullEngine = null
+      } finally {
+        engineReady = true
+        resolve()
+      }
     }
     const g = globalThis as typeof globalThis & {
       requestIdleCallback?: (cb: IdleRequestCallback, opts?: IdleRequestOptions) => number
     }
+    const kick = () => {
+      void run()
+    }
     if (typeof g.requestIdleCallback === 'function') {
       // 词表较大时 AC 构建仍可能 >600ms；略放宽 timeout，减少「点了发送却迟迟无反应」的体感
-      g.requestIdleCallback(() => go(), { timeout: 1800 })
+      g.requestIdleCallback(kick, { timeout: 1800 })
     } else {
-      window.setTimeout(go, 0)
+      window.setTimeout(kick, 0)
     }
   })
 }

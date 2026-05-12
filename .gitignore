@@ -9,14 +9,26 @@ lerna-debug.log*
 
 node_modules
 dist
-# 本地生成的 YouMind 提示词导出（npm run export:youmind-prompts）
-exports/youmind-gpt-image-2-prompts
 release
 release-analyzer
 deliverables
 dist-ssr
 *.local
 .env
+.env.development.local
+.env.production.local
+
+# 敏感词合并产物（由 `npm run build:lexicon` 生成，勿提交远端）
+public/lexicon/sensitive.json
+public/lexicon/sensitive.meta.json
+
+# 灵感市场单条素材（体积大；保留 index.json / categories.json 即可）
+server/inspiration-market/*.png
+server/inspiration-market/*.prompt.txt
+
+# 随包图库导出目录（体积大，见 public/flowid-bundled/README.txt）
+public/flowid-bundled/
+
 # 本地打包用的后端地址（勿提交）
 pack-flowid-user-config.bat
 data/*.db

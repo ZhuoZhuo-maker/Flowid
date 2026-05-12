@@ -7,6 +7,7 @@
   window.FlowidAdminPanelTemplatesFree = async function (root) {
     let selectedId = ''
     let list = []
+    let listLoading = false
 
     root.innerHTML = `
       <p class="hint">此页对应前端「<strong>预设模板</strong>」中的<strong>基础免费</strong>条目（<code>tier=free</code>）。此处上传的是<strong>项目预设模板数据</strong>（JSON），用于客户端编排与任务提交，并非 ComfyUI 画布概念。与 Pro 预设分栏维护。<strong>大文件</strong>：上传 /「仅更新预设文件」时正文以<strong>原文提交</strong>，由服务端解析，避免浏览器卡死；从右侧<strong>加载已有条目</strong>仍可能因整包 JSON 较大而短暂卡顿。若在框内<strong>选择/复制</strong>仍卡，请<strong>刷新后重试</strong>，并在本页对浏览器扩展（如 Grammarly）关闭「在此网站启用」。</p>
@@ -131,10 +132,17 @@
     function renderList() {
       const host = q('#wf-list')
       host.innerHTML = ''
+      if (listLoading) {
+        host.innerHTML =
+          '<div class="empty-state">正在加载列表…（网络或反代较慢时会多等几秒；约 30 秒超时将提示）</div>'
+        return
+      }
       const filtered = visibleItems()
       if (!filtered.length) {
         host.innerHTML =
-          '<div class="empty-state">无匹配项（可调整分类 / 搜索词，或点击刷新）</div>'
+          list.length === 0
+            ? '<div class="empty-state">暂无预设模板，可在左侧上传新建。</div>'
+            : '<div class="empty-state">无匹配项（可调整分类 / 搜索词，或点击刷新）</div>'
         return
       }
       for (const t of filtered) {
@@ -148,10 +156,16 @@
     }
 
     async function loadList() {
-      const res = await api.get('/admin/templates')
-      list = res.templates || []
-      rebuildCategoryFilter()
+      listLoading = true
       renderList()
+      try {
+        const res = await api.get('/admin/templates')
+        list = res.templates || []
+        rebuildCategoryFilter()
+      } finally {
+        listLoading = false
+        renderList()
+      }
     }
 
     async function selectOne(id) {

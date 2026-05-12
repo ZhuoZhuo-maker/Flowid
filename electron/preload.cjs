@@ -1,4 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron')
+const fs = require('node:fs')
+
+function getExeMtimeMsSync() {
+  try {
+    return fs.statSync(process.execPath).mtimeMs
+  } catch {
+    return 0
+  }
+}
 
 /**
  * 暴露桌面端能力给前端。
@@ -8,6 +17,8 @@ contextBridge.exposeInMainWorld('flowidDesktop', {
   confirmDialog: (payload) => ipcRenderer.invoke('flowid:dialog-confirm', payload),
   /** OpenAI 兼容 HTTP（主进程 fetch，供桌面端直连厂商 API） */
   openAiCompatFetch: (payload) => ipcRenderer.invoke('flowid:openai-compat-fetch', payload),
+  /** 当前可执行文件 mtime（重装/覆盖安装后通常变化；用于用户协议是否需重显） */
+  getExeMtimeMsSync: () => getExeMtimeMsSync(),
   getAppVersion: () => ipcRenderer.invoke('desktop:get-app-version'),
   getMachineId: () => ipcRenderer.invoke('desktop:get-machine-id'),
   checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),

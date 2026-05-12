@@ -9,6 +9,10 @@ echo ==========================================
 echo Flowid Desktop Launcher
 echo ==========================================
 echo.
+echo [NOTE] Dev Electron loads Vite; preset/inspiration use cloud OR local bundle OR
+echo        Auth URL from in-app Settings (not only the exe installer). Default Auth:
+echo        http://127.0.0.1:3721 when VITE_FLOWID_PUBLIC_SERVER_ORIGIN is unset.
+echo.
 
 echo [STEP 1/4] Check backend service (3721)...
 REM Do not use netstat|findstr :3721 (false positives e.g. port 13721 contains substring :3721). Use exact LocalPort below.

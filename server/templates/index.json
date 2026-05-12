@@ -1,6 +1,26 @@
 {
   "templates": [
     {
+      "id": "33aab845-2bab-4cbb-a8fe-5ccf0f8e4030",
+      "name": "云端comfyui示例",
+      "version": "1.0.0",
+      "category": "其他",
+      "tier": "free",
+      "description": "云端comfyui工作流示例",
+      "workflowFile": "33aab845-2bab-4cbb-a8fe-5ccf0f8e4030.workflow.json",
+      "paramsSchema": {}
+    },
+    {
+      "id": "6366b584-5690-49f0-a939-3158ff72e71f",
+      "name": "音乐游戏UI界面资源",
+      "version": "1.0.0",
+      "category": "其他",
+      "tier": "free",
+      "description": "关于游戏UI界面的设计",
+      "workflowFile": "6366b584-5690-49f0-a939-3158ff72e71f.workflow.json",
+      "paramsSchema": {}
+    },
+    {
       "id": "d73590a7-2041-4ccb-8a92-dfabf359e060",
       "name": "image-2提示词模板示例",
       "version": "1.0.0",

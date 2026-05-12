@@ -41,8 +41,8 @@
     },
     {
       id: 'inspiration-market',
-      title: '灵感市集',
-      sub: '提示词模板 · 分类 · 封面与正文',
+      title: '灵感小镇',
+      sub: '灵感条目 · 分类 · 封面与提示词（客户端「灵感小镇」同步）',
     },
     {
       id: 'prompts',

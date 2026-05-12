@@ -57,6 +57,7 @@ import {
   readAssistApiKeys,
   testAssistConnectionForKind,
   writeAssistApiKeys,
+  writeAssistLineVerified,
   type CloudAssistKind,
 } from '../../lib/cloudAssistModelCatalog'
 import {
@@ -949,10 +950,11 @@ export function WorkflowSettingsPanel({
         setCloudSelfMsg('平台模式下请填写默认模型与 API Key。')
         return
       }
-    } else if (!baseUrlCustom || !model || !apiKey) {
-      setCloudSelfMsg('请填写 API 地址 / 默认模型 / API Key。')
+    } else if (!baseUrlCustom || !model) {
+      setCloudSelfMsg('请填写 API 地址与默认模型。')
       return
     }
+    // 自定义线路：允许 Key 留空（用户明确删掉 Key 后仍可保存；画布节点上缓存的 cloudApiKey 会随全局事件一并清空）
     const id = editingCloudSelfId && editingCloudSelfId !== 'new' ? editingCloudSelfId : crypto.randomUUID()
     const saved = upsertCloudSelfPreset({
       id,
@@ -964,7 +966,11 @@ export function WorkflowSettingsPanel({
       model,
     })
     setActiveCloudSelfPresetId(saved.id)
-    setCloudSelfMsg('已保存。')
+    setCloudSelfMsg(
+      src === 'custom' && !apiKey
+        ? '已保存（未填 API Key 将无法调用云端模型）。若所有自助预设均无 Key，画布节点上缓存的 Key 会自动清空。'
+        : '已保存。',
+    )
     setEditingCloudSelfId(null)
   }, [cloudSelfDraft, editingCloudSelfId])
 
@@ -3156,6 +3162,10 @@ export function WorkflowSettingsPanel({
                             ComfyUI 工作流；本页云端模型不依赖授权激活。以下输入框均支持
                             <span className="text-white/45"> Ctrl+V / 右键粘贴</span>
                             ；从邮件或文档粘贴时会自动去掉首尾空白与换行。
+                            <span className="text-white/45">
+                              {' '}
+                              填写 Key 后须点击「测试连接」成功，对应类型节点才会出现云端模型列表；改 Key、删 Key 或测试失败后将隐藏列表并清除节点上的该线路选型。
+                            </span>
                           </p>
                           {CLOUD_ASSIST_KIND_LIST.map((k) => (
                             <div key={k} className="flex flex-wrap items-center gap-2">
@@ -3199,6 +3209,7 @@ export function WorkflowSettingsPanel({
                                     setAssistLineTestMsg((m) => ({ ...m, [k]: '测试中…' }))
                                     const r = await testAssistConnectionForKind(k)
                                     setAssistLineTestMsg((m) => ({ ...m, [k]: r.message }))
+                                    writeAssistLineVerified({ [k]: r.ok })
                                   })()
                                 }}
                               >

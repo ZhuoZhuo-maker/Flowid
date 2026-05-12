@@ -3,6 +3,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { syncUserAgreementExeStamp } from './lib/userAgreementExeStamp'
 
 /**
  * 开发期控制台降噪：过滤已知且可自愈的浏览器/HMR 噪声异常，避免无限刷屏影响排障。
@@ -37,6 +38,8 @@ function installDevNoiseGuards() {
 }
 
 installDevNoiseGuards()
+
+syncUserAgreementExeStamp()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

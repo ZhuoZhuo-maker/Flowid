@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { createPortal } from 'react-dom'
 import { GripVertical, ImageUp, Shield, Tag } from 'lucide-react'
 import { motion } from 'motion/react'
 import { imageMimeTypeFromPath } from '../../lib/materialLibrary'
@@ -13,13 +12,8 @@ import {
   saveActiveSystemPromptPresetId,
   type SystemPromptPresetMeta,
 } from '../../lib/systemPromptPresets'
-import { fetchInspirationList, inspirationAbsoluteUrl, type InspirationListItem } from '../../lib/inspirationMarketApi'
-import { InspirationMarketDetailPage } from '../home/InspirationMarketPages'
 
 type Category = { id: string; label: string }
-
-/** 与「全部」等并列的分类 Tab id，勿与真实 category 重名 */
-const INSPIRATION_MARKET_TAB_ID = '__flowid_inspiration_market__'
 
 function isDesktopFileIo(): boolean {
   return Boolean(
@@ -34,15 +28,12 @@ function isDesktopFileIo(): boolean {
 export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean }) {
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<SystemPromptPresetMeta[]>([])
+  const [promptCategoryOrder, setPromptCategoryOrder] = useState<string[]>([])
   const [activeCategory, setActiveCategory] = useState<string>('all')
   const [activeId, setActiveId] = useState<string>(() => loadActiveSystemPromptPresetId())
   const [pathsTick, setPathsTick] = useState(0)
   const [coverUrlById, setCoverUrlById] = useState<Record<string, string>>({})
   const [uploadBusyId, setUploadBusyId] = useState<string | null>(null)
-  const [inspirationItems, setInspirationItems] = useState<InspirationListItem[]>([])
-  const [inspirationLoading, setInspirationLoading] = useState(false)
-  const [inspirationErr, setInspirationErr] = useState<string | null>(null)
-  const [inspirationDetailId, setInspirationDetailId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const fileInputPresetIdRef = useRef<string | null>(null)
   const coverUrlByIdRef = useRef<Record<string, string>>({})
@@ -69,7 +60,8 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
     void (async () => {
       const next = await fetchSystemPromptPresets()
       if (cancelled) return
-      setItems(next)
+      setItems(next.items)
+      setPromptCategoryOrder(next.categoryOrder)
       setLoading(false)
     })()
     return () => {
@@ -80,16 +72,22 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
   const categories = useMemo<Category[]>(() => {
     const set = new Set<string>()
     for (const item of items) set.add(item.category || 'general')
-    const list = Array.from(set).sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
-    return [
-      { id: 'all', label: '全部' },
-      { id: INSPIRATION_MARKET_TAB_ID, label: '灵感市集' },
-      ...list.map((c) => ({ id: c, label: c })),
-    ]
-  }, [items])
+    const seen = new Set<string>()
+    const ordered: string[] = []
+    for (const raw of promptCategoryOrder) {
+      const c = String(raw || '').trim()
+      if (!c || seen.has(c)) continue
+      seen.add(c)
+      ordered.push(c)
+    }
+    const rest = Array.from(set)
+      .filter((c) => !seen.has(c))
+      .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    const merged = [...ordered, ...rest]
+    return [{ id: 'all', label: '全部' }, ...merged.map((c) => ({ id: c, label: c }))]
+  }, [items, promptCategoryOrder])
 
   const filtered = useMemo(() => {
-    if (activeCategory === INSPIRATION_MARKET_TAB_ID) return []
     if (activeCategory === 'all') return items
     return items.filter((i) => (i.category || 'general') === activeCategory)
   }, [activeCategory, items])
@@ -169,27 +167,6 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
   }, [sortedFiltered, pathsTick])
 
   useEffect(() => {
-    if (activeCategory !== INSPIRATION_MARKET_TAB_ID) return
-    let cancelled = false
-    setInspirationLoading(true)
-    setInspirationErr(null)
-    void (async () => {
-      const res = await fetchInspirationList()
-      if (cancelled) return
-      if (!res) {
-        setInspirationErr('无法拉取灵感市集（请检查授权服务地址）')
-        setInspirationItems([])
-      } else {
-        setInspirationItems(res.items)
-      }
-      setInspirationLoading(false)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [activeCategory])
-
-  useEffect(() => {
     return () => {
       for (const u of Object.values(coverUrlByIdRef.current)) {
         try {
@@ -234,17 +211,6 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
   const Shell = embedded ? 'div' : motion.div
 
   return (
-    <>
-      {inspirationDetailId
-        ? createPortal(
-            <InspirationMarketDetailPage
-              id={inspirationDetailId}
-              onBackHome={() => setInspirationDetailId(null)}
-              onBackMarket={() => setInspirationDetailId(null)}
-            />,
-            document.body,
-          )
-        : null}
     <Shell
       {...(!embedded
         ? {
@@ -279,7 +245,8 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
               setLoading(true)
               void (async () => {
                 const next = await fetchSystemPromptPresets()
-                setItems(next)
+                setItems(next.items)
+                setPromptCategoryOrder(next.categoryOrder)
                 setLoading(false)
               })()
             }}
@@ -311,59 +278,7 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto p-4 custom-scrollbar">
-        {activeCategory === INSPIRATION_MARKET_TAB_ID ? (
-          inspirationLoading ? (
-            <div className="py-10 text-center text-[12px] font-mono uppercase tracking-widest text-white/35">
-              Loading…
-            </div>
-          ) : inspirationErr ? (
-            <div className="rounded-xl border border-amber-500/35 bg-amber-950/25 px-3 py-3 text-[12px] text-amber-100/90 font-bold leading-relaxed">
-              {inspirationErr}
-            </div>
-          ) : inspirationItems.length === 0 ? (
-            <div className="h-48 flex flex-col items-center justify-center text-center opacity-40">
-              <Tag size={28} className="mb-3" />
-              <p className="text-[12px] font-black uppercase tracking-widest text-white/40 m-0">暂无灵感条目</p>
-              <p className="mt-2 mb-0 max-w-[220px] text-[11px] leading-relaxed text-white/35">
-                请在 Auth 管理台「灵感市集」上传模板。
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {inspirationItems.map((it) => (
-                <div
-                  key={it.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => setInspirationDetailId(it.id)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      setInspirationDetailId(it.id)
-                    }
-                  }}
-                  className="flex w-full cursor-pointer gap-2 overflow-hidden rounded-xl border border-white/10 bg-[#121212] text-left outline-none transition-colors hover:border-orange-500/35 focus-visible:ring-2 focus-visible:ring-orange-500/40"
-                >
-                  <div className="flex min-w-0 flex-1 flex-col p-3">
-                    <div className="text-[11px] font-mono uppercase tracking-widest text-orange-400">{it.category}</div>
-                    <div className="mt-1 truncate text-[13px] font-black leading-snug text-orange-400">{it.title}</div>
-                    {it.description ? (
-                      <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-white/40">{it.description}</div>
-                    ) : null}
-                  </div>
-                  <div className="relative min-h-[88px] w-20 shrink-0 self-stretch border-l border-white/5 bg-black/30">
-                    <img
-                      src={inspirationAbsoluteUrl(it.imageUrl)}
-                      alt=""
-                      className="absolute inset-0 h-full w-full object-cover"
-                      loading="lazy"
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )
-        ) : loading ? (
+        {loading ? (
           <div className="py-10 text-center text-[12px] font-mono uppercase tracking-widest text-white/35">Loading…</div>
         ) : filtered.length === 0 ? (
           <div className="h-64 flex flex-col items-center justify-center text-center opacity-40">
@@ -498,6 +413,5 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
         )}
       </div>
     </Shell>
-    </>
   )
 }

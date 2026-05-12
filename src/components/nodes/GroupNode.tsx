@@ -13,6 +13,10 @@ import { createPortal } from 'react-dom'
 import { useCanvasActions } from '../../context/CanvasContext'
 import type { GroupNodeData } from '../../types'
 
+/** 分组标题栏字号：与右键菜单「字体大小」一致 */
+const GROUP_TITLE_FONT_MIN = 10
+const GROUP_TITLE_FONT_MAX = 200
+
 /**
  * 分组节点：标题栏在 `pointerdown` **捕获**阶段同步 `addSelectedNodes`，避免早于 XYDrag 的
  * `unselectNodesAndEdges` 竞态；整条标题栏双击重命名（排除折叠按钮）。
@@ -27,22 +31,54 @@ export function GroupNode({
 }: NodeProps<Node<GroupNodeData, 'group'>>) {
   const { updateNodeData, updateNodeMeta, removeNodeById } = useCanvasActions()
   const store = useStoreApi()
-  const borderColor = data.borderColor || '#6fd2ff'
-  const backgroundColor = data.backgroundColor || 'rgba(50, 90, 120, 0.08)'
-  const titleFontSize = Math.min(24, Math.max(10, Number(data.titleFontSize || 12)))
+  const borderColor = data.borderColor || '#3b82f6'
+  const backgroundColor = data.backgroundColor || 'rgba(15, 23, 42, 0.9)'
+  const titleColorTrim = String(data.titleColor || '').trim()
+  const titleFontSize = Math.min(
+    GROUP_TITLE_FONT_MAX,
+    Math.max(GROUP_TITLE_FONT_MIN, Number(data.titleFontSize || 12)),
+  )
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
+  /** 右键菜单内：标题栏色 / 标题字色 / 字号 各块折叠 */
+  const [groupMenuAccordion, setGroupMenuAccordion] = useState({
+    frame: false,
+    titleText: false,
+    fontSize: false,
+  })
+  const [fontSizeDraft, setFontSizeDraft] = useState(String(titleFontSize))
   const colorPresets = [
-    { label: '无颜色', border: '#6fd2ff', bg: 'rgba(50, 90, 120, 0.08)' },
-    { label: '红色', border: '#ef4444', bg: 'rgba(239, 68, 68, 0.18)' },
-    { label: '棕色', border: '#a16207', bg: 'rgba(161, 98, 7, 0.18)' },
-    { label: '绿色', border: '#22c55e', bg: 'rgba(34, 197, 94, 0.18)' },
-    { label: '蓝色', border: '#3b82f6', bg: 'rgba(59, 130, 246, 0.18)' },
-    { label: '浅蓝', border: '#06b6d4', bg: 'rgba(6, 182, 212, 0.18)' },
-    { label: '青色', border: '#14b8a6', bg: 'rgba(20, 184, 166, 0.18)' },
-    { label: '紫色', border: '#a855f7', bg: 'rgba(168, 85, 247, 0.18)' },
-    { label: '黄色', border: '#eab308', bg: 'rgba(234, 179, 8, 0.18)' },
-    { label: '黑色', border: '#111827', bg: 'rgba(17, 24, 39, 0.24)' },
+    { label: '无颜色', border: '#3b82f6', bg: 'rgba(15, 23, 42, 0.9)' },
+    { label: '红色', border: '#dc2626', bg: 'rgba(220, 38, 38, 0.42)' },
+    { label: '棕色', border: '#b45309', bg: 'rgba(180, 83, 9, 0.4)' },
+    { label: '绿色', border: '#16a34a', bg: 'rgba(22, 163, 74, 0.42)' },
+    { label: '蓝色', border: '#2563eb', bg: 'rgba(37, 99, 235, 0.42)' },
+    { label: '浅蓝', border: '#0891b2', bg: 'rgba(8, 145, 178, 0.4)' },
+    { label: '青色', border: '#0d9488', bg: 'rgba(13, 148, 136, 0.4)' },
+    { label: '紫色', border: '#9333ea', bg: 'rgba(147, 51, 234, 0.42)' },
+    { label: '黄色', border: '#ca8a04', bg: 'rgba(202, 138, 4, 0.45)' },
+    { label: '黑色', border: '#64748b', bg: 'rgba(15, 23, 42, 0.72)' },
   ]
+
+  /** 标题文字色（与「标题栏颜色」里描边/底无关） */
+  const titleTextColorPresets: Array<{ label: string; value: string }> = [
+    { label: '默认', value: '' },
+    { label: '冰蓝', value: '#cde7ff' },
+    { label: '白色', value: '#f8fafc' },
+    { label: '亮黄', value: '#fde047' },
+    { label: '橙色', value: '#fb923c' },
+    { label: '绿色', value: '#86efac' },
+    { label: '红色', value: '#fca5a5' },
+    { label: '紫色', value: '#d8b4fe' },
+    { label: '青色', value: '#67e8f9' },
+  ]
+
+  useEffect(() => {
+    if (!menuPos) {
+      setGroupMenuAccordion({ frame: false, titleText: false, fontSize: false })
+      return
+    }
+    setFontSizeDraft(String(titleFontSize))
+  }, [menuPos, titleFontSize])
 
   useEffect(() => {
     if (!menuPos) return
@@ -220,6 +256,7 @@ export function GroupNode({
             ? { '--group-title-row-height': `${titleRowHeightExpanded}px` }
             : {}),
           '--group-title-pad-y': `${COLLAPSED_TITLE_PAD_Y}px`,
+          ...(titleColorTrim ? { '--group-title-color': titleColorTrim } : {}),
         } as CSSProperties
       }
     >
@@ -355,40 +392,165 @@ export function GroupNode({
               >
                 重命名
               </button>
-              <div className="studio-group__menuSectionTitle">颜色</div>
-              <div className="studio-group__menuColors">
-                {colorPresets.map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    className="studio-group__menuColorItem"
-                    style={{ background: item.border }}
-                    onClick={() => {
-                      updateNodeData(id, {
-                        kind: 'group',
-                        borderColor: item.border,
-                        backgroundColor: item.bg,
-                      })
-                      setMenuPos(null)
-                    }}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
               <button
                 type="button"
-                className="studio-group__menuItem"
-                onClick={() => {
-                  const raw = window.prompt('输入标题字号（10-120）', String(titleFontSize))
-                  if (!raw) return
-                  const next = Math.max(10, Math.min(120, Number(raw) || 12))
-                  updateNodeData(id, { kind: 'group', titleFontSize: next })
-                  setMenuPos(null)
+                className="studio-group__menuSectionToggle"
+                aria-expanded={groupMenuAccordion.frame}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setGroupMenuAccordion((p) => ({ ...p, frame: !p.frame }))
                 }}
               >
-                字体大小
+                <span>标题栏颜色</span>
+                <span className="studio-group__menuSectionToggleChevron" aria-hidden>
+                  {groupMenuAccordion.frame ? '▾' : '▸'}
+                </span>
               </button>
+              {groupMenuAccordion.frame ? (
+                <div className="studio-group__menuSectionBody">
+                  <div className="studio-group__menuColors">
+                    {colorPresets.map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        className="studio-group__menuColorItem"
+                        style={{ background: item.border }}
+                        onClick={() => {
+                          updateNodeData(id, {
+                            kind: 'group',
+                            borderColor: item.border,
+                            backgroundColor: item.bg,
+                          })
+                          setMenuPos(null)
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="studio-group__menuSectionToggle"
+                aria-expanded={groupMenuAccordion.titleText}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setGroupMenuAccordion((p) => ({ ...p, titleText: !p.titleText }))
+                }}
+              >
+                <span>标题颜色</span>
+                <span className="studio-group__menuSectionToggleChevron" aria-hidden>
+                  {groupMenuAccordion.titleText ? '▾' : '▸'}
+                </span>
+              </button>
+              {groupMenuAccordion.titleText ? (
+                <div className="studio-group__menuSectionBody">
+                  <div className="studio-group__menuColors">
+                    {titleTextColorPresets.map((item) => (
+                      <button
+                        key={`title-c-${item.label}`}
+                        type="button"
+                        className="studio-group__menuColorItem"
+                        style={
+                          item.value
+                            ? { background: item.value, color: '#0f172a', textShadow: 'none' }
+                            : {
+                                background: 'rgba(255,255,255,0.06)',
+                                borderStyle: 'dashed',
+                                color: 'rgba(255,255,255,0.65)',
+                              }
+                        }
+                        onClick={() => {
+                          updateNodeData(id, {
+                            kind: 'group',
+                            titleColor: item.value ? item.value : undefined,
+                          })
+                          setMenuPos(null)
+                        }}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div
+                    className="studio-group__menuTitleColorCustom nodrag nopan"
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <span className="studio-group__menuTitleColorCustomLabel">自定义</span>
+                    <input
+                      type="color"
+                      className="studio-group__colorInput nodrag nopan"
+                      aria-label="自定义标题颜色"
+                      value={/^#[0-9a-fA-F]{6}$/i.test(titleColorTrim) ? titleColorTrim : '#cde7ff'}
+                      onChange={(event) => {
+                        updateNodeData(id, { kind: 'group', titleColor: event.target.value })
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="studio-group__menuSectionToggle"
+                aria-expanded={groupMenuAccordion.fontSize}
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setFontSizeDraft(String(titleFontSize))
+                  setGroupMenuAccordion((p) => ({ ...p, fontSize: !p.fontSize }))
+                }}
+              >
+                <span>字体大小</span>
+                <span className="studio-group__menuSectionToggleChevron" aria-hidden>
+                  {groupMenuAccordion.fontSize ? '▾' : '▸'}
+                </span>
+              </button>
+              {groupMenuAccordion.fontSize ? (
+                <div
+                  className="studio-group__menuFontSize studio-group__menuSectionBody"
+                  onClick={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <input
+                    type="number"
+                    min={GROUP_TITLE_FONT_MIN}
+                    max={GROUP_TITLE_FONT_MAX}
+                    className="studio-group__menuFontSizeInput nodrag nopan"
+                    aria-label={`标题字号 ${GROUP_TITLE_FONT_MIN}–${GROUP_TITLE_FONT_MAX}`}
+                    value={fontSizeDraft}
+                    onChange={(event) => setFontSizeDraft(event.target.value)}
+                  />
+                  <div className="studio-group__menuFontSizeActions">
+                    <button
+                      type="button"
+                      className="studio-group__menuItem studio-group__menuFontSizeBtn"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        const next = Math.max(
+                          GROUP_TITLE_FONT_MIN,
+                          Math.min(GROUP_TITLE_FONT_MAX, Number(fontSizeDraft) || 12),
+                        )
+                        updateNodeData(id, { kind: 'group', titleFontSize: next })
+                        setGroupMenuAccordion((p) => ({ ...p, fontSize: false }))
+                        setMenuPos(null)
+                      }}
+                    >
+                      确定
+                    </button>
+                    <button
+                      type="button"
+                      className="studio-group__menuItem studio-group__menuFontSizeBtn"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setGroupMenuAccordion((p) => ({ ...p, fontSize: false }))
+                      }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <button
                 type="button"
                 className="studio-group__menuItem is-danger"

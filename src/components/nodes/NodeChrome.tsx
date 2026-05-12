@@ -56,9 +56,11 @@ export function NodeChrome({
    */
   const commitTitleChange = () => {
     const next = draftTitle.trim()
-    const fallback = title.trim()
-    const finalTitle = next || fallback || title
-    if (onTitleChange && finalTitle !== title) {
+    const raw = String(title ?? '')
+    const fallback = raw.trim()
+    const finalTitle = next || fallback || raw
+    // 始终交给上层：画布内标题去重在 `StudioApp.updateNodeData`（与 `finalTitle === title` 时仍需处理重名）。
+    if (onTitleChange) {
       onTitleChange(finalTitle)
     }
     setIsEditingTitle(false)

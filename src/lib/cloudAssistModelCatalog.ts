@@ -16,6 +16,7 @@ export const CLOUD_ASSIST_KIND_LABELS: Record<CloudAssistKind, string> = {
 }
 
 const LS_ASSIST_KEYS = 'flowid.cloud.assist.apiKeys.v1'
+const LS_ASSIST_VERIFIED = 'flowid.cloud.assist.lineVerified.v1'
 
 /** 画布节点 kind → 后台「云端模型配置」分类（脚本走文本） */
 export function studioNodeKindToAssistKind(nodeKind: string): CloudAssistKind | null {
@@ -87,15 +88,82 @@ export function readAssistApiKeys(): Record<CloudAssistKind, string> {
   }
 }
 
+function defaultAssistLineVerified(): Record<CloudAssistKind, boolean> {
+  return { text: false, image: false, video: false, audio: false, music: false }
+}
+
+/**
+ * 辅助线路是否已通过设置页「测试连接」。
+ * 仅在为 true 且本地已填 Key 时，节点「模型」下拉里才展示 Auth 云端目录中的模型。
+ */
+export function readAssistLineVerified(): Record<CloudAssistKind, boolean> {
+  try {
+    const raw = window.localStorage.getItem(LS_ASSIST_VERIFIED)
+    const d = defaultAssistLineVerified()
+    if (!raw) return d
+    const j = JSON.parse(raw) as Partial<Record<CloudAssistKind, boolean>>
+    for (const kk of CLOUD_ASSIST_KINDS) {
+      d[kk] = Boolean((j as any)[kk])
+    }
+    return d
+  } catch {
+    return defaultAssistLineVerified()
+  }
+}
+
+export function writeAssistLineVerified(patch: Partial<Record<CloudAssistKind, boolean>>): void {
+  const cur = readAssistLineVerified()
+  for (const kk of CLOUD_ASSIST_KINDS) {
+    if (Object.prototype.hasOwnProperty.call(patch, kk)) {
+      cur[kk] = Boolean((patch as any)[kk])
+    }
+  }
+  try {
+    window.localStorage.setItem(LS_ASSIST_VERIFIED, JSON.stringify(cur))
+  } catch {
+    // ignore
+  }
+  try {
+    window.dispatchEvent(new CustomEvent('flowid:assist-line-verified-changed'))
+  } catch {
+    // ignore
+  }
+}
+
+export function invalidateAssistLineVerifiedForKinds(kinds: CloudAssistKind[]): void {
+  const uniq = [...new Set(kinds.filter(Boolean))] as CloudAssistKind[]
+  if (!uniq.length) return
+  const patch: Partial<Record<CloudAssistKind, boolean>> = {}
+  for (const k of uniq) patch[k] = false
+  writeAssistLineVerified(patch)
+}
+
+export type CloudAssistKeysChangedDetail = {
+  clearedAssistKinds: CloudAssistKind[]
+  /** Key 相对上次写入有变化，需重新测试通过后才展示云端模型 */
+  keyChangedAssistKinds: CloudAssistKind[]
+}
+
 export function writeAssistApiKeys(next: Partial<Record<CloudAssistKind, string>>): void {
   const cur = readAssistApiKeys()
+  const clearedAssistKinds: CloudAssistKind[] = []
+  const keyChangedAssistKinds: CloudAssistKind[] = []
   for (const k of CLOUD_ASSIST_KINDS) {
     if (Object.prototype.hasOwnProperty.call(next, k)) {
-      cur[k] = String((next as any)[k] ?? '').trim()
+      const prev = String(cur[k] || '').trim()
+      const nw = String((next as any)[k] ?? '').trim()
+      cur[k] = nw
+      if (prev && !nw) clearedAssistKinds.push(k)
+      if (prev !== nw) keyChangedAssistKinds.push(k)
     }
   }
   window.localStorage.setItem(LS_ASSIST_KEYS, JSON.stringify(cur))
-  window.dispatchEvent(new CustomEvent('flowid:cloud-assist-keys-changed'))
+  invalidateAssistLineVerifiedForKinds(keyChangedAssistKinds)
+  window.dispatchEvent(
+    new CustomEvent('flowid:cloud-assist-keys-changed', {
+      detail: { clearedAssistKinds, keyChangedAssistKinds } satisfies CloudAssistKeysChangedDetail,
+    }),
+  )
 }
 
 export function getAssistApiKey(kind: CloudAssistKind): string {

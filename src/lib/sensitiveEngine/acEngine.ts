@@ -16,15 +16,43 @@ function chKey(ch: string): string {
  */
 export class AhoCorasick {
   private nodes: TrieNode[] = []
+  /** `deferFailureLinks` 为 true 时仅建树，须再调用 `seal()` 后方可匹配 */
+  private sealed = false
 
-  constructor(patterns: readonly SensitiveWord[]) {
+  constructor(patterns: readonly SensitiveWord[], opts?: { deferFailureLinks?: boolean }) {
     this.nodes.push({ next: new Map(), fail: 0, out: [] })
+    this.addPatternsInternal(patterns)
+    if (opts?.deferFailureLinks) {
+      this.sealed = false
+      return
+    }
+    this.buildFailureLinks()
+    this.sealed = true
+  }
+
+  /**
+   * 在未 seal 前追加词条（用于主线程分帧构建，避免一次性插入数千词卡死 UI）。
+   */
+  appendPatterns(patterns: readonly SensitiveWord[]): void {
+    if (this.sealed) {
+      throw new Error('AhoCorasick: cannot appendPatterns after seal()')
+    }
+    this.addPatternsInternal(patterns)
+  }
+
+  /** 完成 fail 链；之后方可 `findAll` / `check` */
+  seal(): void {
+    if (this.sealed) return
+    this.buildFailureLinks()
+    this.sealed = true
+  }
+
+  private addPatternsInternal(patterns: readonly SensitiveWord[]): void {
     for (const p of patterns) {
       const w = String(p.word || '')
       if (!w) continue
       this.insert(w, p)
     }
-    this.buildFailureLinks()
   }
 
   private newNode(): number {
@@ -74,6 +102,9 @@ export class AhoCorasick {
 
   /** 返回所有匹配区间（可能重叠）；索引基于传入的 `text`（应与扫描用文本一致） */
   findAll(text: string): AcMatchInterval[] {
+    if (!this.sealed) {
+      throw new Error('AhoCorasick: findAll before seal()')
+    }
     const out: AcMatchInterval[] = []
     const n = text.length
     let state = 0

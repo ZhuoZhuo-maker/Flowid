@@ -1,6 +1,6 @@
-import type { Node } from '@xyflow/react'
+import type { Edge, Node } from '@xyflow/react'
 import type { PanoramaNodeData, StudioNodeData } from '../types'
-import { parseMentionRefs, resolveMentionRefToNode } from './nodeMentions'
+import { collectUpstreamNodeIds, parseMentionRefs, resolveMentionRefToNode } from './nodeMentions'
 import { workflowJsonSupportsVoiceTable8Slots } from './comfyVoiceTable8'
 
 /**
@@ -88,11 +88,17 @@ function mergeAudioRefUrlLabelPairs(args: {
   hostNodeId: string
   referenceImageSources: string[]
   allNodes: Array<Node<StudioNodeData>>
+  /** 有边时：无 uuid 的 @ 仅在上游祖先中解析（与 `extractNodeInputs` / 侧栏一致） */
+  studioEdges?: Edge[]
 }): Array<{ url: string; label: string }> {
+  const restrict =
+    args.hostNodeId && args.studioEdges?.length
+      ? collectUpstreamNodeIds(args.hostNodeId, args.studioEdges)
+      : undefined
   const pairEntries: Array<{ url: string; label: string }> = []
   if (args.allNodes.length && args.noteText.includes('@')) {
     for (const ref of parseMentionRefs(args.noteText)) {
-      const hit = resolveMentionRefToNode(ref, args.allNodes, args.hostNodeId)
+      const hit = resolveMentionRefToNode(ref, args.allNodes, args.hostNodeId, undefined, restrict)
       if (!hit) continue
       const kind = hit.data.kind
       if (kind !== 'image' && kind !== 'panorama' && kind !== 'audio' && kind !== 'music') continue
@@ -127,9 +133,10 @@ export function buildAudioRefSlotDisplayLabels(args: {
   primarySrc: string
   referenceImageSources: string[]
   allNodes: Array<Node<StudioNodeData>>
+  studioEdges?: Edge[]
   /**
-   * 默认 true：含「主参考音」行（与 `__REF_AUDIO_1__` 主槽一致）。
-   * 传 false：只列与主槽 URL 不同的 @/本地上传（历史兼容；TD「匹配」请改用 {@link buildTdRefAudioRoleMatchSlotLabels}）。
+   * 默认 true：含「第1路·主预览」行（与 `__REF_AUDIO_1__` 一致，可为生成结果或上传参考）。
+   * 传 false：只列与主槽 URL 不同的 @/本地上传（与 TD「匹配」表一致）。
    */
   includePrimarySlotLabel?: boolean
 }): string[] {
@@ -140,32 +147,28 @@ export function buildAudioRefSlotDisplayLabels(args: {
   if (args.includePrimarySlotLabel === false) {
     return purePairs.map((p) => p.label)
   }
-  const head = `主参考音（${String(args.selfTitle || '').trim() || '本节点'}）`
+  const head = `第1路·主预览（${String(args.selfTitle || '').trim() || '本节点'}）`
   return [head, ...purePairs.map((p) => p.label)]
 }
 
 /**
- * TD「参考音与角色名」：一路参考音一行（含第 1 路），与 `audioOrderedRefEntries` / `__REF_AUDIO_*` 顺序一致；
- * 提交时应对全部槽位写 `DefineSpeaker.inputs.name`（`skipLeadingSlots: 0`）。
+ * TD「匹配」表：仅列 **@ / 底部上传** 等与节点主预览 URL 不同的路（主预览常为上一段生成结果，不参与角色名匹配）。
+ * 与 `__REF_AUDIO_2__` 起的 DefineSpeaker 顺序一致；执行时须 `applyComfyTdRefAudioRoleRowsToPrompt(..., { skipLeadingSlots: 1 })`。
  */
 export function buildTdRefAudioRoleMatchSlotLabels(args: {
   noteText: string
   hostNodeId: string
-  selfTitle: string
   primarySrc: string
   referenceImageSources: string[]
   allNodes: Array<Node<StudioNodeData>>
+  studioEdges?: Edge[]
 }): string[] {
   const mergedPairs = mergeAudioRefUrlLabelPairs(args)
   let primaryUrl = String(args.primarySrc || '').trim()
-  const hadDeclaredPrimary = Boolean(primaryUrl)
   if (!primaryUrl && mergedPairs[0]?.url) primaryUrl = mergedPairs[0]!.url
   if (!primaryUrl && mergedPairs.length === 0) return []
   const purePairs = mergedPairs.filter((p) => p.url && p.url !== primaryUrl)
-  const head = hadDeclaredPrimary
-    ? `主槽（${String(args.selfTitle || '').trim() || '本节点'}）`
-    : mergedPairs.find((p) => p.url === primaryUrl)?.label || '参考音 1'
-  return [head, ...purePairs.map((p) => p.label)]
+  return purePairs.map((p) => p.label)
 }
 
 export function applyComfyTdRefAudioRoleRowsToPrompt(

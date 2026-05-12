@@ -20,15 +20,15 @@
     root.innerHTML = `
       <div class="im-root">
         <header class="im-hero">
-          <p class="im-hero__eyebrow">Inspiration gallery</p>
-          <h1 class="im-hero__title">灵感市集</h1>
-          <p class="im-hero__sub">管理提示词模板与封面，右侧为客户端卡片预览。</p>
+          <p class="im-hero__eyebrow">INSPIRATION TOWN</p>
+          <h1 class="im-hero__title">灵感小镇</h1>
+          <p class="im-hero__sub">管理灵感条目与分类、封面与提示词正文；右侧为客户端卡片预览。</p>
         </header>
 
         <section class="im-card im-cats" aria-labelledby="im-cats-h">
           <h2 id="im-cats-h" class="im-cats__title">分类标签</h2>
           <p class="im-cats__hint">
-            在此添加、删除或改名；保存后客户端「灵感市集」筛选与条目分类会同步。若新增标签，请先保存本区再在下拉框中为条目选择该分类。删除列表中的某标签并保存后，仍使用该标签的条目会自动归入「其它」（若无「其它」则归入列表第一项）。
+            在此添加、删除或改名；可用每行左侧 ↑↓ 调整顺序（保存分类后生效）。保存后客户端「灵感小镇」筛选与条目分类会同步。若新增标签，请先保存本区再在下拉框中为条目选择该分类。删除列表中的某标签并保存后，仍使用该标签的条目会自动归入「其它」（若无「其它」则归入列表第一项）。
           </p>
           <div id="im-cat-rows" class="im-cat-rows"></div>
           <div class="im-cats__actions">
@@ -156,9 +156,44 @@
       const host = root.querySelector('#im-cat-rows')
       if (!host) return
       host.innerHTML = ''
-      catRows.forEach((row) => {
+      catRows.forEach((row, idx) => {
         const wrap = document.createElement('div')
         wrap.className = 'im-cat-row'
+        const move = document.createElement('div')
+        move.className = 'im-cat-row__move'
+        const btnUp = document.createElement('button')
+        btnUp.type = 'button'
+        btnUp.className = 'im-btn-ghost im-cat-row__movebtn'
+        btnUp.textContent = '↑'
+        btnUp.title = '上移'
+        btnUp.disabled = idx <= 0
+        btnUp.onclick = () => {
+          if (idx <= 0) return
+          const tmp = catRows[idx - 1]
+          catRows[idx - 1] = catRows[idx]
+          catRows[idx] = tmp
+          renderCatRows()
+          fillCats()
+          syncPreview()
+        }
+        const btnDown = document.createElement('button')
+        btnDown.type = 'button'
+        btnDown.className = 'im-btn-ghost im-cat-row__movebtn'
+        btnDown.textContent = '↓'
+        btnDown.title = '下移'
+        btnDown.disabled = idx >= catRows.length - 1
+        btnDown.onclick = () => {
+          if (idx >= catRows.length - 1) return
+          const tmp = catRows[idx + 1]
+          catRows[idx + 1] = catRows[idx]
+          catRows[idx] = tmp
+          renderCatRows()
+          fillCats()
+          syncPreview()
+        }
+        move.appendChild(btnUp)
+        move.appendChild(btnDown)
+        wrap.appendChild(move)
         const inp = document.createElement('input')
         inp.type = 'text'
         inp.className = 'im-input im-cat-row__input'

@@ -24,6 +24,8 @@ declare global {
           }
         | { ok: false; error: string }
       >
+      /** 同步读取当前 exe mtime，供用户协议重装检测（无则勿调用） */
+      getExeMtimeMsSync?: () => number
       getAppVersion: () => Promise<string>
       /** 获取稳定机器码（用于授权绑定） */
       getMachineId?: () => Promise<string>

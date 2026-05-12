@@ -1,5 +1,6 @@
 import type { Node } from '@xyflow/react'
 import { matchStudioNodeWorkflow } from './matchStudioNodeWorkflow'
+import { resolvedPromptPickerMode } from './promptPickerMode'
 import type { WorkflowConfigSnapshot } from './workflowConfigStorage'
 import type { StudioNodeData, StudioNodeKind } from '../types'
 
@@ -29,13 +30,8 @@ export function buildPointsReserveParams(
     throw new Error('unsupported_node_kind')
   }
   const nodeConfig = snapshot.nodeConfigs[nodeKind]
-  const hasCloudModelConfigured =
-    Boolean(String(nodeConfig.cloudModelUrl || '').trim()) &&
-    Boolean(String(nodeConfig.cloudModelName || '').trim())
   const executionTarget =
-    options?.executionTarget ??
-    ((node.data as { promptPickerMode?: string }).promptPickerMode === 'model' ? 'model' : undefined) ??
-    (!snapshot.local.enabled && !snapshot.cloud.enabled && hasCloudModelConfigured ? 'model' : 'workflow')
+    options?.executionTarget ?? resolvedPromptPickerMode(node.data as { promptPickerMode?: 'workflow' | 'model' })
 
   const { picked } = matchStudioNodeWorkflow(
     node.data as { model?: string; workflowEntryId?: string },

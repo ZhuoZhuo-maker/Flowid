@@ -1,5 +1,28 @@
-import type { Node } from '@xyflow/react'
+import type { Edge, Node } from '@xyflow/react'
 import type { ImageNodeData, PanoramaNodeData, StudioNodeData } from '../types'
+
+/**
+ * 沿边从 `hostNodeId` **向上游**追溯：所有能通过 source→target 连到该节点的祖先节点 id（不含自身）。
+ * 无 uuid 的 @ 仅在此集合内按标题匹配，避免全画布「图片节点1」等重名默认标题撞车。
+ */
+export function collectUpstreamNodeIds(hostNodeId: string, edges: Edge[] | undefined): Set<string> {
+  const out = new Set<string>()
+  if (!hostNodeId || !edges?.length) return out
+  const queue: string[] = [hostNodeId]
+  const seen = new Set<string>([hostNodeId])
+  while (queue.length) {
+    const target = queue.shift()!
+    for (const e of edges) {
+      if (e.target !== target) continue
+      const sid = String(e.source || '').trim()
+      if (!sid || seen.has(sid)) continue
+      seen.add(sid)
+      out.add(sid)
+      queue.push(sid)
+    }
+  }
+  return out
+}
 
 /**
  * 兼容旧数据：无节点 id 时的 @ 写法（不推荐，仅标题全等 + 图-n 简写）。
@@ -212,11 +235,16 @@ function collectResolvedVisualMentionsWithUrl(
   text: string,
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId?: string,
+  kindFilter?: (kind: StudioNodeData['kind']) => boolean,
+  edges?: Edge[],
 ): ResolvedVisualMentionWithUrl[] {
+  const restrict =
+    currentNodeId && edges?.length ? collectUpstreamNodeIds(currentNodeId, edges) : undefined
   const refs = parseMentionRefs(text)
   const out: ResolvedVisualMentionWithUrl[] = []
+  const kf = kindFilter ?? isImagePipelineMentionKind
   for (const ref of refs) {
-    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId, isImagePipelineMentionKind)
+    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId, kf, restrict)
     if (!hit) continue
     const kind = hit.data.kind
     if (kind === 'panorama') {
@@ -236,12 +264,18 @@ function collectResolvedVisualMentionsWithUrl(
 
 /**
  * 将一条解析结果解析为画布节点；`kindFilter` 用于仅匹配含图/音媒体节点。
+ *
+ * 无 `nodeId` 时：在**候选池**内按标题全等 / `@图N` 简写解析。候选池为除自身外的节点；若传入
+ * `restrictTitleMatchToNodeIds` 则仅限上游。画布侧已通过 `allocateUniqueNodeTitle` 等保证同工程标题不重复，
+ * 故同一标题在池内至多一条；若遇异常重复数据，按遍历顺序先收录者优先（与旧行为一致）。
  */
 export function resolveMentionRefToNode(
   ref: ParsedMentionRef,
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId?: string,
   kindFilter?: (kind: StudioNodeData['kind']) => boolean,
+  /** 有值时：无 uuid 的 @ 仅允许匹配到该 id 集合内的节点（通常为上游祖先） */
+  restrictTitleMatchToNodeIds?: Set<string> | null,
 ): Node<StudioNodeData> | undefined {
   const nodeOk = (node: Node<StudioNodeData>) =>
     (!currentNodeId || node.id !== currentNodeId) && (!kindFilter || kindFilter(node.data.kind))
@@ -253,12 +287,13 @@ export function resolveMentionRefToNode(
   }
 
   const titleToNode = new Map<string, Node<StudioNodeData>>()
-  nodes.forEach((node) => {
-    if (currentNodeId && node.id === currentNodeId) return
+  for (const node of nodes) {
+    if (currentNodeId && node.id === currentNodeId) continue
+    if (restrictTitleMatchToNodeIds && !restrictTitleMatchToNodeIds.has(node.id)) continue
     const title = String(node.data.title || '').trim()
-    if (!title) return
+    if (!title) continue
     if (!titleToNode.has(title)) titleToNode.set(title, node)
-  })
+  }
 
   const exact = titleToNode.get(ref.label)
   if (exact && nodeOk(exact)) return exact
@@ -268,12 +303,14 @@ export function resolveMentionRefToNode(
     const num = shorthand[1]
     const titled = titleToNode.get(`图片节点${num}`)
     if (titled && nodeOk(titled)) return titled
-    return nodes.find((node) => {
-      if (!nodeOk(node) || node.data.kind !== 'image') return false
+    for (const node of nodes) {
+      if (currentNodeId && node.id === currentNodeId) continue
+      if (restrictTitleMatchToNodeIds && !restrictTitleMatchToNodeIds.has(node.id)) continue
+      if (!nodeOk(node) || node.data.kind !== 'image') continue
       const t = String(node.data.title || '').trim()
       const m = /^图片节点(\d+)$/.exec(t)
-      return m?.[1] === num
-    })
+      if (m?.[1] === num) return node
+    }
   }
 
   return undefined
@@ -306,8 +343,10 @@ export function collectMentionImageSources(
   text: string,
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId?: string,
+  /** 有边时：无 uuid 的 @ 仅在上游祖先节点中解析 */
+  edges?: Edge[],
 ): string[] {
-  const entries = collectResolvedVisualMentionsWithUrl(text, nodes, currentNodeId)
+  const entries = collectResolvedVisualMentionsWithUrl(text, nodes, currentNodeId, undefined, edges)
   const urls = entries.map((e) => e.url)
   return Array.from(new Set(urls))
 }
@@ -322,12 +361,15 @@ export function collectMentionAudioResolvedEntries(
   text: string,
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId?: string,
+  edges?: Edge[],
 ): MentionAudioResolvedEntry[] {
+  const restrict =
+    currentNodeId && edges?.length ? collectUpstreamNodeIds(currentNodeId, edges) : undefined
   const refs = parseMentionRefs(text)
   const out: MentionAudioResolvedEntry[] = []
   const seen = new Set<string>()
   for (const ref of refs) {
-    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId)
+    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId, undefined, restrict)
     if (!hit) continue
     const k = hit.data.kind
     if (k !== 'audio' && k !== 'music') continue
@@ -347,8 +389,9 @@ export function collectMentionAudioSources(
   text: string,
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId?: string,
+  edges?: Edge[],
 ): string[] {
-  return collectMentionAudioResolvedEntries(text, nodes, currentNodeId).map((e) => e.url)
+  return collectMentionAudioResolvedEntries(text, nodes, currentNodeId, edges).map((e) => e.url)
 }
 
 /**
@@ -358,11 +401,14 @@ export function listMentionAudioRefLabelsForNote(
   text: string,
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId?: string,
+  edges?: Edge[],
 ): string[] {
+  const restrict =
+    currentNodeId && edges?.length ? collectUpstreamNodeIds(currentNodeId, edges) : undefined
   const refs = parseMentionRefs(text)
   const out: string[] = []
   for (const ref of refs) {
-    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId)
+    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId, undefined, restrict)
     if (!hit) continue
     if (hit.data.kind !== 'audio' && hit.data.kind !== 'music') continue
     const title = String(hit.data.title || '').trim()
@@ -380,8 +426,9 @@ export function listMentionImageAttachments(
   text: string,
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId?: string,
+  edges?: Edge[],
 ): Array<{ mention: string; url: string }> {
-  const entries = collectResolvedVisualMentionsWithUrl(text, nodes, currentNodeId)
+  const entries = collectResolvedVisualMentionsWithUrl(text, nodes, currentNodeId, undefined, edges)
   return entries.map((e) => ({
     mention: text.slice(e.ref.start, e.ref.end),
     url: e.url,
@@ -397,14 +444,17 @@ export function resolveNodeMentionsInText(
   text: string,
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId?: string,
+  edges?: Edge[],
 ): string {
   if (!text.includes('@')) return text
   const refs = parseMentionRefs(text)
   if (!refs.length) return text
+  const restrict =
+    currentNodeId && edges?.length ? collectUpstreamNodeIds(currentNodeId, edges) : undefined
   let out = text
   for (let i = refs.length - 1; i >= 0; i--) {
     const ref = refs[i]
-    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId)
+    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId, undefined, restrict)
     if (!hit) {
       continue
     }

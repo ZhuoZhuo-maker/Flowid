@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion } from 'motion/react'
 import {
   fetchInspirationItem,
@@ -14,23 +14,36 @@ import {
 } from '../../lib/inspirationMarketLlm'
 import { loadAiAssistantConfig } from '../../lib/aiAssistantAgent'
 
+/** 用户可见的合规提示（列表 / 详情一致） */
+const INSPIRATION_MARKET_DISCLAIMER =
+  '本小镇内容仅供学习与参考；素材来源于网络，侵删；请合法、合规使用。'
+
 /** 画廊式卡片：大图在上、橙字标题、圆角描边按钮（与参考稿一致） */
 export function InspirationMarketGrid({ onOpenDetail }: { onOpenDetail: (id: string) => void }) {
   const [categories, setCategories] = useState<string[]>(['全部', 'UI', '海报', '角色', '场景', '产品', '其它'])
   const [cat, setCat] = useState('全部')
   const [items, setItems] = useState<InspirationListItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const fetchSeqRef = useRef(0)
+  const itemsRef = useRef<InspirationListItem[]>([])
+  itemsRef.current = items
 
   const load = useCallback(async () => {
-    setLoading(true)
+    const seq = ++fetchSeqRef.current
     setErr(null)
+    const hasItems = itemsRef.current.length > 0
+    if (hasItems) setRefreshing(true)
+    else setLoading(true)
     try {
       const meta = await fetchInspirationMeta()
+      if (seq !== fetchSeqRef.current) return
       if (meta?.categories?.length) {
         setCategories(['全部', ...meta.categories])
       }
       const list = await fetchInspirationList(cat === '全部' ? undefined : cat)
+      if (seq !== fetchSeqRef.current) return
       if (!list) {
         setErr('无法连接授权服务，请检查「设置 → 授权」中的服务地址（默认 3721）')
         setItems([])
@@ -38,10 +51,14 @@ export function InspirationMarketGrid({ onOpenDetail }: { onOpenDetail: (id: str
       }
       setItems(list.items)
     } catch (e) {
+      if (seq !== fetchSeqRef.current) return
       setErr(String((e as Error)?.message || e))
       setItems([])
     } finally {
-      setLoading(false)
+      if (seq === fetchSeqRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [cat])
 
@@ -53,17 +70,18 @@ export function InspirationMarketGrid({ onOpenDetail }: { onOpenDetail: (id: str
     <div className="max-w-6xl mx-auto">
       <div className="mb-20">
         <div className="flex items-center gap-4 text-orange-500 font-black tracking-widest mb-6">
-          <span className="text-xs">INSPIRATION_MARKET // V1</span>
+          <span className="text-xs">INSPIRATION_TOWN // V1</span>
           <div className="h-[1px] w-12 bg-orange-600" />
         </div>
         <h1 className="text-6xl md:text-8xl font-black tracking-tighter uppercase italic text-white/90 flex items-end gap-6 flex-wrap">
-          灵感市集
+          灵感小镇
           <div className="flex gap-2 mb-4">
             <div className="w-20 h-3 bg-orange-600" />
             <div className="w-8 h-3 bg-orange-600/40" />
             <div className="w-4 h-3 bg-orange-600/20" />
           </div>
         </h1>
+        <p className="mt-5 max-w-3xl text-[13px] leading-relaxed text-white/40">{INSPIRATION_MARKET_DISCLAIMER}</p>
       </div>
 
       <div className="flex gap-4 mb-16 overflow-x-auto pb-4 flex-wrap">
@@ -81,13 +99,6 @@ export function InspirationMarketGrid({ onOpenDetail }: { onOpenDetail: (id: str
             {c}
           </button>
         ))}
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="px-8 py-3 rounded-full text-[14px] font-black uppercase tracking-widest border border-white/10 bg-[#111114] text-white/60 hover:border-white/20 hover:text-white transition-all"
-        >
-          刷新
-        </button>
       </div>
 
       {err ? (
@@ -96,16 +107,32 @@ export function InspirationMarketGrid({ onOpenDetail }: { onOpenDetail: (id: str
         </div>
       ) : null}
 
-      {loading ? (
+      {loading && !items.length ? (
         <div
           className="min-h-[280px] rounded-2xl border border-white/5 bg-black/20 animate-pulse"
           aria-busy
           aria-label="加载中"
         />
       ) : !items.length ? (
-        <div className="min-h-[280px] rounded-2xl border border-white/5 bg-black/20" aria-hidden />
+        <div
+          className="min-h-[280px] rounded-2xl border border-white/10 bg-black/20 px-6 py-12 text-center text-white/45 text-sm font-bold"
+          aria-live="polite"
+        >
+          {refreshing ? '加载中…' : '该分类下暂无灵感条目，可切换其它分类。'}
+        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+        <div className="relative grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          {refreshing ? (
+            <div
+              className="absolute inset-0 z-[2] rounded-2xl bg-black/35 backdrop-blur-[1px] flex items-start justify-center pt-8 pointer-events-none"
+              aria-busy
+              aria-label="切换分类加载中"
+            >
+              <span className="text-[12px] font-black uppercase tracking-widest text-white/70 border border-white/15 bg-black/50 px-4 py-2 rounded-full">
+                加载中…
+              </span>
+            </div>
+          ) : null}
           {items.map((it) => (
             <motion.article
               key={it.id}
@@ -178,14 +205,19 @@ export function InspirationMarketDetailPage({
       setSegments(null)
       setComposed('')
       setMsg(null)
-      const d = await fetchInspirationItem(id)
-      if (cancelled) return
-      if (!d) {
-        setLoadErr('条目不存在或网络错误')
-        setDetail(null)
-        return
+      setDetail(null)
+      try {
+        const d = await fetchInspirationItem(id)
+        if (cancelled) return
+        if (!d) {
+          setLoadErr('条目不存在或网络错误（请确认授权服务地址为 http/https 与后端一致，且 GET /inspiration-market/item 可访问）')
+          return
+        }
+        setDetail(d)
+      } catch (e) {
+        if (cancelled) return
+        setLoadErr(String((e as Error)?.message || e || '网络请求失败'))
       }
-      setDetail(d)
     })()
     return () => {
       cancelled = true
@@ -264,9 +296,10 @@ export function InspirationMarketDetailPage({
             onClick={onBackMarket}
             className="rounded-full border border-white/15 bg-white/5 text-white/80 font-black text-[13px] uppercase tracking-widest px-8 py-2.5 hover:border-orange-500/40 hover:text-white transition-all"
           >
-            灵感市集
+            灵感小镇
           </button>
         </div>
+        <p className="text-[12px] text-white/35 mb-8 leading-relaxed max-w-2xl">{INSPIRATION_MARKET_DISCLAIMER}</p>
 
         {loadErr ? (
           <p className="text-red-400 font-bold text-sm border border-red-500/30 rounded-2xl bg-red-950/30 px-4 py-3">{loadErr}</p>
@@ -292,11 +325,13 @@ export function InspirationMarketDetailPage({
 
             <section className={`mb-6 ${shell}`}>
               <h2 className="text-[13px] font-black uppercase tracking-widest text-white/55 mb-3">原始提示词</h2>
-              <pre
-                className={`whitespace-pre-wrap text-sm text-white/70 font-mono leading-relaxed max-h-64 overflow-y-auto custom-scrollbar rounded-xl border border-white/5 bg-black/25 p-4`}
-              >
-                {detail.promptText}
-              </pre>
+              <textarea
+                readOnly
+                value={detail.promptText}
+                spellCheck={false}
+                aria-label="原始提示词"
+                className="w-full min-h-[10rem] max-h-64 resize-y whitespace-pre-wrap text-sm text-white/70 font-mono leading-relaxed overflow-y-auto custom-scrollbar rounded-xl border border-white/5 bg-black/25 p-4 outline-none cursor-text focus:border-orange-500/40 focus:ring-1 focus:ring-orange-500/25"
+              />
               <div className="mt-4 flex flex-wrap gap-3">
                 <button
                   type="button"

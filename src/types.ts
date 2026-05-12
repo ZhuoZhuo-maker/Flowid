@@ -164,8 +164,8 @@ export type StudioNodeDataBase = {
   workflowEntryId?: string
 
   /**
-   * 底部提示框切换：执行时走工作流（ComfyUI）还是走文本模型。
-   * 这是“节点级”状态，用于同一画布不同节点不同执行路径。
+   * 底部提示框切换：显式 `workflow` 时走 Comfy 工作流；未设置或 `model` 时走「模型」线路（新建节点默认模型）。
+   * 节点级状态，用于同一画布不同节点不同执行路径。
    */
   promptPickerMode?: 'workflow' | 'model'
 
@@ -349,7 +349,7 @@ export type ComfyVoiceTableRow = {
   language: string
 }
 
-/** TD 有参参考音 → MultiDialog 角色名（按槽位索引，与主槽+@+本地上传去重后的执行顺序一致，含第 1 路） */
+/** TD 有参：@/底部上传参考音 → DefineSpeaker 角色名（不含主预览 __REF_AUDIO_1__；与 `skipLeadingSlots: 1` 写入顺序一致） */
 export type ComfyTdRefAudioRoleRow = {
   roleName: string
 }
@@ -373,7 +373,7 @@ export type AudioNodeData = StudioNodeDataBase & {
   referenceImageAssetIds?: string[]
   /** 多人 FB 工作流：最多 8 行角色/音色表（无参多人 TTS） */
   comfyVoiceTableRows?: ComfyVoiceTableRow[]
-  /** TD 有参多人：参考音槽位顺序与 `__REF_AUDIO_*` 一致，对应 `TDQwen3TTSDefineSpeaker.inputs.name`（与台本角色名对齐） */
+  /** TD 有参多人：仅「@ / 底部上传」参考路（不含节点主预览）；与 `__REF_AUDIO_2__` 起 DefineSpeaker 对齐 */
   comfyTdRefAudioRoleRows?: ComfyTdRefAudioRoleRow[]
   /**
    * 音乐节点：侧栏「微调」写入 Comfy（Ace Step `TextEncodeAceStepAudio1.5` / `EmptyAceStep1.5LatentAudio` 等）。
@@ -415,8 +415,10 @@ export type GroupNodeData = StudioNodeDataBase & {
   borderColor?: string
   /** 分组框背景色 */
   backgroundColor?: string
-  /** 分组标题字体大小 */
+  /** 分组标题字体大小（px，约 10–200） */
   titleFontSize?: number
+  /** 分组标题文字颜色（CSS 颜色串，如 #cde7ff）；未设时使用界面默认冰蓝 */
+  titleColor?: string
   /** 是否固定（固定后不可拖拽） */
   locked?: boolean
   /** 展开态宽度（用于折叠后恢复） */

@@ -61,7 +61,7 @@ body.admin-app {
   color: var(--text);
 }
 
-/* 主内容区所有原生 <select>：暗底、橙焦点、下拉项深色（与灵感市集 / 工具栏风格一致） */
+/* 主内容区所有原生 <select>：暗底、橙焦点、下拉项深色（与灵感小镇 / 工具栏风格一致） */
 .admin-app .admin-main select {
   color-scheme: dark;
   background-color: rgba(0, 0, 0, 0.42);
@@ -2909,7 +2909,7 @@ button.lic-dash-card:hover {
   background: rgba(15, 23, 42, 0.45);
 }
 
-/* ========== 灵感市集 · 画廊式管理（module-inspiration-market.js） ========== */
+/* ========== 灵感小镇 · 画廊式管理（module-inspiration-market.js） ========== */
 .im-root {
   font-family: var(--font);
   line-height: 1.55;
@@ -3010,6 +3010,19 @@ button.lic-dash-card:hover {
 .im-cat-row__del {
   padding: 8px 14px !important;
   font-size: 12px !important;
+}
+
+.im-cat-row__move {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.im-cat-row__movebtn {
+  padding: 4px 8px !important;
+  min-width: 32px;
+  font-size: 12px !important;
+  line-height: 1.2 !important;
 }
 
 .im-cats__actions {

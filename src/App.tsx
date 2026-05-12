@@ -19,6 +19,7 @@ import {
   USER_AGREEMENT_VERSION,
   fetchRemoteUserAgreement,
 } from './lib/userAgreement'
+import { persistUserAgreementExeStamp } from './lib/userAgreementExeStamp'
 import './App.css'
 import {
   buildPresetTemplateCategoryTabs,
@@ -28,6 +29,7 @@ import {
   type PresetTemplate,
   type PresetTemplateCatalogResult,
 } from './lib/templateCatalog'
+import { isLocalGalleryBundleEnabled } from './lib/localGalleryBundle'
 import { imageMimeTypeFromPath } from './lib/materialLibrary'
 import {
   SYSTEM_PROMPT_COVER_EXT_TRIES,
@@ -209,7 +211,7 @@ function Navigation({
                   : 'text-white/50 hover:text-white'
               }`}
             >
-              灵感市集
+              灵感小镇
             </button>
           </div>
         </div>
@@ -622,8 +624,12 @@ function App() {
   }, [templateCatalog])
 
   const templateCategoryOptions = useMemo(
-    () => buildPresetTemplateCategoryTabs(baseTemplateSource, true),
-    [baseTemplateSource],
+    () =>
+      buildPresetTemplateCategoryTabs(
+        baseTemplateSource,
+        templateCatalog?.ok ? templateCatalog.categoryOrder : undefined,
+      ),
+    [baseTemplateSource, templateCatalog],
   )
 
   useEffect(() => {
@@ -1110,6 +1116,7 @@ function App() {
                       'flowid.userAgreement.accepted.v2',
                       JSON.stringify({ serverUpdatedAtMs: ms, acceptedAtMs: now }),
                     )
+                    persistUserAgreementExeStamp()
                     setAgreementAccepted(true)
                   }}
                 >
@@ -1379,11 +1386,26 @@ function App() {
                 </div>
               ) : baseTemplateSource.length === 0 ? (
                 <div className="rounded-2xl border border-white/10 bg-white/5 px-8 py-16 text-center">
-                  <p className="text-[15px] font-bold text-white/70 mb-2">后端暂无预设模板</p>
-                  <p className="text-[13px] text-white/45 max-w-xl mx-auto">
-                    请在 Auth 服务管理后台维护 templates 索引与 workflow 文件；列表接口为{' '}
-                    <code className="text-orange-400/90">GET /templates/groups</code>
-                  </p>
+                  {isLocalGalleryBundleEnabled() ? (
+                    <>
+                      <p className="text-[15px] font-bold text-white/70 mb-2">随包画廊暂无预设模板</p>
+                      <p className="text-[13px] text-white/45 max-w-xl mx-auto">
+                        当前为本地画廊模式：内容来自{' '}
+                        <code className="text-orange-400/90">public/flowid-bundled/</code>（构建时写入安装包）。
+                        可在本机 Auth 维护预设后执行打包前的导出，或直接编辑{' '}
+                        <code className="text-orange-400/90">preset-groups.json</code> 与{' '}
+                        <code className="text-orange-400/90">presets/workflows/*.json</code>。
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-[15px] font-bold text-white/70 mb-2">后端暂无预设模板</p>
+                      <p className="text-[13px] text-white/45 max-w-xl mx-auto">
+                        请在 Auth 服务管理后台维护 templates 索引与 workflow 文件；列表接口为{' '}
+                        <code className="text-orange-400/90">GET /templates/groups</code>
+                      </p>
+                    </>
+                  )}
                   <button
                     type="button"
                     onClick={() => void refreshTemplateCatalog()}

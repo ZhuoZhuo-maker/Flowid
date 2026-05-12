@@ -87,10 +87,16 @@ import {
   fetchCloudAssistModelCatalog,
   findAssistEndpoint,
   getAssistApiKey,
+  readAssistLineVerified,
   studioNodeKindToAssistKind,
   tryDecodeCloudAssistModelPick,
   type CloudAssistCatalog,
+  type CloudAssistKeysChangedDetail,
 } from '../lib/cloudAssistModelCatalog'
+import {
+  clearAssistModelBindingForAssistKinds,
+  stripCloudApiKeyFromAllStudioNodes,
+} from '../lib/stripCloudApiKeyFromStudioNodes'
 import { CanvasProvider } from '../context/CanvasContext'
 import { AudioNode } from './nodes/AudioNode'
 import { GhostNode } from './nodes/GhostNode'
@@ -101,6 +107,7 @@ import { PanoramaNode } from './nodes/PanoramaNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { TextNode } from './nodes/TextNode'
 import { VideoNode } from './nodes/VideoNode'
+import { SilkBezierEdge } from './edges/SilkBezierEdge'
 import { AddNodePanel } from './panels/AddNodePanel'
 import { MultiangleControlPanel } from './panels/MultiangleControlPanel'
 import { DownloadPanel } from './panels/DownloadPanel'
@@ -205,6 +212,7 @@ import {
   createStudioNode,
   defaultStudioNodeTitle,
 } from '../lib/nodeFactory'
+import { resolvedPromptPickerMode } from '../lib/promptPickerMode'
 import { getPrimaryImageDisplayUrlForCompare } from '../lib/imageCompareNodeUtils'
 import {
   findWorkflowEntryByPreferredName,
@@ -262,6 +270,7 @@ import {
   buildMentionToken,
   collectMentionAudioResolvedEntries,
   collectMentionImageSources,
+  collectUpstreamNodeIds,
   listMentionImageAttachments,
   listMentionAudioRefLabelsForNote,
   mentionAlreadyReferencesNodeId,
@@ -303,6 +312,9 @@ const nodeTypes = {
   ghost: GhostNode,
   group: GroupNode,
 }
+
+/** 默认贝塞尔边：丝缕双层描边（见 SilkBezierEdge、App.css 变量） */
+const edgeTypes = { default: SilkBezierEdge }
 
 /** 与 `createStudioNode` 默认 height 一致；拖入多文件时竖排，节点底到下一节点顶 20px */
 const FLOWID_CANVAS_DROP_STACK_H = 340
@@ -501,6 +513,17 @@ const NODE_KIND_LABEL: Record<StudioNodeKind, string> = {
   panorama: 'VR360全景',
 }
 
+/** 底部提示框可切换工作流/模型的节点类型（与 `visiblePromptPanel` 一致，不含剧本）。 */
+const BATCH_PROMPT_UNIFY_KINDS = new Set<StudioNodeKind>(['music', 'text', 'image', 'video', 'audio'])
+
+function isBatchPromptUnifyKind(kind: StudioNodeKind): boolean {
+  return BATCH_PROMPT_UNIFY_KINDS.has(kind)
+}
+
+type BatchWorkflowUnifyRow =
+  | { mode: 'cloud'; meta: CloudWorkflowMeta }
+  | { mode: 'local'; kind: StudioNodeKind; entry: NodeWorkflowConfig['workflows'][number] }
+
 /**
  * 生成某类型节点的默认标题序号：始终取当前可用的最小正整数，避免出现“只剩两个却是节点3”。
  */
@@ -572,6 +595,26 @@ function allocateUniqueNodeTitle(allocated: Set<string>, base: string): string {
       return candidate
     }
     n += 1
+  }
+}
+
+/**
+ * 用户重命名等写入 `title` 时：与同画布其他节点全字面前提下去重；
+ * 冲突时在末尾追加 `(1)`、`(2)`…（与新建/粘贴用的 `allocateUniqueNodeTitle` 尾号规则区分）。
+ */
+function allocateUniqueCanvasTitleAmongPeers(desired: string, peerTitles: Iterable<string>): string {
+  const base = String(desired ?? '').trim() || '节点'
+  const taken = new Set<string>()
+  for (const t of peerTitles) {
+    const s = String(t ?? '').trim()
+    if (s) taken.add(s)
+  }
+  if (!taken.has(base)) return base
+  let k = 1
+  for (;;) {
+    const c = `${base}(${k})`
+    if (!taken.has(c)) return c
+    k += 1
   }
 }
 
@@ -862,6 +905,7 @@ function reorderLeadingMentionLinesByReferenceOrder(
   nodes: Array<Node<StudioNodeData>>,
   currentNodeId: string,
   referenceOrderUrls: string[],
+  edges?: Edge[],
 ): string {
   const normalized = String(text || '').replace(/\r\n?/g, '\n')
   const lines = normalized.split('\n')
@@ -877,7 +921,7 @@ function reorderLeadingMentionLinesByReferenceOrder(
   }
   if (end < 2) return text
   const headBlock = lines.slice(0, end).join('\n')
-  const attachments = listMentionImageAttachments(headBlock, nodes, currentNodeId)
+  const attachments = listMentionImageAttachments(headBlock, nodes, currentNodeId, edges)
   if (attachments.length < 2) return text
   const order = new Map<string, number>()
   referenceOrderUrls.forEach((u, idx) => {
@@ -965,18 +1009,19 @@ function syncReferenceOrderByMentionUrls(
 function withResolvedNodeMentions(
   node: Node<StudioNodeData>,
   allNodes: Array<Node<StudioNodeData>>,
+  edges?: Edge[],
 ): Node<StudioNodeData> {
   const data = node.data
   if (data.kind === 'text' || data.kind === 'script') {
-    const nextBody = resolveNodeMentionsInText(data.body || '', allNodes, node.id)
+    const nextBody = resolveNodeMentionsInText(data.body || '', allNodes, node.id, edges)
     return {
       ...node,
       data: { ...data, body: nextBody } as StudioNodeData,
     }
   }
   if (data.kind === 'image') {
-    const referencedImages = collectMentionImageSources(data.prompt || '', allNodes, node.id)
-    const nextPrompt = resolveNodeMentionsInText(data.prompt || '', allNodes, node.id)
+    const referencedImages = collectMentionImageSources(data.prompt || '', allNodes, node.id, edges)
+    const nextPrompt = resolveNodeMentionsInText(data.prompt || '', allNodes, node.id, edges)
     const prevRefs = data.referenceImageSources?.filter(Boolean) ?? []
     const mergedRefs = Array.from(new Set([...prevRefs, ...referencedImages]))
     /** 保留用户已选主图；仅在主图为空时，才回退到提示里 @ 到的第一张图。 */
@@ -1002,13 +1047,13 @@ function withResolvedNodeMentions(
     const combinedForRefs = [String(vd.prompt || ''), raw2, raw3, raw4, ...rawExtras]
       .filter(Boolean)
       .join('\n')
-    const referencedImages = collectMentionImageSources(combinedForRefs, allNodes, node.id)
-    const nextPrompt = resolveNodeMentionsInText(String(vd.prompt || ''), allNodes, node.id)
-    const nextPrompt2 = resolveNodeMentionsInText(raw2, allNodes, node.id)
-    const nextPrompt3 = resolveNodeMentionsInText(raw3, allNodes, node.id)
-    const nextPrompt4 = resolveNodeMentionsInText(raw4, allNodes, node.id)
+    const referencedImages = collectMentionImageSources(combinedForRefs, allNodes, node.id, edges)
+    const nextPrompt = resolveNodeMentionsInText(String(vd.prompt || ''), allNodes, node.id, edges)
+    const nextPrompt2 = resolveNodeMentionsInText(raw2, allNodes, node.id, edges)
+    const nextPrompt3 = resolveNodeMentionsInText(raw3, allNodes, node.id, edges)
+    const nextPrompt4 = resolveNodeMentionsInText(raw4, allNodes, node.id, edges)
     const nextExtras = rawExtras.length
-      ? rawExtras.map((s) => resolveNodeMentionsInText(s, allNodes, node.id))
+      ? rawExtras.map((s) => resolveNodeMentionsInText(s, allNodes, node.id, edges))
       : undefined
     const prevRefs = vd.referenceImageSources?.filter(Boolean) ?? []
     const mergedRefs = Array.from(new Set([...prevRefs, ...referencedImages]))
@@ -1037,10 +1082,15 @@ function withResolvedNodeMentions(
   }
   if (data.kind === 'audio' || data.kind === 'music') {
     const ad = data as AudioNodeData
-    const referencedImages = collectMentionImageSources(data.note || '', allNodes, node.id)
-    const referencedAudioEntries = collectMentionAudioResolvedEntries(data.note || '', allNodes, node.id)
+    const referencedImages = collectMentionImageSources(data.note || '', allNodes, node.id, edges)
+    const referencedAudioEntries = collectMentionAudioResolvedEntries(
+      data.note || '',
+      allNodes,
+      node.id,
+      edges,
+    )
     const referencedAudios = referencedAudioEntries.map((e) => e.url)
-    const nextNote = resolveNodeMentionsInText(data.note || '', allNodes, node.id)
+    const nextNote = resolveNodeMentionsInText(data.note || '', allNodes, node.id, edges)
     const prevRefs = ad.referenceImageSources?.filter(Boolean) ?? []
     const prevIdsRaw = Array.isArray(ad.referenceImageAssetIds) ? ad.referenceImageAssetIds : []
     const mergedUrls: string[] = []
@@ -1458,9 +1508,9 @@ const CANVAS_ADD_MENU_EST_W = 172
 const CANVAS_ADD_MENU_EST_H = 300
 /** 多选右键菜单（主菜单）预估尺寸：用于贴边钳位 */
 const MULTI_SELECT_CTX_MENU_EST_W = 168
-const MULTI_SELECT_CTX_MENU_EST_H = 168
-/** 「添加节点」子菜单预估尺寸：用于贴边钳位 */
-const MULTI_SELECT_SYNC_SUBMENU_EST_W = CANVAS_ADD_MENU_EST_W
+const MULTI_SELECT_CTX_MENU_EST_H = 320
+/** 「新增节点 / 统一工作流」等子卡预估宽度：与 `App.css` 中 `.studio-multi-select-ctx .add-node-card` max-width 对齐 */
+const MULTI_SELECT_SYNC_SUBMENU_EST_W = 432
 const NODE_APPEND_GAP = 60
 /** Ctrl+D 复制副本：新图整体相对选区向下平移，选区底边到新图顶边间距（流坐标 px） */
 const DUPLICATE_BELOW_GAP_FLOW = 20
@@ -1855,7 +1905,7 @@ function CloudResolutionGlyph({ tier }: { tier: CloudImageResolutionTier }) {
 }
 
 /**
- * TD「参考音与角色名」：草稿只在子树内 setState，避免每键触发 StudioCanvasInner 全量重绘与防抖写节点导致的闪屏。
+ * TD「槽位与台本角色名」：草稿只在子树内 setState，避免每键触发 StudioCanvasInner 全量重绘与防抖写节点导致的闪屏。
  */
 const StudioTdRefRoleModalPortal = memo(function StudioTdRefRoleModalPortal(props: {
   slotLabels: string[]
@@ -1908,7 +1958,7 @@ const StudioTdRefRoleModalPortal = memo(function StudioTdRefRoleModalPortal(prop
     >
       <div className="studio-vt8-modal">
         <div className="studio-vt8-modal__top">
-          <span className="studio-vt8-modal__title">参考音与角色名</span>
+          <span className="studio-vt8-modal__title">槽位与台本角色名</span>
           <div className="studio-vt8-modal__toolbar">
             <button
               type="button"
@@ -1934,7 +1984,7 @@ const StudioTdRefRoleModalPortal = memo(function StudioTdRefRoleModalPortal(prop
         <div className="studio-vt8-modal__body">
           <div className="studio-vt8-modal__scroll">
             <div className="studio-vt8-modal__th studio-vt8-modal__th--td-ref" aria-hidden>
-              <span>参考音槽</span>
+              <span>上传顺序 · 音源</span>
               <span>对应姓名（台本角色名）</span>
             </div>
             {slotLabels.map((slotLabel, rowIdx) => (
@@ -1952,7 +2002,7 @@ const StudioTdRefRoleModalPortal = memo(function StudioTdRefRoleModalPortal(prop
                 <input
                   type="text"
                   className="studio-vt8-modal__field"
-                  aria-label={`第 ${rowIdx + 1} 路参考音对应角色名`}
+                  aria-label={`第 ${rowIdx + 1} 路音频对应角色名`}
                   value={String(draft[rowIdx]?.roleName ?? '')}
                   placeholder="与台本「角色名:」一致"
                   onChange={(e) => {
@@ -2371,7 +2421,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const [multiSelectContextMenu, setMultiSelectContextMenu] = useState<{
     left: number
     top: number
-    submenuMode: 'linked' | 'common' | null
+    submenuMode: 'linked' | 'common' | 'batchUnified' | 'batchWorkflow' | 'batchModel' | null
     /** true：子菜单在主菜单右侧；false：子菜单在主菜单左侧（贴边自适应） */
     preferSubmenuRight: boolean
   } | null>(null)
@@ -2461,6 +2511,81 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     runNodeWorkflow,
     workflowSnapshot,
   } = useWorkflowIntegration()
+
+  /** 辅助线路 Key / 测试状态变化时递增，驱动节点模型下拉与绑定清理 */
+  const [assistModelGateBump, setAssistModelGateBump] = useState(0)
+
+  const updateNodeConfigAndSyncCloudKeys = useCallback(
+    (kind: StudioNodeKind, patch: Partial<NodeWorkflowConfig>) => {
+      if ('cloudApiKey' in patch && !String(patch.cloudApiKey ?? '').trim()) {
+        setNodes((nds) => stripCloudApiKeyFromAllStudioNodes(nds))
+      }
+      updateNodeConfig(kind, patch)
+    },
+    [updateNodeConfig, setNodes],
+  )
+
+  /** 自助预设里已无任何非空 Key，或用户删掉最后一条预设时，去掉节点上缓存的 cloudApiKey */
+  useEffect(() => {
+    const syncOnSelfPresets = () => {
+      const presets = loadCloudSelfPresets()
+      const anyKey = presets.some((p) => String(p.apiKey || '').trim())
+      if (anyKey) return
+      setNodes((nds) => stripCloudApiKeyFromAllStudioNodes(nds))
+    }
+    syncOnSelfPresets()
+    window.addEventListener('flowid:cloud-self-presets-changed', syncOnSelfPresets)
+    return () => window.removeEventListener('flowid:cloud-self-presets-changed', syncOnSelfPresets)
+  }, [setNodes])
+
+  /** 辅助线路 Key 变更 / 测试状态变更：删 Key 时清该类节点的 Assist 绑定；任意 Key 变化 bump 以刷新下拉与兜底清理 */
+  useEffect(() => {
+    const bump = () => setAssistModelGateBump((x) => x + 1)
+    const onAssistKeys = (ev: Event) => {
+      const ce = ev as CustomEvent<CloudAssistKeysChangedDetail>
+      const cleared = ce.detail?.clearedAssistKinds ?? []
+      if (cleared.length) {
+        setNodes((nds) => clearAssistModelBindingForAssistKinds(nds, cleared))
+      }
+      bump()
+    }
+    window.addEventListener('flowid:cloud-assist-keys-changed', onAssistKeys as EventListener)
+    window.addEventListener('flowid:assist-line-verified-changed', bump)
+    return () => {
+      window.removeEventListener('flowid:cloud-assist-keys-changed', onAssistKeys as EventListener)
+      window.removeEventListener('flowid:assist-line-verified-changed', bump)
+    }
+  }, [setNodes])
+
+  /** 未通过测试或未填 Key 时，去掉仍挂在节点上的辅助线路选型，避免执行用到旧状态 */
+  useEffect(() => {
+    const verified = readAssistLineVerified()
+    setNodes((nds) => {
+      let changed = false
+      const next = nds.map((n) => {
+        const ak = studioNodeKindToAssistKind(n.data.kind)
+        if (!ak) return n
+        const pick = String((n.data as { cloudAssistModelPick?: string }).cloudAssistModelPick || '').trim()
+        if (!pick || !tryDecodeCloudAssistModelPick(pick)) return n
+        const keyOk = String(getAssistApiKey(ak) || '').trim()
+        const lineOk = verified[ak]
+        if (keyOk && lineOk) return n
+        changed = true
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            cloudAssistModelPick: undefined,
+            cloudModelName: '',
+            cloudModelUrl: '',
+            cloudApiKey: '',
+          } as StudioNodeData,
+        }
+      })
+      return changed ? next : nds
+    })
+  }, [assistModelGateBump, setNodes])
+
   const marqueeSelectionKeyCode = useMemo(() => {
     const k = normalizeMarqueeSelectionKey(shortcuts.bindings.marqueeSelect)
     return [k] as Array<'Shift' | 'Alt'>
@@ -2779,13 +2904,9 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     }
   }, [canvasDayMode])
 
-  const flowDefaultEdgeOptions = useMemo(
-    () => ({
-      animated: true as const,
-      style: { stroke: canvasDayMode ? '#737373' : '#94a3b8', strokeWidth: 2 },
-    }),
-    [canvasDayMode],
-  )
+  /** 深色画布：连线颜色/线宽见 App.css（xyflow 变量 + 光晕），避免内联 stroke 盖住选中高亮 */
+  /** 深色：主线色见 `.react-flow.dark`；日间：见 `.studio-flow-wrap--canvas-day` 的 xyflow 变量 */
+  const flowDefaultEdgeOptions = useMemo(() => ({ animated: true as const }), [])
 
   const minimapNodeColor = useCallback(
     (node: Node<StudioNodeData>) => {
@@ -2828,7 +2949,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     show: boolean
     scanned: boolean
   }>({ show: false, scanned: false })
-  /** TD 有参多人：参考音槽 ↔ MultiDialog 角色名 */
+  /** TD 有参多人：「匹配」表仅 @/底部上传 ↔ MultiDialog；不含主预览第 1 路 */
   const [promptPanelTdRefRoleMap, setPromptPanelTdRefRoleMap] = useState<{
     show: boolean
     scanned: boolean
@@ -3035,6 +3156,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           (node.data as ImageNodeData).prompt || '',
           nodes,
           node.id,
+          edges,
         ),
       )
     }
@@ -3044,18 +3166,18 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         .map((s) => String(s ?? '').trim())
         .filter(Boolean)
         .join('\n')
-      return sortByRefOrder(listMentionImageAttachments(combined, nodes, node.id))
+      return sortByRefOrder(listMentionImageAttachments(combined, nodes, node.id, edges))
     }
     if (kind === 'audio' || kind === 'music') {
       return sortByRefOrder(
-        listMentionImageAttachments((node.data as AudioNodeData).note || '', nodes, node.id),
+        listMentionImageAttachments((node.data as AudioNodeData).note || '', nodes, node.id, edges),
       )
     }
     if (kind === 'text') {
-      return listMentionImageAttachments((node.data as TextNodeData).body || '', nodes, node.id)
+      return listMentionImageAttachments((node.data as TextNodeData).body || '', nodes, node.id, edges)
     }
     return []
-  }, [visiblePromptPanel, nodes])
+  }, [visiblePromptPanel, nodes, edges])
 
   const promptPanelWrapStyle = useMemo(() => {
     if (!visiblePromptPanelLayout) return null
@@ -3162,16 +3284,20 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const promptPanelModelOptions = useMemo(() => {
     if (!promptPanel) return [] as PromptPanelDropdownOption[]
     const pk = promptPanel.kind
+    const assistVerified = readAssistLineVerified()
     const presets = loadCloudSelfPresets().filter((p) => {
       const nk = String((p as any)?.nodeKind || '').trim()
-      return !nk || nk === pk
+      if (nk && nk !== pk) return false
+      return String((p as any).apiKey || '').trim() !== ''
     })
     const base: PromptPanelDropdownOption[] = presets.map((item) => ({
       value: item.id,
       label: String(item.model || '').trim() || item.id,
     }))
     const assistKind = studioNodeKindToAssistKind(pk)
-    if (assistKind) {
+    const assistKeyOk = assistKind ? String(getAssistApiKey(assistKind) || '').trim() !== '' : false
+    const assistLineOk = assistKind ? assistVerified[assistKind] === true : false
+    if (assistKind && assistKeyOk && assistLineOk) {
       const rows = assistCatalog.kinds[assistKind] || []
       for (const ep of rows) {
         for (const model of ep.models) {
@@ -3185,7 +3311,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       }
     }
     const assistPick = String((promptPanel.node.data as any)?.cloudAssistModelPick || '').trim()
-    if (assistPick && tryDecodeCloudAssistModelPick(assistPick) && !base.some((b) => b.value === assistPick)) {
+    if (
+      assistPick &&
+      tryDecodeCloudAssistModelPick(assistPick) &&
+      assistKind &&
+      assistKeyOk &&
+      assistLineOk &&
+      !base.some((b) => b.value === assistPick)
+    ) {
       const dec = tryDecodeCloudAssistModelPick(assistPick)!
       const m = String(dec.model || '').trim()
       if (m)
@@ -3212,7 +3345,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       return seq === 1 ? o : { ...o, label: `${o.label} (${seq})` }
     })
     return deduped
-  }, [assistCatalog, nodeConfigs, promptPanel])
+  }, [assistCatalog, assistModelGateBump, nodeConfigs, promptPanel])
 
   const promptPanelModelSelectValue = useMemo(() => {
     if (!promptPanel) return ''
@@ -3230,13 +3363,12 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     if (found) return found.id
     if (current) return 'custom-current'
     return presets[0]?.id || ''
-  }, [nodeConfigs, promptPanel])
+  }, [assistModelGateBump, nodeConfigs, promptPanel])
 
   /** 底部提示框：节点级切换「工作流」还是「模型」 */
   const promptPanelPickerMode = useMemo(() => {
-    if (!promptPanel) return 'workflow' as const
-    const mode = (promptPanel.node.data as any)?.promptPickerMode
-    return mode === 'model' ? 'model' : 'workflow'
+    if (!promptPanel) return 'model' as const
+    return resolvedPromptPickerMode(promptPanel.node.data as { promptPickerMode?: 'workflow' | 'model' })
   }, [promptPanel])
 
   /** 与执行逻辑一致：云端用 workflowEntryId（与选项 value 对齐）；本地用名称 */
@@ -3549,11 +3681,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     const nodeTop = n.position.y * zoom + vp.y
     const gap = 20
     const modalWidth = Math.min(480, Math.max(360, window.innerWidth - 32))
-    let left = nodeRight + gap
-    if (left + modalWidth > window.innerWidth - 8) {
-      left = nodeLeft - modalWidth - gap
-    }
-    left = Math.max(8, Math.min(left, window.innerWidth - modalWidth - 8))
+    /** 始终锚在节点右侧；视口不够时只在屏内平移，不翻到节点左侧（避免「匹配」弹窗挡在节点左边）。 */
+    const left = Math.max(8, Math.min(nodeRight + gap, window.innerWidth - modalWidth - 8))
     const top = Math.max(8, Math.min(nodeTop, window.innerHeight - 120))
     return { left, top, width: modalWidth }
   }, [tdRefRoleModalOpen, promptPanel, viewport.x, viewport.y, viewport.zoom])
@@ -3599,8 +3728,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
   const promptPanelAudioRefMentionLabels = useMemo(() => {
     if (!promptPanel || promptPanel.kind !== 'audio') return [] as string[]
     if (promptPanelPickerMode !== 'workflow') return []
-    return listMentionAudioRefLabelsForNote(promptPanelText, nodes, promptPanel.node.id)
-  }, [promptPanel, promptPanelPickerMode, promptPanelText, nodes])
+    return listMentionAudioRefLabelsForNote(promptPanelText, nodes, promptPanel.node.id, edges)
+  }, [promptPanel, promptPanelPickerMode, promptPanelText, nodes, edges])
 
   const unresolvedMentions = useMemo(() => {
     if (!promptPanel) return [] as string[]
@@ -3611,6 +3740,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             .filter(Boolean)
             .join('\n')
         : promptPanelText
+    const restrict =
+      promptPanel.node.id && edges?.length
+        ? collectUpstreamNodeIds(promptPanel.node.id, edges)
+        : undefined
     return parseMentionRefs(scanText)
       .filter((ref) => {
         const label = String(ref.label || '').trim()
@@ -3618,9 +3751,9 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         if (/^系统提示词[\(（]/u.test(label)) return false
         return true
       })
-      .filter((ref) => !resolveMentionRefToNode(ref, nodes, promptPanel.node.id))
+      .filter((ref) => !resolveMentionRefToNode(ref, nodes, promptPanel.node.id, undefined, restrict))
       .map((ref) => ref.label)
-  }, [nodes, promptPanel, promptPanelText])
+  }, [nodes, promptPanel, promptPanelText, edges])
 
   const panelRefImagesInputRef = useRef<HTMLInputElement | null>(null)
   const panelPromptTextareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -3648,6 +3781,122 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       nodes.filter((node) => node.selected && node.type !== 'ghost' && node.type !== 'group').length,
     [nodes],
   )
+
+  /** 多选右键「统一」：仅含底部带提示框的节点类型（与底部面板一致）。 */
+  const batchPromptUnifyTargets = useMemo(
+    () =>
+      nodes.filter(
+        (n) =>
+          n.selected &&
+          n.type !== 'ghost' &&
+          n.type !== 'group' &&
+          isBatchPromptUnifyKind(n.data.kind),
+      ),
+    [nodes],
+  )
+
+  /** 批量统一工作流：云端为授权列表；本地按选中类型展开各类型工作流条目。 */
+  const batchWorkflowUnifyRows = useMemo((): BatchWorkflowUnifyRow[] => {
+    if (!batchPromptUnifyTargets.length) return []
+    const unifyKinds = [...new Set(batchPromptUnifyTargets.map((t) => t.data.kind))].filter(
+      isBatchPromptUnifyKind,
+    ) as StudioNodeKind[]
+    if (executionProvider === 'cloud') {
+      const out: BatchWorkflowUnifyRow[] = []
+      for (const w of cloudWorkflowMetaList) {
+        let applies = false
+        for (const k of unifyKinds) {
+          const filtered = cloudWorkflowMetaList.filter((x) => !x.nodeKind || x.nodeKind === k)
+          if (filtered.some((x) => x.id === w.id)) {
+            applies = true
+            break
+          }
+        }
+        if (applies) out.push({ mode: 'cloud', meta: w })
+      }
+      out.sort((a, b) => a.meta.name.localeCompare(b.meta.name, 'zh-CN'))
+      return out
+    }
+    const out: BatchWorkflowUnifyRow[] = []
+    for (const k of unifyKinds) {
+      for (const entry of nodeConfigs[k].workflows) {
+        out.push({ mode: 'local', kind: k, entry })
+      }
+    }
+    out.sort((a, b) => {
+      if (a.mode !== 'local' || b.mode !== 'local') return 0
+      const c = a.entry.name.localeCompare(b.entry.name, 'zh-CN')
+      if (c !== 0) return c
+      return NODE_KIND_LABEL[a.kind].localeCompare(NODE_KIND_LABEL[b.kind], 'zh-CN')
+    })
+    return out
+  }, [batchPromptUnifyTargets, executionProvider, cloudWorkflowMetaList, nodeConfigs])
+
+  /** 批量统一模型：与底部「选择模型」同源，仅云端执行有意义。 */
+  const batchModelUnifyOptions = useMemo((): PromptPanelDropdownOption[] => {
+    if (executionProvider !== 'cloud') return []
+    if (!batchPromptUnifyTargets.length) return []
+    const kinds = [...new Set(batchPromptUnifyTargets.map((t) => t.data.kind))].filter(
+      isBatchPromptUnifyKind,
+    ) as StudioNodeKind[]
+    const assistVerified = readAssistLineVerified()
+    const base: PromptPanelDropdownOption[] = []
+    const seenVal = new Set<string>()
+    const pushUnique = (opt: PromptPanelDropdownOption) => {
+      if (seenVal.has(opt.value)) return
+      seenVal.add(opt.value)
+      base.push(opt)
+    }
+    for (const item of loadCloudSelfPresets()) {
+      const nk = String((item as { nodeKind?: string }).nodeKind || '').trim()
+      if (nk && !kinds.includes(nk as StudioNodeKind)) continue
+      if (String((item as { apiKey?: string }).apiKey || '').trim() === '') continue
+      pushUnique({
+        value: item.id,
+        label: String(item.model || '').trim() || item.id,
+      })
+    }
+    for (const pk of kinds) {
+      const assistKind = studioNodeKindToAssistKind(pk)
+      const assistKeyOk = assistKind ? String(getAssistApiKey(assistKind) || '').trim() !== '' : false
+      const assistLineOk = assistKind ? assistVerified[assistKind] === true : false
+      if (!assistKind || !assistKeyOk || !assistLineOk) continue
+      const rows = assistCatalog.kinds[assistKind] || []
+      for (const ep of rows) {
+        for (const model of ep.models) {
+          const m = String(model || '').trim()
+          if (!m) continue
+          pushUnique({
+            value: encodeCloudAssistModelPick(ep.id, m),
+            label: m,
+          })
+        }
+      }
+    }
+    const labelCount = new Map<string, number>()
+    for (const o of base) {
+      labelCount.set(o.label, (labelCount.get(o.label) || 0) + 1)
+    }
+    const labelSeq = new Map<string, number>()
+    return base.map((o) => {
+      const n = labelCount.get(o.label) || 0
+      if (n <= 1) return o
+      const seq = (labelSeq.get(o.label) || 0) + 1
+      labelSeq.set(o.label, seq)
+      return seq === 1 ? o : { ...o, label: `${o.label} (${seq})` }
+    })
+  }, [assistCatalog, assistModelGateBump, batchPromptUnifyTargets, executionProvider])
+
+  const batchUnifyMenuVisible = useMemo(() => {
+    if (!batchPromptUnifyTargets.length) return false
+    if (batchWorkflowUnifyRows.length > 0) return true
+    return executionProvider === 'cloud' && batchModelUnifyOptions.length > 0
+  }, [
+    batchModelUnifyOptions.length,
+    batchPromptUnifyTargets.length,
+    batchWorkflowUnifyRows.length,
+    executionProvider,
+  ])
 
   /** 恰好选中 2 个图片节点：右键菜单可提供「新增对比节点」 */
   const contextMenuImageCompareTwoPick = useMemo(() => {
@@ -3890,26 +4139,39 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         const prevNode = nds.find((n) => n.id === nodeId)
         if (!prevNode) return nds
 
+        let patchToApply = safePatch
+        if (typeof safePatch.title === 'string') {
+          const desired = String(safePatch.title).trim() || '节点'
+          const peerTitles = nds
+            .filter((n) => n.id !== nodeId && n.type !== 'ghost')
+            .map((n) => String(n.data.title ?? '').trim())
+            .filter(Boolean)
+          const uniqueTitle = allocateUniqueCanvasTitleAmongPeers(desired, peerTitles)
+          patchToApply = { ...safePatch, title: uniqueTitle }
+        }
+
         const prevTitle = String(prevNode.data.title ?? '').trim()
         const nextTitle =
-          typeof safePatch.title === 'string' ? String(safePatch.title).trim() : prevTitle
+          typeof patchToApply.title === 'string'
+            ? String(patchToApply.title).trim()
+            : prevTitle
 
         let next = nds.map((n) =>
           n.id === nodeId
             ? {
                 ...n,
-                data: { ...n.data, ...safePatch } as StudioNodeData,
+                data: { ...n.data, ...patchToApply } as StudioNodeData,
               }
             : n,
         )
 
         const sk = prevNode.data.kind
         const titleChanged =
-          typeof safePatch.title === 'string' && nextTitle !== prevTitle
+          typeof patchToApply.title === 'string' && nextTitle !== prevTitle
         if (titleChanged && (sk === 'text' || sk === 'script')) {
           const mergedData = {
             ...prevNode.data,
-            ...safePatch,
+            ...patchToApply,
             title: nextTitle,
           } as StudioNodeData
           const anchorNext = {
@@ -3948,6 +4210,110 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       })
     },
     [setNodes, edges],
+  )
+
+  const applyBatchWorkflowUnifyRow = useCallback(
+    (row: BatchWorkflowUnifyRow) => {
+      const targets = nodes.filter(
+        (n) =>
+          n.selected &&
+          n.type !== 'ghost' &&
+          n.type !== 'group' &&
+          isBatchPromptUnifyKind(n.data.kind),
+      )
+      if (!targets.length) return
+      if (row.mode === 'cloud') {
+        const w = row.meta
+        for (const n of targets) {
+          const k = n.data.kind
+          if (!isBatchPromptUnifyKind(k)) continue
+          const filtered = cloudWorkflowMetaList.filter((x) => !x.nodeKind || x.nodeKind === k)
+          const hit = filtered.find((x) => x.id === w.id)
+          if (!hit) continue
+          updateNodeData(n.id, {
+            kind: k,
+            promptPickerMode: 'workflow',
+            model: hit.name,
+            workflowEntryId: hit.id,
+          } as Partial<StudioNodeData>)
+        }
+      } else {
+        const { kind, entry } = row
+        let any = false
+        for (const n of targets) {
+          if (n.data.kind !== kind) continue
+          any = true
+          updateNodeData(n.id, {
+            kind,
+            promptPickerMode: 'workflow',
+            model: entry.name,
+            workflowEntryId: entry.id,
+          } as Partial<StudioNodeData>)
+        }
+        if (any) selectNodeWorkflow(kind, entry.id)
+      }
+      appendHistory('已批量统一为同一工作流')
+      dismissMultiSelectContextMenu()
+    },
+    [
+      appendHistory,
+      cloudWorkflowMetaList,
+      dismissMultiSelectContextMenu,
+      nodes,
+      selectNodeWorkflow,
+      updateNodeData,
+    ],
+  )
+
+  const applyBatchModelPickFromContextMenu = useCallback(
+    (pickedId: string) => {
+      if (pickedId === 'custom-current') return
+      const targets = nodes.filter(
+        (n) =>
+          n.selected &&
+          n.type !== 'ghost' &&
+          n.type !== 'group' &&
+          isBatchPromptUnifyKind(n.data.kind),
+      )
+      if (!targets.length) return
+      for (const n of targets) {
+        const kind = n.data.kind
+        if (!isBatchPromptUnifyKind(kind)) continue
+        const assistDecoded = tryDecodeCloudAssistModelPick(pickedId)
+        if (assistDecoded) {
+          const ak = studioNodeKindToAssistKind(kind)
+          if (!ak) continue
+          const ep = findAssistEndpoint(ak, assistDecoded.endpointId, assistCatalog)
+          if (!ep) continue
+          updateNodeData(n.id, {
+            kind,
+            promptPickerMode: 'model',
+            cloudAssistModelPick: pickedId,
+            cloudSelfPresetId: undefined,
+            cloudModelName: assistDecoded.model,
+            cloudModelUrl: ep.baseUrl,
+            cloudApiKey: getAssistApiKey(ak),
+          } as Partial<StudioNodeData>)
+          continue
+        }
+        const preset = loadCloudSelfPresets().find((i) => i.id === pickedId)
+        if (!preset) continue
+        const nk = String((preset as { nodeKind?: string }).nodeKind || '').trim()
+        if (nk && nk !== kind) continue
+        updateNodeData(n.id, {
+          kind,
+          promptPickerMode: 'model',
+          cloudAssistModelPick: undefined,
+          cloudSelfPresetId: preset.id,
+          cloudModelName: preset.model,
+          cloudModelUrl: preset.baseUrl,
+          cloudApiKey: String((preset as { apiKey?: string }).apiKey || ''),
+        } as Partial<StudioNodeData>)
+      }
+      appendHistory('已批量统一为同一云端模型')
+      dismissMultiSelectContextMenu()
+    },
+    [appendHistory, assistCatalog, dismissMultiSelectContextMenu, nodes, updateNodeData],
   )
 
   const flushVoiceTable8DraftToNode = useCallback(() => {
@@ -5450,6 +5816,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                   prev,
                   nodeId,
                   refs.filter(Boolean),
+                  edges,
                 ),
               } as StudioNodeData,
             }
@@ -5464,6 +5831,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                   prev,
                   nodeId,
                   refs.filter(Boolean),
+                  edges,
                 ),
               } as StudioNodeData,
             }
@@ -5477,13 +5845,14 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 prev,
                 nodeId,
                 refs.filter(Boolean),
+                edges,
               ),
             } as StudioNodeData,
           }
         }),
       )
     },
-    [setNodes],
+    [setNodes, edges],
   )
 
   const movePanelReferenceImage = useCallback(
@@ -5507,7 +5876,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           if (promptPanel.kind === 'image') {
             const d = n.data as ImageNodeData
             const nextPrompt = reorderLeadingMentionLinesByIndex(String(d.prompt || ''), fromIndex, toIndex)
-            const mentionUrls = listMentionImageAttachments(nextPrompt, prev, promptPanel.node.id)
+            const mentionUrls = listMentionImageAttachments(nextPrompt, prev, promptPanel.node.id, edges)
               .map((item) => String(item.url || '').trim())
               .filter(Boolean)
             const refs = Array.isArray(d.referenceImageSources) ? [...d.referenceImageSources] : []
@@ -5526,7 +5895,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           if (promptPanel.kind === 'video') {
             const d = n.data as VideoNodeData
             const nextPrompt = reorderLeadingMentionLinesByIndex(String(d.prompt || ''), fromIndex, toIndex)
-            const mentionUrls = listMentionImageAttachments(nextPrompt, prev, promptPanel.node.id)
+            const mentionUrls = listMentionImageAttachments(nextPrompt, prev, promptPanel.node.id, edges)
               .map((item) => String(item.url || '').trim())
               .filter(Boolean)
             const refs = Array.isArray(d.referenceImageSources) ? [...d.referenceImageSources] : []
@@ -5554,7 +5923,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 } as StudioNodeData,
               }
             }
-            const mentionUrls = listMentionImageAttachments(nextNote, prev, promptPanel.node.id)
+            const mentionUrls = listMentionImageAttachments(nextNote, prev, promptPanel.node.id, edges)
               .map((item) => String(item.url || '').trim())
               .filter(Boolean)
             const refs = Array.isArray(d.referenceImageSources) ? [...d.referenceImageSources] : []
@@ -5574,7 +5943,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         }),
       )
     },
-    [promptPanel, setNodes],
+    [promptPanel, setNodes, edges],
   )
 
   /**
@@ -5680,7 +6049,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const refs = parseMentionRefs(String(mentionToken || '').trim())
       const ref = refs[0]
       if (!ref) return false
-      const hit = resolveMentionRefToNode(ref, nodes, promptPanel.node.id)
+      const restrict =
+        promptPanel.node.id && edges?.length
+          ? collectUpstreamNodeIds(promptPanel.node.id, edges)
+          : undefined
+      const hit = resolveMentionRefToNode(ref, nodes, promptPanel.node.id, undefined, restrict)
       if (!hit) return false
       const kind = hit.data.kind
       if (kind !== 'image' && kind !== 'video' && kind !== 'audio' && kind !== 'music') return false
@@ -5703,7 +6076,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       })
       return true
     },
-    [nodes, promptPanel, updateNodeData],
+    [nodes, promptPanel, updateNodeData, edges],
   )
 
   /**
@@ -6904,7 +7277,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           dismissMultiSelectContextMenu()
         }
 
-        if (import.meta.env.DEV) {
+        if (import.meta.env.DEV && localStorage.getItem('flowidDebugSelection') === '1') {
           try {
             // eslint-disable-next-line no-console
             console.log('[Flowid select-debug:override]', { rectPx: rect, flowRect: sel, hitCount: hitIds.size })
@@ -8429,6 +8802,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         /** 图/视频：同一任务多输出 view URL（Comfy 多分镜等） */
         resultViewUrls?: string[]
       },
+      applyOpts?: { replaceImageOutputStrip?: boolean },
     ) => {
       const id = fresh.id
       const mediaUrl = result.audioUrl || result.previewUrl || result.resultUrl || null
@@ -8650,10 +9024,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           kind === 'image'
             ? (fresh.data as ImageNodeData).resultThumbnails ?? []
             : (fresh.data as VideoNodeData).resultThumbnails ?? []
-        const merged = [...newThumbs, ...prevThumbs.filter((p) => !newThumbs.some((n) => n.url === p.url))].slice(
-          0,
-          36,
-        )
+        /** 模型模式单次只应一条主输出；合并旧条会把历史黑图/错图与本次结果叠成「一次四条」的错觉 */
+        const merged =
+          applyOpts?.replaceImageOutputStrip && urls.length === 1
+            ? newThumbs
+            : [...newThumbs, ...prevThumbs.filter((p) => !newThumbs.some((n) => n.url === p.url))].slice(0, 36)
         updateNodeData(id, {
           kind,
           src: primarySrc || urls[0]!,
@@ -8737,7 +9112,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       await awaitSensitiveLexiconSettled()
       const liveNodes = nodesRef.current
       const latest = liveNodes.find((n) => n.id === node.id) ?? node
-      const prepared = withResolvedNodeMentions(latest, liveNodes)
+      const prepared = withResolvedNodeMentions(latest, liveNodes, edgesRef.current)
       const sensitiveBlob = collectUserFacingTextFromNodeData(prepared.data as StudioNodeData)
       const sensitiveGate = canSend(sensitiveBlob, true)
       if (!sensitiveGate.allowed) {
@@ -8749,8 +9124,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
         allNodes: liveNodes,
         studioEdges: edgesRef.current,
         runNodeTitle: String(latest.data.title || latest.id),
-        executionTarget:
-          (latest.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow',
+        executionTarget: resolvedPromptPickerMode(latest.data as { promptPickerMode?: 'workflow' | 'model' }),
         rawPromptText:
           latest.data.kind === 'image'
             ? String((latest.data as ImageNodeData).prompt || '')
@@ -8775,7 +9149,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           ),
       })
       const nodeForMerge = nodesRef.current.find((n) => n.id === node.id) ?? latest
-      await applyWorkflowResultToNode(nodeForMerge, kind, result)
+      const execMode = resolvedPromptPickerMode(latest.data as { promptPickerMode?: 'workflow' | 'model' })
+      await applyWorkflowResultToNode(nodeForMerge, kind, result, {
+        replaceImageOutputStrip: execMode === 'model' && (kind === 'image' || kind === 'video'),
+      })
     },
     })
 
@@ -8944,32 +9321,41 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
     }
     dismissMultiSelectContextMenu()
 
-    // 「全部执行」用户预期是执行选中子图：包含下游连线节点，而不只执行被选中的那几个。
     const allowedNodeIds = new Set(
       nodes.filter((n) => n.type !== 'ghost' && n.type !== 'group').map((n) => n.id),
     )
-    const reachable = new Set<string>()
-    const queue: string[] = []
-    selectedIds.forEach((id) => {
-      if (!allowedNodeIds.has(id)) return
-      reachable.add(id)
-      queue.push(id)
-    })
-    while (queue.length) {
-      const curr = queue.shift()
-      if (!curr) continue
-      for (const e of edges) {
-        if (e.source !== curr) continue
-        const nxt = e.target
-        if (!nxt || !allowedNodeIds.has(nxt)) continue
-        if (reachable.has(nxt)) continue
-        reachable.add(nxt)
-        queue.push(nxt)
+    /**
+     * 单选：沿连线向下游扩展，方便「从当前节点跑整条链路」。
+     * 多选框选：只执行**被选中的节点**（拓扑排序），避免多选 8 个图节点却因下游/旁支多出 2 次计费。
+     */
+    let ids: string[]
+    let runName: string
+    if (selectedIds.length <= 1) {
+      const reachable = new Set<string>()
+      const queue: string[] = []
+      selectedIds.forEach((id) => {
+        if (!allowedNodeIds.has(id)) return
+        reachable.add(id)
+        queue.push(id)
+      })
+      while (queue.length) {
+        const curr = queue.shift()
+        if (!curr) continue
+        for (const e of edges) {
+          if (e.source !== curr) continue
+          const nxt = e.target
+          if (!nxt || !allowedNodeIds.has(nxt)) continue
+          if (reachable.has(nxt)) continue
+          reachable.add(nxt)
+          queue.push(nxt)
+        }
       }
+      ids = Array.from(reachable)
+      runName = selectedIds.length === 1 ? '执行选中节点（含下游）' : '执行选中节点'
+    } else {
+      ids = selectedIds.filter((id) => allowedNodeIds.has(id))
+      runName = '全部执行选中节点'
     }
-
-    const ids = Array.from(reachable)
-    const runName = selectedIds.length === 1 ? '执行选中节点（含下游）' : '全部执行选中节点（含下游）'
     await executeNodeIds(ids, runName)
   }, [dismissMultiSelectContextMenu, ensureLicenseCanSubmit, executeNodeIds, nodes, edges])
 
@@ -10288,7 +10674,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
       const { node: panelNode, kind } = panel
       const latestNodes = nodesRef.current
       const fresh = latestNodes.find((n) => n.id === panelNode.id) ?? panelNode
-      const prepared = withResolvedNodeMentions(fresh, latestNodes)
+      const prepared = withResolvedNodeMentions(fresh, latestNodes, edgesRef.current)
       const sensitiveBlob = collectUserFacingTextFromNodeData(prepared.data as StudioNodeData)
       const sensitiveGate = canSend(sensitiveBlob, true)
       if (!sensitiveGate.allowed) {
@@ -10316,8 +10702,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           allNodes: latestNodes,
           studioEdges: edgesRef.current,
           runNodeTitle: String(fresh.data.title || fresh.id),
-          executionTarget:
-            (fresh.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow',
+          executionTarget: resolvedPromptPickerMode(fresh.data as { promptPickerMode?: 'workflow' | 'model' }),
           rawPromptText:
             fresh.data.kind === 'image'
               ? String((fresh.data as ImageNodeData).prompt || '')
@@ -10334,7 +10719,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
           },
         })
         const nodeForMerge = nodesRef.current.find((n) => n.id === id) ?? fresh
-        await applyWorkflowResultToNode(nodeForMerge, kind, result)
+        const execMode = resolvedPromptPickerMode(fresh.data as { promptPickerMode?: 'workflow' | 'model' })
+        await applyWorkflowResultToNode(nodeForMerge, kind, result, {
+          replaceImageOutputStrip: execMode === 'model' && (kind === 'image' || kind === 'video'),
+        })
 
         updateNodeData(id, {
           kind,
@@ -11392,7 +11780,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 onExecutionProviderChange={updateExecutionProvider}
                 onRandomizeKsamplerSeedsOnRunChange={setRandomizeKsamplerSeedsOnRun}
                 onProviderConfigChange={updateProviderConfig}
-                onNodeConfigChange={updateNodeConfig}
+                onNodeConfigChange={updateNodeConfigAndSyncCloudKeys}
                 onSaveNodeWorkflow={saveNodeWorkflow}
                 onSelectNodeWorkflow={selectNodeWorkflow}
                 onRemoveNodeWorkflow={removeNodeWorkflow}
@@ -11584,6 +11972,25 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         全部下载
                       </button>
                     ) : null}
+                    {batchUnifyMenuVisible ? (
+                      <button
+                        type="button"
+                        className="studio-group__menuItem"
+                        role="menuitem"
+                        onClick={() => {
+                          cancelSubmenuHoverCloseTimer()
+                          setMultiSelectContextMenu((prev) => {
+                            if (!prev) return prev
+                            const m = prev.submenuMode
+                            const isBatch =
+                              m === 'batchUnified' || m === 'batchWorkflow' || m === 'batchModel'
+                            return { ...prev, submenuMode: isBatch ? null : 'batchUnified' }
+                          })
+                        }}
+                      >
+                        统一（工作流 / 模型）
+                      </button>
+                    ) : null}
                     <button
                       type="button"
                       className="studio-group__menuItem"
@@ -11640,27 +12047,194 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       aria-label={
                         multiSelectContextMenu.submenuMode === 'common'
                           ? '新增共同节点类型'
-                          : '新增节点类型'
+                          : multiSelectContextMenu.submenuMode === 'linked'
+                            ? '新增节点类型'
+                            : multiSelectContextMenu.submenuMode === 'batchUnified'
+                              ? '统一工作流或模型'
+                              : multiSelectContextMenu.submenuMode === 'batchWorkflow'
+                                ? '选择工作流统一应用到所选节点'
+                                : '选择模型统一应用到所选节点'
                       }
                     >
-                      {SYNC_ADD_MENU_ITEMS.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className="add-node-card__item"
-                          role="menuitem"
-                          onClick={() =>
-                            multiSelectContextMenu.submenuMode === 'common'
-                              ? addCommonNodeViaContextMenuSelection(item.kind)
-                              : addLinkedNodesViaContextMenuSelection(item.kind)
-                          }
-                        >
-                          <span className="add-node-card__itemIcon" aria-hidden>
-                            <img src={item.icon} alt="" />
-                          </span>
-                          <span className="add-node-card__itemText">{item.title}</span>
-                        </button>
-                      ))}
+                      {multiSelectContextMenu.submenuMode === 'linked' ||
+                      multiSelectContextMenu.submenuMode === 'common' ? (
+                        SYNC_ADD_MENU_ITEMS.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className="add-node-card__item"
+                            role="menuitem"
+                            onClick={() =>
+                              multiSelectContextMenu.submenuMode === 'common'
+                                ? addCommonNodeViaContextMenuSelection(item.kind)
+                                : addLinkedNodesViaContextMenuSelection(item.kind)
+                            }
+                          >
+                            <span className="add-node-card__itemIcon" aria-hidden>
+                              <img src={item.icon} alt="" />
+                            </span>
+                            <span className="add-node-card__itemText">{item.title}</span>
+                          </button>
+                        ))
+                      ) : multiSelectContextMenu.submenuMode === 'batchUnified' ? (
+                        <>
+                          <button
+                            type="button"
+                            className="add-node-card__item"
+                            role="menuitem"
+                            disabled={!batchWorkflowUnifyRows.length}
+                            title={
+                              batchWorkflowUnifyRows.length
+                                ? undefined
+                                : '当前选中节点类型下没有可用工作流'
+                            }
+                            onClick={() => {
+                              if (!batchWorkflowUnifyRows.length) return
+                              cancelSubmenuHoverCloseTimer()
+                              setMultiSelectContextMenu((p) =>
+                                p ? { ...p, submenuMode: 'batchWorkflow' } : p,
+                              )
+                            }}
+                          >
+                            <span className="add-node-card__itemIcon" aria-hidden>
+                              ⧉
+                            </span>
+                            <span className="add-node-card__itemMain">
+                              <span className="add-node-card__itemText">ComfyUI 工作流</span>
+                              <span className="add-node-card__itemSub">将所选节点的提示框统一为同一工作流</span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="add-node-card__item"
+                            role="menuitem"
+                            disabled={
+                              executionProvider !== 'cloud' || !batchModelUnifyOptions.length
+                            }
+                            title={
+                              executionProvider !== 'cloud'
+                                ? '本地执行时请在各节点工作流中配置模型'
+                                : !batchModelUnifyOptions.length
+                                  ? '暂无可用云端模型选项'
+                                  : undefined
+                            }
+                            onClick={() => {
+                              if (executionProvider !== 'cloud' || !batchModelUnifyOptions.length)
+                                return
+                              cancelSubmenuHoverCloseTimer()
+                              setMultiSelectContextMenu((p) =>
+                                p ? { ...p, submenuMode: 'batchModel' } : p,
+                              )
+                            }}
+                          >
+                            <span className="add-node-card__itemIcon" aria-hidden>
+                              ◎
+                            </span>
+                            <span className="add-node-card__itemMain">
+                              <span className="add-node-card__itemText">模型</span>
+                              <span className="add-node-card__itemSub">与底部「选择模型」一致，批量写入所选节点</span>
+                            </span>
+                          </button>
+                        </>
+                      ) : multiSelectContextMenu.submenuMode === 'batchWorkflow' ? (
+                        <>
+                          <button
+                            type="button"
+                            className="add-node-card__item"
+                            role="menuitem"
+                            onClick={() => {
+                              cancelSubmenuHoverCloseTimer()
+                              setMultiSelectContextMenu((p) =>
+                                p ? { ...p, submenuMode: 'batchUnified' } : p,
+                              )
+                            }}
+                          >
+                            <span className="add-node-card__itemIcon" aria-hidden>
+                              ←
+                            </span>
+                            <span className="add-node-card__itemText">返回</span>
+                          </button>
+                          {batchWorkflowUnifyRows.map((row) => {
+                            const key =
+                              row.mode === 'cloud'
+                                ? `c-${row.meta.id}`
+                                : `l-${row.kind}-${row.entry.id}`
+                            const label =
+                              row.mode === 'cloud'
+                                ? String(row.meta.nodeKind || '').trim()
+                                  ? `${row.meta.name}（${
+                                      NODE_KIND_LABEL[row.meta.nodeKind as StudioNodeKind] ??
+                                      row.meta.nodeKind
+                                    }）`
+                                  : row.meta.name
+                                : `${NODE_KIND_LABEL[row.kind]} · ${row.entry.name}`
+                            return (
+                              <button
+                                key={key}
+                                type="button"
+                                className="add-node-card__item"
+                                role="menuitem"
+                                title={label}
+                                onClick={() => applyBatchWorkflowUnifyRow(row)}
+                              >
+                                <span className="add-node-card__itemIcon" aria-hidden>
+                                  ⧉
+                                </span>
+                                <span className="add-node-card__itemMain">
+                                  <span className="add-node-card__itemText">{label}</span>
+                                </span>
+                              </button>
+                            )
+                          })}
+                          {!batchWorkflowUnifyRows.length ? (
+                            <div className="add-node-card__itemSub add-node-card__batchEmptyHint">
+                              暂无可统一的工作流
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="add-node-card__item"
+                            role="menuitem"
+                            onClick={() => {
+                              cancelSubmenuHoverCloseTimer()
+                              setMultiSelectContextMenu((p) =>
+                                p ? { ...p, submenuMode: 'batchUnified' } : p,
+                              )
+                            }}
+                          >
+                            <span className="add-node-card__itemIcon" aria-hidden>
+                              ←
+                            </span>
+                            <span className="add-node-card__itemText">返回</span>
+                          </button>
+                          {batchModelUnifyOptions.map((opt) => (
+                            <button
+                              key={opt.value}
+                              type="button"
+                              className="add-node-card__item"
+                              role="menuitem"
+                              disabled={opt.disabled}
+                              title={opt.label}
+                              onClick={() => applyBatchModelPickFromContextMenu(opt.value)}
+                            >
+                              <span className="add-node-card__itemIcon" aria-hidden>
+                                ◎
+                              </span>
+                              <span className="add-node-card__itemMain">
+                                <span className="add-node-card__itemText">{opt.label}</span>
+                              </span>
+                            </button>
+                          ))}
+                          {!batchModelUnifyOptions.length ? (
+                            <div className="add-node-card__itemSub add-node-card__batchEmptyHint">
+                              暂无可统一的云端模型
+                            </div>
+                          ) : null}
+                        </>
+                      )}
                     </div>
                   ) : null}
                 </div>,
@@ -11720,6 +12294,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             onNodeContextMenu={onNodeContextMenu}
             onSelectionContextMenu={onSelectionContextMenu}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             defaultViewport={loaded.viewport}
             minZoom={0}
             maxZoom={2}
@@ -11737,9 +12312,11 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
             panOnDrag
             defaultEdgeOptions={flowDefaultEdgeOptions}
           >
-            {!canvasDayMode ? (
+            {canvasDayMode ? (
+              <Background variant={BackgroundVariant.Lines} gap={32} size={1} color="#c5cad6" />
+            ) : (
               <Background variant={BackgroundVariant.Lines} gap={32} size={1} color="#1a1a1a" />
-            ) : null}
+            )}
             <Controls showInteractive={false} className="studio-controls studio-controls--hidden" />
             {showMiniPreview ? (
               <MiniMap
@@ -11747,9 +12324,9 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                 pannable
                 zoomable
                 nodeColor={minimapNodeColor}
-                maskColor={canvasDayMode ? 'rgba(245,245,245,0.78)' : 'rgba(0,0,0,0.6)'}
+                maskColor={canvasDayMode ? 'rgba(226,229,236,0.78)' : 'rgba(0,0,0,0.6)'}
                 style={{
-                  backgroundColor: canvasDayMode ? '#f5f5f5' : '#111114',
+                  backgroundColor: canvasDayMode ? '#e2e5ec' : '#111114',
                   borderRadius: '16px',
                   border: canvasDayMode
                     ? '1px solid #E8E8E8'
@@ -11839,13 +12416,15 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                       <button
                         type="button"
                         className="studio-music-prompt-panel__settingsBtn"
-                        title="打开 COMFYUI / 模型配置"
-                        aria-label="打开设置面板"
+                        title="切换 COMFYUI / 模型；双击打开设置"
+                        aria-label="切换 COMFYUI 或模型模式"
                         onClick={(event) => {
                           event.stopPropagation()
                           if (!visiblePromptPanel) return
                           const nid = visiblePromptPanel.node.id
-                          const current = (visiblePromptPanel.node.data as any)?.promptPickerMode === 'model' ? 'model' : 'workflow'
+                          const current = resolvedPromptPickerMode(
+                            visiblePromptPanel.node.data as { promptPickerMode?: 'workflow' | 'model' },
+                          )
                           const next = current === 'workflow' ? 'model' : 'workflow'
                           updateNodeData(nid, {
                             promptPickerMode: next,
@@ -12329,10 +12908,10 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                           const labels = buildTdRefAudioRoleMatchSlotLabels({
                             noteText: String(d?.note || ''),
                             hostNodeId: nid,
-                            selfTitle: String(d?.title || '').trim(),
                             primarySrc: String(d?.src || '').trim(),
                             referenceImageSources: d?.referenceImageSources?.filter(Boolean) ?? [],
                             allNodes: nodes,
+                            studioEdges: edges,
                           })
                           const stored = d?.comfyTdRefAudioRoleRows ?? []
                           let base = stored.map((r) => ({
@@ -12360,7 +12939,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         匹配
                       </button>
                       <span className="studio-voice-table-8-trigger__hint">
-                        一路参考音一行（含主槽）；角色名须与台本「角色名:」一致
+                        仅 @ 与底部上传的参考音（不含节点主预览）；角色名须与台本「角色名:」一致
                       </span>
                     </div>
                   ) : null}
@@ -12487,7 +13066,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                             ? promptPanelVoiceTable8.show && promptPanelVoiceTable8.scanned
                               ? '台本（__NOTE__）：多人对白每行「角色名:台词」，角色名须与「台本信息」里「角色名称」列一致。可用 @ 引用文本/剧本节点（勿 @ 配音/音乐节点，否则正文不会展开）；或与文本/剧本节点连线，执行时会自动合并进台本。未填的表格行不覆盖 Comfy 默认槽。'
                               : promptPanelTdRefRoleMap.show && promptPanelTdRefRoleMap.scanned
-                                ? '台本（__NOTE__）：多人对白每行「角色名:台词」。「匹配」按实际上传路数逐路填角色名（含主槽）。正文里 @文字/剧本 可合并台词；@配音/音乐 参与参考音。'
+                                ? '台本（__NOTE__）：多人对白每行「角色名:台词」。「匹配」仅填 @/底部上传参考路的角色名（不含主预览）。正文里 @文字/剧本 可合并台词；@配音/音乐 参与参考音。'
                                 : '描述你想要生成的内容；工作流可用 __NOTE__ 作为台本占位符。若工作流含 __REF_AUDIO_n__，参考音：主槽=第1路，@引用与下方参考区按顺序为第2、3…路；未含则无需上传参考音。'
                             : visiblePromptPanel.kind === 'text'
                             ? '输入文本或提示词；工作流中可使用占位符 __BODY__'
@@ -12636,6 +13215,111 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         : ''
                     }`}
                   >
+                    {visiblePromptPanel.kind === 'image' && promptPanelPickerMode === 'model' ? (
+                      <>
+                        <div className="studio-music-prompt-panel__footSlot studio-music-prompt-panel__footSlot--imageCluster nodrag">
+                          <PromptPanelDropdown
+                            ariaLabel="选择云端模型"
+                            className="studio-music-prompt-panel__select studio-music-prompt-panel__select--cloudModelPrimary"
+                            placeholder="选择模型"
+                            value={promptPanelModelSelectValue}
+                            options={promptPanelModelOptions}
+                            onChange={(pickedId) => {
+                              const kind = visiblePromptPanel.kind
+                              if (pickedId === 'custom-current') return
+                              const assistDecoded = tryDecodeCloudAssistModelPick(pickedId)
+                              if (assistDecoded) {
+                                const ak = studioNodeKindToAssistKind(kind)
+                                if (!ak) return
+                                const ep = findAssistEndpoint(ak, assistDecoded.endpointId, assistCatalog)
+                                if (!ep) return
+                                updateNodeData(visiblePromptPanel.node.id, {
+                                  kind,
+                                  cloudAssistModelPick: pickedId,
+                                  cloudSelfPresetId: undefined,
+                                  cloudModelName: assistDecoded.model,
+                                  cloudModelUrl: ep.baseUrl,
+                                  cloudApiKey: getAssistApiKey(ak),
+                                } as any)
+                                return
+                              }
+                              const preset = loadCloudSelfPresets().find((i) => i.id === pickedId)
+                              if (!preset) return
+                              updateNodeData(visiblePromptPanel.node.id, {
+                                kind,
+                                cloudAssistModelPick: undefined,
+                                cloudSelfPresetId: preset.id,
+                                cloudModelName: preset.model,
+                                cloudModelUrl: preset.baseUrl,
+                                cloudApiKey: String((preset as any).apiKey || ''),
+                              } as any)
+                            }}
+                          />
+                        </div>
+                        <div className="studio-music-prompt-panel__footSlot nodrag">
+                          <PromptPanelDropdown
+                            ariaLabel="比例"
+                            title="对应云端 Image API 的 size，不会拼进提示词"
+                            className="studio-music-prompt-panel__select studio-music-prompt-panel__select--iconOnly"
+                            placeholder="比例"
+                            value={(visiblePromptPanel.node.data as ImageNodeData).cloudImageAspect ?? 'auto'}
+                            options={COMFY_WORKFLOW_ASPECT_PANEL_OPTIONS}
+                            renderButtonContent={() => <CloudAspectGlyph />}
+                            onChange={(picked) => {
+                              updateNodeData(visiblePromptPanel.node.id, {
+                                kind: 'image',
+                                cloudImageAspect: picked as CloudImageAspectKey,
+                              } as Partial<StudioNodeData>)
+                            }}
+                          />
+                        </div>
+                        <div className="studio-music-prompt-panel__footSlot nodrag">
+                          <PromptPanelDropdown
+                            ariaLabel="分辨率"
+                            title="影响像素档位与 quality；不进入提示词正文"
+                            className="studio-music-prompt-panel__select studio-music-prompt-panel__select--iconOnly"
+                            placeholder="分辨率"
+                            value={(visiblePromptPanel.node.data as ImageNodeData).cloudImageResolutionTier ?? '1k'}
+                            options={CLOUD_IMAGE_RESOLUTION_PANEL_OPTIONS}
+                            renderButtonContent={({ value: v }) => (
+                              <CloudResolutionGlyph tier={(v as CloudImageResolutionTier) ?? '1k'} />
+                            )}
+                            onChange={(picked) => {
+                              updateNodeData(visiblePromptPanel.node.id, {
+                                kind: 'image',
+                                cloudImageResolutionTier: picked as CloudImageResolutionTier,
+                              } as Partial<StudioNodeData>)
+                            }}
+                          />
+                        </div>
+                        <div className="studio-music-prompt-panel__footEnd">
+                          {promptPanelFootPointsHint != null ? (
+                            <span
+                              className="studio-music-prompt-panel__footPoints"
+                              title="预估单次执行预扣积分（与预扣接口一致）"
+                            >
+                              <Zap
+                                className="studio-music-prompt-panel__footPointsIcon"
+                                size={17}
+                                strokeWidth={2.35}
+                                aria-hidden
+                              />
+                              积分 {Math.round(promptPanelFootPointsHint)}
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="studio-music-prompt-panel__submit"
+                            onClick={() => void executePromptPanelFromPanel(visiblePromptPanel)}
+                            title="执行当前节点工作流；长任务在后台跑时仍可再次提交，仅最后一次完成的任务会写回节点"
+                          >
+                            ↑
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                    <>
+                    <div className="studio-music-prompt-panel__footMain">
                     {promptPanelPickerMode === 'workflow' ? (
                       <div className="studio-music-prompt-panel__workflowRow">
                         <PromptPanelDropdown
@@ -12697,78 +13381,6 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                           </button>
                         ) : null}
                       </div>
-                    ) : visiblePromptPanel.kind === 'image' ? (
-                      <>
-                        <PromptPanelDropdown
-                          ariaLabel="选择云端模型"
-                          className="studio-music-prompt-panel__select studio-music-prompt-panel__select--cloudModelPrimary"
-                          placeholder="选择模型"
-                          value={promptPanelModelSelectValue}
-                          options={promptPanelModelOptions}
-                          onChange={(pickedId) => {
-                            const kind = visiblePromptPanel.kind
-                            if (pickedId === 'custom-current') return
-                            const assistDecoded = tryDecodeCloudAssistModelPick(pickedId)
-                            if (assistDecoded) {
-                              const ak = studioNodeKindToAssistKind(kind)
-                              if (!ak) return
-                              const ep = findAssistEndpoint(ak, assistDecoded.endpointId, assistCatalog)
-                              if (!ep) return
-                              updateNodeData(visiblePromptPanel.node.id, {
-                                kind,
-                                cloudAssistModelPick: pickedId,
-                                cloudSelfPresetId: undefined,
-                                cloudModelName: assistDecoded.model,
-                                cloudModelUrl: ep.baseUrl,
-                                cloudApiKey: getAssistApiKey(ak),
-                              } as any)
-                              return
-                            }
-                            const preset = loadCloudSelfPresets().find((i) => i.id === pickedId)
-                            if (!preset) return
-                            updateNodeData(visiblePromptPanel.node.id, {
-                              kind,
-                              cloudAssistModelPick: undefined,
-                              cloudSelfPresetId: preset.id,
-                              cloudModelName: preset.model,
-                              cloudModelUrl: preset.baseUrl,
-                              cloudApiKey: String((preset as any).apiKey || ''),
-                            } as any)
-                          }}
-                        />
-                        <PromptPanelDropdown
-                          ariaLabel="比例"
-                          title="对应云端 Image API 的 size，不会拼进提示词"
-                          className="studio-music-prompt-panel__select studio-music-prompt-panel__select--iconOnly"
-                          placeholder="比例"
-                          value={(visiblePromptPanel.node.data as ImageNodeData).cloudImageAspect ?? 'auto'}
-                          options={COMFY_WORKFLOW_ASPECT_PANEL_OPTIONS}
-                          renderButtonContent={() => <CloudAspectGlyph />}
-                          onChange={(picked) => {
-                            updateNodeData(visiblePromptPanel.node.id, {
-                              kind: 'image',
-                              cloudImageAspect: picked as CloudImageAspectKey,
-                            } as Partial<StudioNodeData>)
-                          }}
-                        />
-                        <PromptPanelDropdown
-                          ariaLabel="分辨率"
-                          title="影响像素档位与 quality；不进入提示词正文"
-                          className="studio-music-prompt-panel__select studio-music-prompt-panel__select--iconOnly"
-                          placeholder="分辨率"
-                          value={(visiblePromptPanel.node.data as ImageNodeData).cloudImageResolutionTier ?? '1k'}
-                          options={CLOUD_IMAGE_RESOLUTION_PANEL_OPTIONS}
-                          renderButtonContent={({ value: v }) => (
-                            <CloudResolutionGlyph tier={(v as CloudImageResolutionTier) ?? '1k'} />
-                          )}
-                          onChange={(picked) => {
-                            updateNodeData(visiblePromptPanel.node.id, {
-                              kind: 'image',
-                              cloudImageResolutionTier: picked as CloudImageResolutionTier,
-                            } as Partial<StudioNodeData>)
-                          }}
-                        />
-                      </>
                     ) : (
                       <PromptPanelDropdown
                         ariaLabel="选择云端模型"
@@ -12853,6 +13465,7 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         ) : null}
                       </div>
                     ) : null}
+                    </div>
                     <div className="studio-music-prompt-panel__footEnd">
                       {promptPanelFootPointsHint != null ? (
                         <span
@@ -12877,6 +13490,8 @@ function StudioCanvasInner({ onGoHome }: { onGoHome?: () => void }) {
                         ↑
                       </button>
                     </div>
+                    </>
+                    )}
                   </div>
                 </div>
               </div>

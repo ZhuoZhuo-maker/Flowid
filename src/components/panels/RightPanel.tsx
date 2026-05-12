@@ -1,14 +1,15 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { useMemo } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { Briefcase, ChevronLeft, ChevronRight, Clock, Shield } from 'lucide-react'
+import { Briefcase, ChevronLeft, ChevronRight, Clock, Shield, Sparkles } from 'lucide-react'
 import type { AssetItem, HistoryItem } from './types'
 import type { FlowidMaterialDragPayload, MaterialLibraryTabId } from '../../lib/materialLibrary'
 import { AssetToolboxPanel } from './AssetToolboxPanel'
 import { HistoryPanel } from './HistoryPanel'
+import { InspirationTownPanel } from './InspirationTownPanel'
 import { SystemPromptsPanel } from './SystemPromptsPanel'
 
-export type RightPanelTab = 'assets' | 'history' | 'system-prompts'
+export type RightPanelTab = 'assets' | 'history' | 'inspiration-town' | 'system-prompts'
 
 export function RightPanel({
   canvasDayMode = false,
@@ -51,6 +52,7 @@ export function RightPanel({
       [
         { id: 'assets' as const, icon: Briefcase },
         { id: 'history' as const, icon: Clock },
+        { id: 'inspiration-town' as const, icon: Sparkles },
         { id: 'system-prompts' as const, icon: Shield },
       ] as const,
     [],
@@ -105,9 +107,23 @@ export function RightPanel({
                           : 'text-white/50 hover:text-white/80'
                     }`}
                     aria-label={
-                      tab.id === 'assets' ? '素材库' : tab.id === 'history' ? '历史' : '系统提示词'
+                      tab.id === 'assets'
+                        ? '素材库'
+                        : tab.id === 'history'
+                          ? '历史'
+                          : tab.id === 'inspiration-town'
+                            ? '灵感小镇'
+                            : '系统提示词'
                     }
-                    title={tab.id === 'assets' ? '素材库' : tab.id === 'history' ? '历史' : '系统提示词'}
+                    title={
+                      tab.id === 'assets'
+                        ? '素材库'
+                        : tab.id === 'history'
+                          ? '历史'
+                          : tab.id === 'inspiration-town'
+                            ? '灵感小镇'
+                            : '系统提示词'
+                    }
                   >
                     <tab.icon size={18} className="group-hover:scale-110 transition-transform" />
                   </button>
@@ -135,6 +151,7 @@ export function RightPanel({
                 {activeTab === 'history' ? (
                   <HistoryPanel historyItems={historyItems} onRemoveHistoryItems={onRemoveHistoryItems} embedded />
                 ) : null}
+                {activeTab === 'inspiration-town' ? <InspirationTownPanel embedded /> : null}
                 {activeTab === 'system-prompts' ? <SystemPromptsPanel embedded /> : null}
               </div>
             </motion.div>

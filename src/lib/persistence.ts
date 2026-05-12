@@ -12,6 +12,7 @@ const KNOWN_FLOW_NODE_TYPES = new Set([
   'text',
   'script',
   'image',
+  'imageCompare',
   'video',
   'audio',
   'panorama',

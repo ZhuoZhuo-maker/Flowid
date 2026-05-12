@@ -54,17 +54,23 @@ export function getSystemPromptPresetClientStatus(): SystemPromptPresetClientSta
   return { ok: true, baseUrl, hasLicense }
 }
 
-export async function fetchSystemPromptPresets(): Promise<SystemPromptPresetMeta[]> {
+export type SystemPromptPresetsFetchResult = {
+  items: SystemPromptPresetMeta[]
+  categoryOrder: string[]
+}
+
+export async function fetchSystemPromptPresets(): Promise<SystemPromptPresetsFetchResult> {
   const ctx = getBaseAndOptionalHeaders()
-  if (!ctx) return []
+  if (!ctx) return { items: [], categoryOrder: [] }
   const res = await fetch(`${ctx.baseUrl}/system-prompts/groups`, {
     method: 'GET',
     headers: ctx.headers,
   })
   const json = (await res.json().catch(() => ({}))) as {
     groups?: Array<{ id?: string; label?: string; tier?: string; items?: unknown[] }>
+    categoryOrder?: unknown[]
   }
-  if (!res.ok) return []
+  if (!res.ok) return { items: [], categoryOrder: [] }
   const groups = Array.isArray(json.groups) ? json.groups : []
   const out: SystemPromptPresetMeta[] = []
   for (const g of groups) {
@@ -86,7 +92,16 @@ export async function fetchSystemPromptPresets(): Promise<SystemPromptPresetMeta
       })
     }
   }
-  return out
+  const rawOrder = Array.isArray(json.categoryOrder) ? json.categoryOrder : []
+  const categoryOrder: string[] = []
+  const seen = new Set<string>()
+  for (const x of rawOrder) {
+    const s = String(x || '').trim()
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    categoryOrder.push(s)
+  }
+  return { items: out, categoryOrder }
 }
 
 export async function fetchSystemPromptPresetText(id: string): Promise<string> {

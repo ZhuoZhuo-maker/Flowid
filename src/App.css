@@ -1,4 +1,4 @@
-﻿/* 画布应用全局布局与组件样式（深色工作台风格） */
+/* 画布应用全局布局与组件样式（深色工作台风格） */
 
 :root {
   /* ---------- Design Tokens ---------- */
@@ -393,14 +393,19 @@ body,
   background-size: 48px 48px;
 }
 
-/** 日间：无网格，画布底色 #F5F5F5 */
+/** 日间工作区底色（连线 token 写在 `.studio-flow-wrap--canvas-day .react-flow`，否则会被 xyflow 与后面 `.studio-flow-wrap` 丝缕默认值盖住） */
+.studio-flow-wrap--canvas-day {
+  --flowid-canvas-day-surface: #e2e5ec;
+}
+
+/** 日间：与画布同色平铺（极淡网格由 React Flow Background 叠加） */
 .studio-flow-wrap--canvas-day .studio-canvas-grain {
   opacity: 1;
-  background-color: #f5f5f5;
+  background-color: var(--flowid-canvas-day-surface);
   background-image: none;
 }
 
-/** 日间画布底色见文件末尾 `.studio-flow-wrap--canvas-day .react-flow`（带 !important，避免被覆盖） */
+/** 日间 React Flow 底色见下方 `.studio-flow-wrap--canvas-day .react-flow`，与 `--flowid-canvas-day-surface` 一致 */
 
 /** 日间顶栏：项目胶囊（与设置页类似的浅底 + 选中态蓝） */
 .studio-flow-wrap--canvas-day .studio-canvas-topbar .studio-project-pill {
@@ -1161,11 +1166,14 @@ body,
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: min(72vh, 520px);
+  /* 约 5 条菜单项可视高度（按单行~3.45rem 估算，略留换行余量），其余滚动 */
+  max-height: min(calc(5 * 3.45rem + 4 * 4px + 12px), 90vh);
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: rgba(59, 130, 246, 0.5) rgba(255, 255, 255, 0.06);
+  /* 中性灰滚动条（避免与画布主题色混淆） */
+  scrollbar-color: rgba(120, 122, 132, 0.55) rgba(255, 255, 255, 0.06);
 }
 
 .studio-multi-select-ctx__main::-webkit-scrollbar {
@@ -1173,30 +1181,34 @@ body,
 }
 
 .studio-multi-select-ctx__main::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.28);
+  background: rgba(0, 0, 0, 0.22);
   border-radius: 6px;
   margin: 4px 0;
 }
 
 .studio-multi-select-ctx__main::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.55), rgba(37, 99, 235, 0.38));
+  background: rgba(120, 122, 132, 0.55);
   border-radius: 6px;
   border: 2px solid rgba(17, 17, 20, 0.9);
   background-clip: padding-box;
 }
 
 .studio-multi-select-ctx__main::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(96, 165, 250, 0.7), rgba(59, 130, 246, 0.5));
+  background: rgba(148, 150, 160, 0.72);
   background-clip: padding-box;
 }
 
-/* 右键「新增节点」子卡：条目多时可滚，滚动条与主菜单一致 */
+/* 右键「新增节点」子卡：条目多时可滚；加宽以容纳长工作流名 */
 .studio-multi-select-ctx .add-node-card {
-  max-height: min(72vh, 520px);
+  width: min(94vw, 420px);
+  min-width: 288px;
+  max-width: min(94vw, 420px);
+  max-height: min(62vh, 440px);
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   scrollbar-width: thin;
-  scrollbar-color: rgba(59, 130, 246, 0.5) rgba(255, 255, 255, 0.06);
+  scrollbar-color: rgba(120, 122, 132, 0.55) rgba(255, 255, 255, 0.06);
 }
 
 .studio-multi-select-ctx .add-node-card::-webkit-scrollbar {
@@ -1204,21 +1216,57 @@ body,
 }
 
 .studio-multi-select-ctx .add-node-card::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.28);
+  background: rgba(0, 0, 0, 0.22);
   border-radius: 6px;
   margin: 4px 0;
 }
 
 .studio-multi-select-ctx .add-node-card::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.55), rgba(37, 99, 235, 0.38));
+  background: rgba(120, 122, 132, 0.55);
   border-radius: 6px;
   border: 2px solid rgba(17, 17, 20, 0.9);
   background-clip: padding-box;
 }
 
 .studio-multi-select-ctx .add-node-card::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(96, 165, 250, 0.7), rgba(59, 130, 246, 0.5));
+  background: rgba(148, 150, 160, 0.72);
   background-clip: padding-box;
+}
+
+/* 多选子面板：长文案顶对齐、可换行，避免行与行叠在一起 */
+.studio-multi-select-ctx .add-node-card__item {
+  align-items: flex-start;
+  min-height: 0;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.studio-multi-select-ctx .add-node-card__itemIcon {
+  margin-top: 2px;
+}
+
+.studio-multi-select-ctx .add-node-card__itemMain {
+  gap: 4px;
+}
+
+.studio-multi-select-ctx .add-node-card__itemText {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
+  font-weight: 700;
+}
+
+.studio-multi-select-ctx .add-node-card__itemSub {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.studio-multi-select-ctx .add-node-card__batchEmptyHint {
+  padding: 10px 12px 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.42);
 }
 
 /**
@@ -1228,7 +1276,7 @@ body,
   border-color: #e8e8e8;
   background: #ffffff;
   box-shadow: 0 16px 48px rgba(38, 38, 38, 0.14);
-  scrollbar-color: rgba(234, 88, 12, 0.5) rgba(0, 0, 0, 0.06);
+  scrollbar-color: rgba(115, 118, 128, 0.55) rgba(0, 0, 0, 0.06);
 }
 
 :root[data-flowid-canvas-day='1'] .studio-multi-select-ctx__main::-webkit-scrollbar-track {
@@ -1238,14 +1286,14 @@ body,
 }
 
 :root[data-flowid-canvas-day='1'] .studio-multi-select-ctx__main::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(249, 115, 22, 0.65), rgba(234, 88, 12, 0.42));
+  background: rgba(115, 118, 128, 0.5);
   border-radius: 6px;
   border: 2px solid rgba(255, 255, 255, 0.95);
   background-clip: padding-box;
 }
 
 :root[data-flowid-canvas-day='1'] .studio-multi-select-ctx__main::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(251, 146, 60, 0.8), rgba(234, 88, 12, 0.52));
+  background: rgba(90, 92, 102, 0.55);
   background-clip: padding-box;
 }
 
@@ -1281,7 +1329,8 @@ body,
   border-color: #e8e8e8;
   background: #ffffff;
   box-shadow: 0 12px 32px rgba(38, 38, 38, 0.1);
-  scrollbar-color: rgba(234, 88, 12, 0.5) rgba(0, 0, 0, 0.06);
+  max-height: min(62vh, 440px);
+  scrollbar-color: rgba(115, 118, 128, 0.55) rgba(0, 0, 0, 0.06);
 }
 
 :root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card::-webkit-scrollbar-track {
@@ -1291,14 +1340,14 @@ body,
 }
 
 :root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(249, 115, 22, 0.65), rgba(234, 88, 12, 0.42));
+  background: rgba(115, 118, 128, 0.5);
   border-radius: 6px;
   border: 2px solid rgba(255, 255, 255, 0.95);
   background-clip: padding-box;
 }
 
 :root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(251, 146, 60, 0.8), rgba(234, 88, 12, 0.52));
+  background: rgba(90, 92, 102, 0.55);
   background-clip: padding-box;
 }
 
@@ -1334,11 +1383,15 @@ body,
   color: #737373;
 }
 
+:root[data-flowid-canvas-day='1'] .studio-multi-select-ctx .add-node-card__batchEmptyHint {
+  color: #a3a3a3;
+}
+
 :root[data-flowid-canvas-day='1'] .studio-group__menu {
   border-color: #e8e8e8;
   background: #ffffff;
   box-shadow: 0 16px 48px rgba(38, 38, 38, 0.14);
-  scrollbar-color: rgba(234, 88, 12, 0.5) rgba(0, 0, 0, 0.06);
+  scrollbar-color: rgba(115, 115, 125, 0.45) rgba(0, 0, 0, 0.06);
 }
 
 :root[data-flowid-canvas-day='1'] .studio-group__menu::-webkit-scrollbar-track {
@@ -1348,14 +1401,14 @@ body,
 }
 
 :root[data-flowid-canvas-day='1'] .studio-group__menu::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(249, 115, 22, 0.65), rgba(234, 88, 12, 0.42));
+  background: rgba(120, 120, 128, 0.45);
   border-radius: 6px;
   border: 2px solid rgba(255, 255, 255, 0.95);
   background-clip: padding-box;
 }
 
 :root[data-flowid-canvas-day='1'] .studio-group__menu::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(251, 146, 60, 0.8), rgba(234, 88, 12, 0.52));
+  background: rgba(100, 100, 110, 0.58);
   background-clip: padding-box;
 }
 
@@ -1384,6 +1437,22 @@ body,
 
 :root[data-flowid-canvas-day='1'] .studio-group__menuSectionTitle {
   color: #737373;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menuSectionToggle {
+  background: #fafafa;
+  border-color: transparent;
+  color: #262626;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menuSectionToggle:hover {
+  background: #f0f0f0;
+  color: #171717;
+}
+
+:root[data-flowid-canvas-day='1'] .studio-group__menuSectionToggleChevron {
+  color: #737373;
+  opacity: 1;
 }
 
 :root[data-flowid-canvas-day='1'] .studio-group__menuColorItem {
@@ -2149,6 +2218,48 @@ body,
   cursor: grabbing !important;
 }
 
+/* 丝缕边：每层 path 纯色描边；勿含日间画布，否则覆盖 `.studio-flow-wrap--canvas-day` 下的靛紫/主题色 */
+.studio-flow-wrap:not(.studio-flow-wrap--canvas-day) {
+  --studio-edge-silk-outer: rgba(70, 70, 80, 0.14);
+  --studio-edge-silk-mid: rgba(70, 70, 80, 0.26);
+}
+
+/* 深色画布：主线 + 连接预览（xyflow dark 默认边色过暗） */
+.studio-flow-wrap:not(.studio-flow-wrap--canvas-day) .react-flow.dark {
+  --studio-edge-silk-outer: rgba(163, 173, 255, 0.18);
+  --studio-edge-silk-mid: rgba(163, 173, 255, 0.4);
+  --xy-edge-stroke-default: #a3adff;
+  --xy-edge-stroke-selected-default: #e8eaff;
+  --xy-edge-stroke-width-default: 2.25;
+  --xy-connectionline-stroke-default: #a3adff;
+  --xy-connectionline-stroke-width-default: 2;
+}
+
+/* 仅主线走虚线动画；丝缕层保持实线 */
+.react-flow__edge.animated path.studio-edge-silk-layer {
+  stroke-dasharray: none !important;
+  animation: none !important;
+}
+
+.studio-flow-wrap:not(.studio-flow-wrap--canvas-day) .react-flow.dark .react-flow__edge.animated .react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 日间：丝缕略收窄，主线圆角与深色一致 */
+.studio-flow-wrap--canvas-day .studio-edge-silk-layer--outer {
+  stroke-width: 6 !important;
+}
+
+.studio-flow-wrap--canvas-day .studio-edge-silk-layer--mid {
+  stroke-width: 3 !important;
+}
+
+.studio-flow-wrap--canvas-day .react-flow__edge.animated .react-flow__edge-path {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .studio-rt-btn:hover {
   background: #273550;
 }
@@ -2268,6 +2379,22 @@ body,
   box-shadow:
     0 0 0 1px rgba(99, 102, 241, 0.35),
     0 16px 50px rgba(0, 0, 0, 0.55);
+}
+
+/**
+ * 日间画布为浅底：沿用夜间的大面积黑色扩散阴影会在框选时（节点实时变 selected）
+ * 在选区内衬出明显「灰块/浮层」，易被误认为框选层 bug；压轻为适合浅底的轮廓+短阴影。
+ */
+.studio-flow-wrap--canvas-day .studio-node {
+  box-shadow:
+    0 6px 22px rgba(15, 23, 42, 0.1),
+    0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+}
+.studio-flow-wrap--canvas-day .studio-node--selected {
+  border-color: rgba(99, 102, 241, 0.72);
+  box-shadow:
+    0 0 0 1px rgba(99, 102, 241, 0.4),
+    0 10px 34px rgba(15, 23, 42, 0.14);
 }
 
 .studio-node__head {
@@ -3052,13 +3179,22 @@ body,
   transform: translate(0, -50%) !important;
 }
 
+/* 与连线同色：用 SVG 作 mask，底色跟 --xy-edge-stroke(-default) 走 */
 .studio-handle::before {
   content: '';
   position: absolute;
   top: -10px;
   width: 20px;
   height: 20px;
-  background: url('/studio-icons/Add-Branch.svg') center / contain no-repeat;
+  background-color: var(--xy-edge-stroke, var(--xy-edge-stroke-default));
+  -webkit-mask-image: url('/studio-icons/Add-Branch.svg');
+  mask-image: url('/studio-icons/Add-Branch.svg');
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 
 .react-flow__node .react-flow__handle-left.studio-handle::before {
@@ -3075,10 +3211,17 @@ body,
   opacity: 1 !important;
 }
 
-/* 选中节点进行拖拽/缩放时，隐藏加号连接点避免抢占鼠标事件 */
+/* 选中节点时默认隐藏桩，避免拖节点时误触；悬停节点时再显示，否则连线无从下口 */
 .react-flow__node.selected .studio-handle {
   opacity: 0 !important;
   pointer-events: none !important;
+}
+
+.react-flow__node.selected:hover .studio-handle,
+.react-flow__node.selected .studio-handle.connectingto,
+.react-flow__node.selected .studio-handle.connectingfrom {
+  opacity: 1 !important;
+  pointer-events: auto !important;
 }
 
 /* ---------- UI state helpers (ui-demo) ---------- */
@@ -5462,14 +5605,14 @@ select.flowid-dark-select optgroup {
   width: 100%;
   height: 100%;
   pointer-events: none;
-  border: 1px solid var(--group-border-color, rgba(111, 210, 255, 0.65));
+  border: 1px solid var(--group-border-color, rgba(59, 130, 246, 0.88));
   border-radius: 10px;
   /**
    * 组框区域不设实底填充，避免叠在成员节点上方挡操作；
    * 色块仅保留在标题栏（.studio-group__titleRow）。
    */
   background: transparent;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--group-border-color, #6fd2ff) 24%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--group-border-color, #3b82f6) 46%, transparent);
   display: flex;
   flex-direction: column;
 }
@@ -5488,10 +5631,10 @@ select.flowid-dark-select optgroup {
 }
 
 .studio-group.is-selected {
-  border-color: color-mix(in srgb, var(--group-border-color, #6fd2ff) 90%, white);
+  border-color: color-mix(in srgb, var(--group-border-color, #3b82f6) 92%, white);
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--group-border-color, #6fd2ff) 48%, transparent),
-    inset 0 0 0 1px color-mix(in srgb, var(--group-border-color, #6fd2ff) 30%, transparent);
+    0 0 0 1px color-mix(in srgb, var(--group-border-color, #3b82f6) 62%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--group-border-color, #3b82f6) 44%, transparent);
 }
 
 /**
@@ -5520,8 +5663,8 @@ select.flowid-dark-select optgroup {
   cursor: grab;
   position: relative;
   z-index: 25;
-  background: var(--group-title-bg-color, rgba(16, 24, 36, 0.82));
-  border-bottom: 1px solid rgba(111, 210, 255, 0.22);
+  background: var(--group-title-bg-color, rgba(15, 23, 42, 0.92));
+  border-bottom: 1px solid color-mix(in srgb, var(--group-border-color, #3b82f6) 55%, transparent);
 }
 
 .studio-group--collapsed .studio-group__titleRow {
@@ -5556,7 +5699,7 @@ select.flowid-dark-select optgroup {
   border: none;
   outline: none;
   background: transparent;
-  color: #cde7ff;
+  color: var(--group-title-color, #cde7ff);
   font-size: var(--group-title-size, 12px);
   font-weight: 600;
   padding: 4px 8px 4px 4px;
@@ -5572,7 +5715,7 @@ select.flowid-dark-select optgroup {
   min-height: 0;
   display: flex;
   align-items: center;
-  color: #cde7ff;
+  color: var(--group-title-color, #cde7ff);
   font-size: var(--group-title-size, 12px);
   font-weight: 600;
   padding: 4px 8px 4px 4px;
@@ -5616,7 +5759,7 @@ select.flowid-dark-select optgroup {
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(59, 130, 246, 0.5) rgba(255, 255, 255, 0.06);
+  scrollbar-color: rgba(120, 120, 128, 0.55) rgba(0, 0, 0, 0.2);
 }
 
 .studio-group__menu::-webkit-scrollbar {
@@ -5630,14 +5773,14 @@ select.flowid-dark-select optgroup {
 }
 
 .studio-group__menu::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.55), rgba(37, 99, 235, 0.38));
+  background: rgba(115, 115, 125, 0.55);
   border-radius: 6px;
   border: 2px solid rgba(17, 17, 20, 0.9);
   background-clip: padding-box;
 }
 
 .studio-group__menu::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, rgba(96, 165, 250, 0.7), rgba(59, 130, 246, 0.5));
+  background: rgba(140, 140, 150, 0.72);
   background-clip: padding-box;
 }
 
@@ -5684,6 +5827,55 @@ select.flowid-dark-select optgroup {
   text-transform: uppercase;
 }
 
+.studio-group__menuSectionToggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.82);
+  text-align: left;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.studio-group__menuSectionToggle:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.studio-group__menuSectionToggleChevron {
+  flex-shrink: 0;
+  font-size: 11px;
+  opacity: 0.65;
+  font-weight: 900;
+}
+
+.studio-group__menuSectionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 4px 8px 8px;
+}
+
+.studio-group__menuFontSize.studio-group__menuSectionBody {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
 .studio-group__menuColors {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -5712,6 +5904,56 @@ select.flowid-dark-select optgroup {
 
 .studio-group__menuColorItem:active {
   transform: translateY(1px);
+}
+
+.studio-group__menuFontSize {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 2px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  margin-top: 2px;
+}
+
+.studio-group__menuFontSizeInput {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.92);
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.studio-group__menuFontSizeActions {
+  display: flex;
+  gap: 4px;
+}
+
+.studio-group__menuFontSizeBtn {
+  flex: 1;
+  text-align: center;
+  padding: 8px 6px;
+  font-size: 12px;
+}
+
+.studio-group__menuTitleColorCustom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 2px 2px;
+}
+
+.studio-group__menuTitleColorCustomLabel {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.38);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  flex-shrink: 0;
 }
 
 .studio-group__resizeLine {
@@ -5743,23 +5985,60 @@ select.flowid-dark-select optgroup {
   gap: 12px;
 }
 
-/** 图片节点 + 模型：模型(≈45%) → 比例(≈27.5%) → 分辨率(≈27.5%)，与发送键同一行 */
-.studio-music-prompt-panel__foot--imageCloudModel {
-  flex-wrap: nowrap;
+/** 左侧：工作流 / 模型下拉等 */
+.studio-music-prompt-panel__footMain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
-}
-
-.studio-music-prompt-panel__foot--imageCloudModel > .pp-select.studio-music-prompt-panel__select--cloudModelPrimary {
-  flex: 4.5 1 0;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
-.studio-music-prompt-panel__foot--imageCloudModel > .pp-select.pp-select--iconTrigger {
-  flex: 0 0 auto;
+/** 图片 + 云端模型：一行四块 — 模型 6/10、尺寸 1/10、清晰度 1/10、执行 1/10；块间间隙合计 1/10（三等分） */
+.studio-music-prompt-panel__foot--imageCloudModel {
+  flex-wrap: nowrap;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+  /* 4 项之间 3 道缝，每道 ≈ 3.333% 行宽 → 合计 10% */
+  column-gap: 3.3333333333%;
+  row-gap: 10px;
+}
+
+.studio-music-prompt-panel__foot--imageCloudModel .studio-music-prompt-panel__footSlot--imageCluster {
+  flex: 6 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.studio-music-prompt-panel__foot--imageCloudModel .studio-music-prompt-panel__footSlot:not(.studio-music-prompt-panel__footSlot--imageCluster) {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.studio-music-prompt-panel__foot--imageCloudModel
+  .studio-music-prompt-panel__footSlot--imageCluster
+  > .pp-select.studio-music-prompt-panel__select--cloudModelPrimary {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.studio-music-prompt-panel__foot--imageCloudModel .studio-music-prompt-panel__footEnd {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-left: 0;
+  justify-content: flex-end;
 }
 
 /* 勿让「符号拆分」菜单套用下拉伸展；否则会把工作流行与右侧按钮挤没 */
-.studio-music-prompt-panel__foot > .pp-select:not(.studio-music-prompt-panel__splitSymbolMenu) {
+.studio-music-prompt-panel__footMain > .pp-select:not(.studio-music-prompt-panel__splitSymbolMenu) {
   flex: 1 1 160px;
   min-width: 0;
 }
@@ -5963,11 +6242,11 @@ select.flowid-dark-select optgroup {
 }
 
 .studio-music-prompt-panel__footEnd {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .studio-music-prompt-panel__footPoints {
@@ -7773,20 +8052,59 @@ select.flowid-dark-select optgroup {
 }
 
 /**
- * 日间画布：与右栏「系统提示词」列表卡片（[data-right-panel-body='day'] .bg-black/20）同色 #f5f5f5，
- * 并写入 xyflow 变量，避免浅色主题下 pane / 子层仍透出白底显得过亮。
+ * 日间画布：柔灰蓝工作区（--flowid-canvas-day-surface），写入 xyflow 变量避免子层漏白。
  */
 .studio-flow-wrap--canvas-day .react-flow {
-  --xy-background-color: #f5f5f5;
-  background: #f5f5f5 !important;
-  background-color: #f5f5f5 !important;
+  --xy-background-color: var(--flowid-canvas-day-surface);
+  /* 靛紫丝缕 + 主线：必须写在此选择器上，覆盖 @xyflow 默认 `.react-flow { --xy-edge-* }` */
+  --studio-edge-silk-outer: rgba(129, 140, 248, 0.14);
+  --studio-edge-silk-mid: rgba(99, 102, 241, 0.28);
+  --xy-edge-stroke-default: #7c86f0;
+  --xy-edge-stroke-selected-default: #4f46e5;
+  --xy-edge-stroke-width-default: 1.85;
+  --xy-connectionline-stroke-default: #9ca8ff;
+  --xy-connectionline-stroke-width-default: 1.85;
+  /**
+   * 框选与「多选节点外包络」共用 xyflow 的 selection 变量会整块淡紫底：
+   * 夜间 `.dark` 下填充几乎不可见；日间若写在此处，外包络会像「框选没消失」。
+   * 改由下方分别写 `.react-flow__selection`（拖拽框选）与 `.react-flow__nodesselection-rect`（多选包络）。
+   */
+  background: var(--flowid-canvas-day-surface) !important;
+  background-color: var(--flowid-canvas-day-surface) !important;
+}
+
+/** 日间 · Shift/Alt 框选拖拽层：保留与靛紫连线一致的淡淡填充 */
+.studio-flow-wrap--canvas-day .react-flow__selection {
+  background: rgba(99, 102, 241, 0.11);
+  border: 1px dashed rgba(67, 56, 202, 0.42);
+}
+
+/**
+ * 日间 · 多选节点外包络（框选结束后的矩形）：仅虚线描边、无底，
+ * 避免与 xyflow 默认相同的大块半透明底叠在浅灰画布上像残留框选。
+ */
+.studio-flow-wrap--canvas-day .react-flow__nodesselection-rect {
+  background: transparent !important;
+  border: 1px dashed rgba(67, 56, 202, 0.52) !important;
+  box-shadow: none !important;
 }
 
 .studio-flow-wrap--canvas-day .react-flow__pane,
-.studio-flow-wrap--canvas-day .react-flow__viewport,
 .studio-flow-wrap--canvas-day .react-flow__renderer,
-.studio-flow-wrap--canvas-day .react-flow__container {
-  background-color: #f5f5f5 !important;
+/**
+ * 仅给「需要铺底」的 container 上色：排除框选层、视口变换层、多选外包络、连线 SVG，
+ * 避免多层实底 + 半透明选区在浅底上合成出意外灰块。
+ */
+.studio-flow-wrap--canvas-day .react-flow__container:not(.react-flow__selection):not(.react-flow__viewport):not(.react-flow__nodesselection):not(.react-flow__connectionline) {
+  background-color: var(--flowid-canvas-day-surface) !important;
+}
+
+.studio-flow-wrap--canvas-day .react-flow__viewport {
+  background-color: transparent !important;
+}
+
+.studio-flow-wrap--canvas-day .react-flow__nodesselection {
+  background: transparent !important;
 }
 
 /**
@@ -7798,6 +8116,7 @@ section[data-studio-settings-modal='1'][data-canvas-day='1'] {
   border-color: #e8e8e8 !important;
   color: #262626;
   box-shadow: 0 24px 80px rgba(38, 38, 38, 0.12) !important;
+  color-scheme: light;
 }
 
 section[data-studio-settings-modal='1'][data-canvas-day='1'] > div {
@@ -7880,6 +8199,22 @@ section[data-studio-settings-modal='1'][data-canvas-day='1'] select {
   background-color: #ffffff !important;
   color: #262626 !important;
   border-color: #e8e8e8 !important;
+}
+
+/**
+ * 日间：覆盖 `select.flowid-dark-select` 的全局 color-scheme:dark（否则 Windows/Electron 下弹层仍为黑底）
+ */
+section[data-studio-settings-modal='1'][data-canvas-day='1'] select.flowid-dark-select {
+  color-scheme: light !important;
+  background-color: #ffffff !important;
+  color: #262626 !important;
+  border-color: #e8e8e8 !important;
+}
+
+section[data-studio-settings-modal='1'][data-canvas-day='1'] select.flowid-dark-select option,
+section[data-studio-settings-modal='1'][data-canvas-day='1'] select.flowid-dark-select optgroup {
+  background-color: #ffffff !important;
+  color: #262626 !important;
 }
 
 section[data-studio-settings-modal='1'][data-canvas-day='1'] .bg-black\/20,

@@ -13,8 +13,10 @@ const SYSTEM_PROMPT_HMAC_SECRET =
 const DB_PATH = path.resolve(__dirname, 'auth-db.json')
 const TEMPLATES_DIR = path.resolve(__dirname, 'templates')
 const TEMPLATE_INDEX_PATH = path.join(TEMPLATES_DIR, 'index.json')
+const TEMPLATE_CATEGORIES_PATH = path.join(TEMPLATES_DIR, 'categories.json')
 const SYSTEM_PROMPTS_DIR = path.resolve(__dirname, 'system-prompts')
 const SYSTEM_PROMPTS_INDEX_PATH = path.join(SYSTEM_PROMPTS_DIR, 'index.json')
+const SYSTEM_PROMPT_CATEGORIES_PATH = path.join(SYSTEM_PROMPTS_DIR, 'categories.json')
 const CLOUD_WORKFLOWS_PATH = path.resolve(__dirname, 'cloud-workflows.json')
 const CLOUD_ASSIST_MODELS_PATH = path.resolve(__dirname, 'cloud-assist-models.json')
 /** 与画布「云端模型」辅助线路对齐：文本 / 图 / 视频 / 配音 / 音乐 */
@@ -27,6 +29,10 @@ const INSPIRATION_CATEGORIES_PATH = path.join(INSPIRATION_MARKET_DIR, 'categorie
 const INSPIRATION_CATEGORIES_DEFAULT = ['UI', '海报', '角色', '场景', '产品', '其它']
 /** @type {string[] | null} */
 let inspirationCategoriesCache = null
+/** @type {string[] | null} */
+let templateCategoriesCache = null
+/** @type {string[] | null} */
+let systemPromptCategoriesCache = null
 const DAY_MS = 24 * 60 * 60 * 1000
 const TASK_TIMEOUT_MS = 30 * 60 * 1000
 const tasks = new Map()
@@ -344,6 +350,94 @@ function writeTemplatesIndex(templates) {
     ),
     'utf8',
   )
+}
+
+function readTemplateCategoryOrder() {
+  ensureTemplatesIndex()
+  if (templateCategoriesCache) return templateCategoriesCache.slice()
+  try {
+    if (!fs.existsSync(TEMPLATE_CATEGORIES_PATH)) {
+      templateCategoriesCache = []
+      return []
+    }
+    const raw = fs.readFileSync(TEMPLATE_CATEGORIES_PATH, 'utf8')
+    const parsed = JSON.parse(raw)
+    const arr = Array.isArray(parsed) ? parsed : parsed?.categories
+    const out = []
+    const seen = new Set()
+    for (const x of arr || []) {
+      const s = String(x || '').trim()
+      if (!s || seen.has(s)) continue
+      seen.add(s)
+      out.push(s)
+    }
+    templateCategoriesCache = out
+    return out.slice()
+  } catch {
+    templateCategoriesCache = []
+    return []
+  }
+}
+
+/**
+ * @param {unknown[]} categories
+ */
+function writeTemplateCategoryOrder(categories) {
+  ensureTemplatesIndex()
+  const unique = []
+  const seen = new Set()
+  for (const x of categories) {
+    const s = String(x || '').trim()
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    unique.push(s)
+  }
+  fs.writeFileSync(TEMPLATE_CATEGORIES_PATH, JSON.stringify(unique, null, 2), 'utf8')
+  templateCategoriesCache = unique
+}
+
+function readSystemPromptCategories() {
+  ensureSystemPromptsIndex()
+  if (systemPromptCategoriesCache) return systemPromptCategoriesCache.slice()
+  try {
+    if (!fs.existsSync(SYSTEM_PROMPT_CATEGORIES_PATH)) {
+      systemPromptCategoriesCache = []
+      return []
+    }
+    const raw = fs.readFileSync(SYSTEM_PROMPT_CATEGORIES_PATH, 'utf8')
+    const parsed = JSON.parse(raw)
+    const arr = Array.isArray(parsed) ? parsed : parsed?.categories
+    const out = []
+    const seen = new Set()
+    for (const x of arr || []) {
+      const s = String(x || '').trim()
+      if (!s || seen.has(s)) continue
+      seen.add(s)
+      out.push(s)
+    }
+    systemPromptCategoriesCache = out
+    return out.slice()
+  } catch {
+    systemPromptCategoriesCache = []
+    return []
+  }
+}
+
+/**
+ * @param {unknown[]} categories
+ */
+function writeSystemPromptCategories(categories) {
+  ensureSystemPromptsIndex()
+  const unique = []
+  const seen = new Set()
+  for (const x of categories) {
+    const s = String(x || '').trim()
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    unique.push(s)
+  }
+  fs.writeFileSync(SYSTEM_PROMPT_CATEGORIES_PATH, JSON.stringify(unique, null, 2), 'utf8')
+  systemPromptCategoriesCache = unique
 }
 
 function ensureSystemPromptsIndex() {
@@ -875,7 +969,7 @@ function sendPublicTemplateWorkflow(req, res) {
 app.get('/templates/:id/workflow', sendPublicTemplateWorkflow)
 app.get('/templates/:id/workflow.json', sendPublicTemplateWorkflow)
 
-/** 灵感市集：公开列表 / 详情 / 封面（由管理端维护） */
+/** 灵感小镇：公开列表 / 详情 / 封面（由管理端维护） */
 app.get('/inspiration-market/meta', (_req, res) => {
   res.json({
     categories: readInspirationCategories(),
@@ -956,7 +1050,7 @@ app.get('/inspiration-market/image/:id', (req, res) => {
   }
 })
 
-/** 直达灵感市集管理（与侧栏「灵感市集」同模块，带 query 自动打开） */
+/** 直达灵感小镇管理（与侧栏「灵感小镇」同模块，带 query 自动打开） */
 app.get('/admin/inspiration', (_req, res) => {
   res.redirect(302, '/admin.html?panel=inspiration-market')
 })
@@ -1153,6 +1247,7 @@ app.get('/templates/groups', (req, res) => {
   res.json({
     groups: [{ id: 'all', label: '预设模板', tier: 'free', items }],
     serverTimeMs: Date.now(),
+    categoryOrder: readTemplateCategoryOrder(),
   })
 })
 
@@ -1199,6 +1294,7 @@ app.get('/system-prompts/groups', (req, res) => {
       { id: 'member', label: '会员提示词模板', tier: 'pro', items: pro },
     ],
     serverTimeMs: Date.now(),
+    categoryOrder: readSystemPromptCategories(),
   })
 })
 
@@ -1588,7 +1684,57 @@ app.get('/admin/templates', adminMiddleware, (_req, res) => {
   res.json({
     total: templates.length,
     templates,
+    categoryOrder: readTemplateCategoryOrder(),
   })
+})
+
+app.put('/admin/template-categories', adminMiddleware, (req, res) => {
+  try {
+    const raw = req.body?.categories
+    if (!Array.isArray(raw)) {
+      res.status(400).json({ message: 'categories 须为字符串数组' })
+      return
+    }
+    const names = []
+    const seenNames = new Set()
+    for (const x of raw) {
+      const s = String(x || '').trim()
+      if (!s || seenNames.has(s)) continue
+      seenNames.add(s)
+      names.push(s)
+    }
+    if (!names.length) {
+      res.status(400).json({ message: '至少保留一个分类' })
+      return
+    }
+
+    const renames = Array.isArray(req.body?.renames) ? req.body.renames : []
+    let templates = readTemplatesIndex()
+    const normCat = (c) => String(c || '').trim() || 'image'
+
+    for (const m of renames) {
+      const from = String(m?.from || '').trim()
+      const to = String(m?.to || '').trim()
+      if (!from || !to || from === to) continue
+      templates = templates.map((t) =>
+        normCat(t.category) === from ? { ...t, category: to } : t,
+      )
+    }
+
+    const allowed = new Set(names)
+    const fallback = names[0]
+    templates = templates.map((t) => {
+      const c = normCat(t.category)
+      if (!allowed.has(c)) return { ...t, category: fallback }
+      return t
+    })
+
+    writeTemplatesIndex(templates)
+    writeTemplateCategoryOrder(names)
+    res.json({ ok: true, categoryOrder: readTemplateCategoryOrder(), serverTimeMs: Date.now() })
+  } catch (error) {
+    res.status(400).json({ message: String(error?.message || error || '保存失败') })
+  }
 })
 
 app.get('/admin/templates/:id', adminMiddleware, (req, res) => {
@@ -1628,7 +1774,60 @@ app.get('/admin/system-prompts', adminMiddleware, (_req, res) => {
     sha256: item.sha256,
     promptFile: item.promptFile,
   }))
-  res.json({ total: prompts.length, prompts })
+  res.json({
+    total: prompts.length,
+    prompts,
+    categoryOrder: readSystemPromptCategories(),
+  })
+})
+
+app.put('/admin/system-prompt-categories', adminMiddleware, (req, res) => {
+  try {
+    const raw = req.body?.categories
+    if (!Array.isArray(raw)) {
+      res.status(400).json({ message: 'categories 须为字符串数组' })
+      return
+    }
+    const names = []
+    const seenNames = new Set()
+    for (const x of raw) {
+      const s = String(x || '').trim()
+      if (!s || seenNames.has(s)) continue
+      seenNames.add(s)
+      names.push(s)
+    }
+    if (!names.length) {
+      res.status(400).json({ message: '至少保留一个分类' })
+      return
+    }
+
+    const renames = Array.isArray(req.body?.renames) ? req.body.renames : []
+    let prompts = readSystemPromptsIndex()
+    const normCat = (c) => String(c || '').trim() || 'general'
+
+    for (const m of renames) {
+      const from = String(m?.from || '').trim()
+      const to = String(m?.to || '').trim()
+      if (!from || !to || from === to) continue
+      prompts = prompts.map((t) =>
+        normCat(t.category) === from ? { ...t, category: to } : t,
+      )
+    }
+
+    const allowed = new Set(names)
+    const fallback = names[0]
+    prompts = prompts.map((t) => {
+      const c = normCat(t.category)
+      if (!allowed.has(c)) return { ...t, category: fallback }
+      return t
+    })
+
+    writeSystemPromptsIndex(prompts)
+    writeSystemPromptCategories(names)
+    res.json({ ok: true, categoryOrder: readSystemPromptCategories(), serverTimeMs: Date.now() })
+  } catch (error) {
+    res.status(400).json({ message: String(error?.message || error || '保存失败') })
+  }
 })
 
 app.get('/admin/system-prompts/:id', adminMiddleware, (req, res) => {

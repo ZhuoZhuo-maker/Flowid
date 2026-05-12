@@ -1,0 +1,1121 @@
+{
+  "version": 1,
+  "name": "游戏UI资源",
+  "nodes": [
+    {
+      "id": "dd518a26-f3d1-4345-9cdd-ba8eb0ce8515",
+      "position": {
+        "x": 495.7926186615936,
+        "y": 975.8783841894912
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "UI游戏界面首页",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目落地页模型\",\n  \"style\": \"华丽的暗黑奇幻视觉小说风格网页界面，发光的教堂内部，水晶与魔法氛围，适用于叙事驱动型专辑网站的精美主视觉；高细节动漫绘画，电影级光影，蓝紫色光晕，分层半透明界面面板，优雅衬线字体，神秘且富有情感的基调\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"巨大的哥特式教堂大厅，缀满彩色玻璃、水晶碎片、发光粒子、拱门、漂浮光点与魔法倒影\",\n    \"background_colors\": [\"深海军蓝\", \"靛青\", \"紫罗兰\", \"洋红点缀\", \"银色月光\"],\n    \"centerpiece\": \"一位银发动漫女主角，身着精致的午夜蓝与白色礼服，向观众伸出一只手，立于光芒四射的彩色玻璃窗下；长发飘逸，佩戴蓝色花朵发饰与发光宝石配饰，层叠裙摆向外舒展\"\n  },\n  \"characters\": {\n    \"count\": 4,\n    \"items\": [\n      {\n        \"name\": \"{argument name=\\\"左侧角色名\\\" default=\\\"Kurona\\\"}\",\n        \"theme_word\": \"失落\",\n        \"position\": \"最左侧\",\n        \"appearance\": \"浅金色短发，侧髻配粉色花朵装饰，黑色连帽斗篷镶粉色边，侧身向左，神情忧郁，被粉色与深红色水晶光芒环绕\",\n        \"text\": \"失去的记忆。即便如此，她仍含泪前行。\"\n      },\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"主视觉\",\n        \"position\": \"中心前景\",\n        \"appearance\": \"银色长发，蓝白礼服配束腰胸衣，分离式袖子，宝石项链，向镜头伸出的手，光芒强烈而引人瞩目\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右上角色名\\\" default=\\\"Ally Kizuna\\\"}\",\n        \"theme_word\": \"希望\",\n        \"position\": \"右上角\",\n        \"appearance\": \"银发，蓝色礼服，侧身优雅姿态，蓝色花朵发饰，平静而充满希望的气场\",\n        \"text\": \"思念一切。即便如此，她仍歌唱希望。\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右下角色名\\\" default=\\\"Delna\\\"}\",\n        \"theme_word\": \"欲望\",\n        \"position\": \"中右侧\",\n        \"appearance\": \"黑色长发，黑色哥特式礼服，姿态矜持，一手轻抵胸口，带有阴影的神秘气质\",\n        \"text\": \"无法满足的念想。那火焰，正撼动世界。\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": {\n      \"position\": \"顶部\",\n      \"count\": 8,\n      \"items\": [\n        \"左上角 Logo\",\n        \"记忆开启 / 探索\",\n        \"阅读故事\",\n        \"聆听音乐\",\n        \"传递思念\",\n        \"祈祷时刻\",\n        \"查看记忆\",\n        \"右上角「进入世界」按钮\"\n      ]\n    },\n    \"hero_text\": {\n      \"position\": \"裙摆上方、中心略偏下\",\n      \"count\": 2,\n      \"items\": [\n        \"这是，某人的记忆。\",\n        \"请用你的思念，填满她的世界。\"\n      ]\n    },\n    \"feature_boxes\": {\n      \"position\": \"中下部左右两侧\",\n      \"count\": 6,\n      \"items\": [\n        \"聆听音乐\",\n        \"阅读故事\",\n        \"查看作品\",\n        \"传递思念\",\n        \"祈祷时刻\",\n        \"游玩\"\n      ]\n    },\n    \"stats_panel\": {\n      \"position\": \"左下角\",\n      \"title\": \"当前记忆\",\n      \"count\": 5,\n      \"items\": [\n        \"乐曲 63 首\",\n        \"专辑 7 张\",\n        \"思念碎片\",\n        \"祈祷\",\n        \"记忆残片 10 级\"\n      ]\n    },\n    \"recent_memories\": {\n      \"position\": \"右下角\",\n      \"title\": \"最近的记忆\",\n      \"count\": 4,\n      \"items\": [\n        \"环绕星之记忆的街道\",\n        \"机械装置的约定\",\n        \"终焉的彼端\",\n        \"致告别春天的你\"\n      ]\n    },\n    \"center_button\": {\n      \"position\": \"女主角下方、底部居中\",\n      \"count\": 1,\n      \"items\": [\"开启记忆 / 打开记忆之门\"]\n    },\n    \"scroll_indicator\": {\n      \"position\": \"最底部居中\",\n      \"count\": 1,\n      \"items\": [\"滚动提示，附向下箭头\"]\n    }\n  },\n  \"composition\": \"对称式网页落地页构图：女主角占据视觉中心，左侧一人、右侧两人，所有元素融入沉浸式魔法教堂背景；界面面板分布于顶部与底部边缘并柔和发光\",\n  \"rendering\": \"适用于高端网站首页的高分辨率概念图，界面叠加层清晰，戏剧性景深，兼具奇幻游戏与专辑推广美学\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577",
+        "promptPickerMode": "model"
+      },
+      "measured": {
+        "width": 430,
+        "height": 511
+      },
+      "selected": false,
+      "width": 430,
+      "height": 511,
+      "resizing": false
+    },
+    {
+      "id": "d0387d6e-fd43-45a6-bee9-3e7609058635",
+      "position": {
+        "x": 1123.1059535184095,
+        "y": 989.1146128815253
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-UI游戏界面首页",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/1e5a3337-6a39-4cb9-a81d-19707f5844fc",
+        "prompt": "@[UI游戏界面首页](dd518a26-f3d1-4345-9cdd-ba8eb0ce8515)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "16:9",
+        "cloudImageResolutionTier": "2k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "promptPickerMode": "model",
+        "cloudModelName": "",
+        "cloudModelUrl": "",
+        "cloudApiKey": "",
+        "srcAssetId": "b1f0cb35-3f5d-47d9-8472-0c3ab37d410b",
+        "srcFileName": "图-UI游戏界面首页.png",
+        "resultThumbnails": [
+          {
+            "id": "b2b86a97-8136-4ef7-8bae-819afafe44ac",
+            "url": "blob:http://127.0.0.1:5173/669dbde1-7702-4fc5-8b97-13b253a7261b",
+            "assetId": "b1f0cb35-3f5d-47d9-8472-0c3ab37d410b",
+            "fileName": "图-UI游戏界面首页.png",
+            "diskPath": "F:/flowid-zy/output/图-UI游戏界面首页_d0387d6efd4345a6bee93e7609058635-2026-05-11T14-10-03-453Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "df9b078a-5ebb-4b24-88ce-5024a2fd7dc9",
+            "url": "blob:http://127.0.0.1:5173/60972683-a89e-4bd6-a951-b2d0edfc458d",
+            "assetId": "404856ee-9bcd-434b-bc0d-690c24bcf8d8",
+            "fileName": "图-UI游戏界面首页.png",
+            "diskPath": "F:/flowid-zy/output/图-UI游戏界面首页_d0387d6efd4345a6bee93e7609058635-2026-05-11T14-03-40-293Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-UI游戏界面首页_d0387d6efd4345a6bee93e7609058635-2026-05-11T14-10-03-453Z.png",
+        "lastRunAt": 1778508603486,
+        "mattingRefWidth": 2560,
+        "mattingRefHeight": 1440,
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "0c1ed308-01a3-47ff-8b57-e4346277cde5",
+      "position": {
+        "x": 485.5719845897811,
+        "y": 1561.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "进入世界过渡页 enter_world",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目过渡页模型\",\n  \"style\": \"与首页一致的华丽暗黑奇幻视觉小说网页界面；哥特教堂深处巨大门扉微启、圣光漏入，高细节动漫，电影级体积光与蓝紫雾，半透明 UI 边框，优雅衬线字体，情绪庄重如仪式开场\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"教堂尽头双扉大门，门缝溢出青白与品红交织的光束，地面倒影与漂浮尘粒\",\n    \"background_colors\": [\"深海军蓝\", \"靛青\", \"紫罗兰\", \"青白光束\", \"品红细边\"],\n    \"centerpiece\": \"门扉中央浮现项目名称与副标题的发光铭文，两侧有细小符文环绕\"\n  },\n  \"characters\": {\n    \"count\": 1,\n    \"items\": [\n      {\n        \"name\": \"中心女主角剪影\",\n        \"theme_word\": \"接引\",\n        \"position\": \"门缝光中远处剪影，向观者伸手轮廓\",\n        \"appearance\": \"银发轮廓、蓝白花饰光边，不抢主标题\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部淡化\", \"count\": 2, \"items\": [\"小号 Logo\", \"跳过 / SKIP 文字链\"] },\n    \"hero_text\": { \"position\": \"门扉正中\", \"count\": 2, \"items\": [\"进入世界 / ENTER WORLD\", \"同步显示一句仪式性短句\"] },\n    \"feature_boxes\": { \"position\": \"无或极弱\", \"count\": 0, \"items\": [] },\n    \"stats_panel\": { \"position\": \"左下角色条\", \"title\": \"同步率\", \"count\": 1, \"items\": [\"进度环 0%→100% 装饰\"] },\n    \"recent_memories\": { \"position\": \"右下\", \"title\": \"载入提示\", \"count\": 2, \"items\": [\"资源校验…\", \"记忆同步…\"] },\n    \"center_button\": { \"position\": \"底部居中\", \"count\": 1, \"items\": [\"轻触继续 / TAP TO CONTINUE\"] },\n    \"scroll_indicator\": { \"position\": \"无\", \"count\": 0, \"items\": [] }\n  },\n  \"composition\": \"竖向对称，强透视门廊，标题在黄金分割偏上，整体为全屏网页 16:9 构图\",\n  \"rendering\": \"高端网站过渡页概念图，清晰可读英文字与中文混排，景深明显\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "9a3a3080-c8f3-409e-9c50-ce42bb17dd0a",
+      "position": {
+        "x": 485.5719845897811,
+        "y": 1921.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "记忆探索 explore_hub",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目探索地图页模型\",\n  \"style\": \"暗黑奇幻星图式网页界面；玻璃拟态面板、发光连线与节点，与首页同一教堂穹顶作为远景虚化，神秘、可导航感\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"仰视穹顶与星盘叠加，彩色玻璃化为星座底图\",\n    \"background_colors\": [\"深海军蓝\", \"靛青\", \"星点银白\", \"连线青蓝\"],\n    \"centerpiece\": \"中央大型「当前章节」记忆节点水晶，向外辐射分支路径\"\n  },\n  \"characters\": {\n    \"count\": 4,\n    \"items\": [\n      {\n        \"name\": \"{argument name=\\\"左侧角色名\\\" default=\\\"Kurona\\\"}\",\n        \"theme_word\": \"失落\",\n        \"position\": \"左侧节点立绘半身\",\n        \"appearance\": \"浅金短发、粉花、斗篷，节点旁小传一句\"\n      },\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"主视觉\",\n        \"position\": \"星盘中心小立绘头像环\",\n        \"appearance\": \"银发蓝白花饰，作为当前选中节点标识\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右上角色名\\\" default=\\\"Ally Kizuna\\\"}\",\n        \"theme_word\": \"希望\",\n        \"position\": \"右上分支节点装饰立绘\",\n        \"appearance\": \"蓝裙侧身，柔和顶光\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右下角色名\\\" default=\\\"Delna\\\"}\",\n        \"theme_word\": \"欲望\",\n        \"position\": \"右下暗色分支\",\n        \"appearance\": \"黑哥特裙，节点为暗红微光\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 5, \"items\": [\"返回首页\", \"探索\", \"筛选：全部/已读/未读\", \"搜索图标\", \"设置\"] },\n    \"hero_text\": { \"position\": \"星盘上方\", \"count\": 2, \"items\": [\"记忆星图\", \"选择一条尚未踏足的路径\"] },\n    \"feature_boxes\": { \"position\": \"右侧竖条\", \"count\": 3, \"items\": [\"推荐路线\", \"隐藏节点\", \"周目加成说明\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"探索进度\", \"count\": 4, \"items\": [\"已解锁节点 12/40\", \"分歧收集 65%\", \"TE 条件提示\", \"危险度 低\"] },\n    \"recent_memories\": { \"position\": \"右下\", \"title\": \"最近解锁\", \"count\": 4, \"items\": [\"环绕星之记忆的街道\", \"机械装置的约定\", \"终焉的彼端\", \"致告别春天的你\"] },\n    \"center_button\": { \"position\": \"选中节点下方\", \"count\": 1, \"items\": [\"进入章节 / ENTER\"] },\n    \"scroll_indicator\": { \"position\": \"底栏提示\", \"count\": 1, \"items\": [\"拖拽星图 / DRAG\"] }\n  },\n  \"composition\": \"中心放射状网页 UI，节点可点击暗示，远景教堂虚化\",\n  \"rendering\": \"高分辨率游戏地图界面概念，节点与连线 UI 清晰\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "a4b0c7fc-63b7-4297-bffe-4377c86f0d64",
+      "position": {
+        "x": 485.5719845897811,
+        "y": 2281.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "阅读故事 read_story",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目视觉小说阅读页模型\",\n  \"style\": \"暗黑奇幻 AVG 网页 UI；底部半透明对话框、立绘分层、与首页一致光色与衬线字体\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"教堂侧廊或记忆回廊，窗外月夜与彩玻璃反光\",\n    \"background_colors\": [\"深海军蓝\", \"冷灰石色\", \"dialogue 区淡紫透明\"],\n    \"centerpiece\": \"中央偏右大立绘为当前说话人，左侧留白给文字\"\n  },\n  \"characters\": {\n    \"count\": 2,\n    \"items\": [\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"叙述\",\n        \"position\": \"右侧大半身立绘\",\n        \"appearance\": \"银发蓝白礼服，口型中性，情绪温柔\"\n      },\n      {\n        \"name\": \"{argument name=\\\"左侧角色名\\\" default=\\\"Kurona\\\"}\",\n        \"theme_word\": \"对话\",\n        \"position\": \"左侧较小半身或背影剪影\",\n        \"appearance\": \"斗篷与粉花，表示第二说话人待切换\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 4, \"items\": [\"章节标题\", \"自动播放开关\", \"历史记录\", \"返回\"] },\n    \"hero_text\": { \"position\": \"底部对话框内\", \"count\": 3, \"items\": [\"角色名\", \"对白正文两行\", \"旁白灰字一行可选\"] },\n    \"feature_boxes\": { \"position\": \"右侧竖条\", \"count\": 3, \"items\": [\"选项 A\", \"选项 B\", \"隐藏选项锁图标\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"本章收集\", \"count\": 3, \"items\": [\"CG 1/5\", \"词条 3/12\", \"BGM 解锁\"] },\n    \"recent_memories\": { \"position\": \"右上折叠\", \"title\": \"书签\", \"count\": 3, \"items\": [\"存档 1\", \"存档 2\", \"快速存档\"] },\n    \"center_button\": { \"position\": \"对话框右下角\", \"count\": 1, \"items\": [\"下一句 / NEXT ▶\"] },\n    \"scroll_indicator\": { \"position\": \"对话框底边\", \"count\": 1, \"items\": [\"文字继续提示小三角\"] }\n  },\n  \"composition\": \"典型 16:9 视觉小说网页布局，立绘与对话框分层清晰\",\n  \"rendering\": \"高细节动漫场景 + UI mockup，英文字与中文混排\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "04b4c23e-fccf-48e4-bec0-988ad654965d",
+      "position": {
+        "x": 485.5719845897811,
+        "y": 2641.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "聆听乐曲 listen_music",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目播放器页模型\",\n  \"style\": \"暗黑奇幻唱片水晶播放器界面；环形进度、频谱化为光羽，整体与首页光色一致\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"教堂唱诗台上方悬浮的透明唱片与水晶共鸣体\",\n    \"background_colors\": [\"深海军蓝\", \"紫罗兰\", \"cyan 高光\"],\n    \"centerpiece\": \"中央巨大旋转唱片封面占位图，外圈符文进度环\"\n  },\n  \"characters\": {\n    \"count\": 2,\n    \"items\": [\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"演唱\",\n        \"position\": \"封面内或唱片中心圆形立绘\",\n        \"appearance\": \"银发，闭眼或轻唱姿态\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右上角色名\\\" default=\\\"Ally Kizuna\\\"}\",\n        \"theme_word\": \"和声\",\n        \"position\": \"右侧小浮窗头像\",\n        \"appearance\": \"蓝裙，表示 feat. 或合唱轨\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 4, \"items\": [\"专辑名\", \"返回\", \"歌词开关\", \"音质\"] },\n    \"hero_text\": { \"position\": \"封面下方\", \"count\": 2, \"items\": [\"曲名中日双语\", \"艺术家 / 角色名义\"] },\n    \"feature_boxes\": { \"position\": \"右侧播放列表\", \"count\": 6, \"items\": [\"曲目 01-06 行项目 含小缩略图\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"馆藏\", \"count\": 4, \"items\": [\"乐曲 63 首\", \"专辑 7 张\", \"今日推荐\", \"收藏夹\"] },\n    \"recent_memories\": { \"position\": \"右下\", \"title\": \"播放历史\", \"count\": 4, \"items\": [\"环绕星之记忆的街道\", \"机械装置的约定\", \"终焉的彼端\", \"致告别春天的你\"] },\n    \"center_button\": { \"position\": \"控制台中央\", \"count\": 3, \"items\": [\"上一首\", \"播放/暂停大按钮\", \"下一首\"] },\n    \"scroll_indicator\": { \"position\": \"列表底\", \"count\": 1, \"items\": [\"更多曲目\"] }\n  },\n  \"composition\": \"对称式播放器网页，唱片居中，列表在右\",\n  \"rendering\": \"高端音乐企划网站 UI 概念图，控件边缘发光清晰\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "5cec8cfd-acd3-42ba-bc86-d8587d16699c",
+      "position": {
+        "x": 485.5719845897811,
+        "y": 3001.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "传递思念 pass_thoughts",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目留言祭坛页模型\",\n  \"style\": \"暗黑奇幻信笺与羽毛笔 UI；祭坛石台、漂浮思念光点，情感柔和，与首页粉紫水晶高光呼应\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"小礼拜堂祭坛，烛火与窗外月光\",\n    \"background_colors\": [\"深海军蓝\", \"暖烛橙点缀\", \"品红思念粒子\"],\n    \"centerpiece\": \"石台上展开的信纸卷轴与发光羽毛笔\"\n  },\n  \"characters\": {\n    \"count\": 2,\n    \"items\": [\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"倾听\",\n        \"position\": \"背景淡立绘或仅双手虚影接信\",\n        \"appearance\": \"银发轮廓、蓝花，不抢输入区\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右下角色名\\\" default=\\\"Delna\\\"}\",\n        \"theme_word\": \"私语\",\n        \"position\": \"右侧小面板头像\",\n        \"appearance\": \"黑哥特裙，提示「仅角色可见」类开关装饰\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 3, \"items\": [\"传递思念\", \"礼仪说明\", \"返回\"] },\n    \"hero_text\": { \"position\": \"信纸上\", \"count\": 2, \"items\": [\"占位多行文本域示意\", \"字数统计 0/200\"] },\n    \"feature_boxes\": { \"position\": \"左侧\", \"count\": 3, \"items\": [\"公开/匿名\", \"署名样式\", \"贴纸纹样选择\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"思念碎片\", \"count\": 3, \"items\": [\"今日可寄 3/3\", \"被读回执\", \"好感加成装饰条\"] },\n    \"recent_memories\": { \"position\": \"右下\", \"title\": \"祭坛寄语流\", \"count\": 4, \"items\": [\"匿名短句示例四条\"] },\n    \"center_button\": { \"position\": \"信纸下\", \"count\": 1, \"items\": [\"寄出思念 / SEND\"] },\n    \"scroll_indicator\": { \"position\": \"寄语流旁\", \"count\": 1, \"items\": [\"下拉加载\"] }\n  },\n  \"composition\": \"居中祭坛网页构图，输入区绝对视觉焦点\",\n  \"rendering\": \"高细节动漫静物 + UI，纸质纹理与光边对比清晰\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "cb117aa9-0a00-49f0-a0d7-d5472a6c46b6",
+      "position": {
+        "x": 485.5719845897811,
+        "y": 3361.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "祈祷时刻 prayer_time",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目祈祷仪式页模型\",\n  \"style\": \"暗黑奇幻冥想计时界面；烛台、沙漏、星象窗，冷静圣洁，蓝银主色\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"夜间教堂高窗下，星空透入，长排烛火\",\n    \"background_colors\": [\"深海军蓝\", \"银蓝星光\", \"烛火金点\"],\n    \"centerpiece\": \"悬浮沙漏与环形倒计时符文\"\n  },\n  \"characters\": {\n    \"count\": 1,\n    \"items\": [\n      {\n        \"name\": \"{argument name=\\\"右上角色名\\\" default=\\\"Ally Kizuna\\\"}\",\n        \"theme_word\": \"祈愿\",\n        \"position\": \"侧坐祈祷剪影，占画面一侧三分之一\",\n        \"appearance\": \"蓝裙、合十或捧烛，面部安宁\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 3, \"items\": [\"祈祷时刻\", \"今日经文句\", \"返回\"] },\n    \"hero_text\": { \"position\": \"沙漏周圈\", \"count\": 2, \"items\": [\"剩余 05:00\", \"引导呼吸短句\"] },\n    \"feature_boxes\": { \"position\": \"右侧\", \"count\": 3, \"items\": [\"5 分钟\", \"15 分钟\", \"自定义\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"祈祷\", \"count\": 3, \"items\": [\"连续天数\", \"星屑奖励\", \"buff 图标\"] },\n    \"recent_memories\": { \"position\": \"右下\", \"title\": \"祈祷笔记\", \"count\": 3, \"items\": [\"昨日摘要\", \"前日摘要\", \"空白新建\"] },\n    \"center_button\": { \"position\": \"底部居中\", \"count\": 1, \"items\": [\"开始祈祷 / BEGIN\"] },\n    \"scroll_indicator\": { \"position\": \"无\", \"count\": 0, \"items\": [] }\n  },\n  \"composition\": \"对称仪式感的全屏网页，计时器为绝对中心\",\n  \"rendering\": \"电影级静景 + HUD，数字字体优雅易读\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "467a68d3-bca2-4497-b2cc-1e07b10a5823",
+      "position": {
+        "x": 485.5719845897811,
+        "y": 3721.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "回忆残影 memory_echoes",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目回忆画廊页模型\",\n  \"style\": \"暗黑奇幻缩略图阵列与时间轴；玻璃边框相框、漂浮残像粒子，与首页「最近的记忆」面板延展为整页\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"教堂回廊墙面挂满发光相框，远处彩玻璃柔焦\",\n    \"background_colors\": [\"深海军蓝\", \"靛青\", \"相框青边光\"],\n    \"centerpiece\": \"中央放大的一幅「本期主推 CG」\"\n  },\n  \"characters\": {\n    \"count\": 4,\n    \"items\": [\n      {\n        \"name\": \"{argument name=\\\"左侧角色名\\\" default=\\\"Kurona\\\"}\",\n        \"theme_word\": \"失落\",\n        \"position\": \"左侧竖条小画廊关联角色\",\n        \"appearance\": \"缩略图角标头像\"\n      },\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"主视觉\",\n        \"position\": \"主 CG 中\",\n        \"appearance\": \"与首页礼服一致性的主图\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右上角色名\\\" default=\\\"Ally Kizuna\\\"}\",\n        \"theme_word\": \"希望\",\n        \"position\": \"顶部筛选标签旁装饰\",\n        \"appearance\": \"小立绘\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右下角色名\\\" default=\\\"Delna\\\"}\",\n        \"theme_word\": \"欲望\",\n        \"position\": \"右下「限定」分区角标\",\n        \"appearance\": \"暗红微光框\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 5, \"items\": [\"回忆残影\", \"分类\", \"排序\", \"全屏\", \"返回\"] },\n    \"hero_text\": { \"position\": \"主图下\", \"count\": 2, \"items\": [\"CG 标题\", \"解锁条件一行小字\"] },\n    \"feature_boxes\": { \"position\": \"主图右侧竖排\", \"count\": 4, \"items\": [\"下载壁纸\", \"分享\", \"收藏\", \"相关曲目\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"收集率\", \"count\": 4, \"items\": [\"CG 45/120\", \"差分 12\", \"隐藏 2 未解锁\", \"记忆残片 10 级\"] },\n    \"recent_memories\": { \"position\": \"下方横滑条\", \"title\": \"同一系列\", \"count\": 6, \"items\": [\"缩略图 6 张带标题\"] },\n    \"center_button\": { \"position\": \"主图下方\", \"count\": 1, \"items\": [\"查看详情 / DETAILS\"] },\n    \"scroll_indicator\": { \"position\": \"页面底\", \"count\": 1, \"items\": [\"横向滚动提示\"] }\n  },\n  \"composition\": \"画廊式网页，上主图下网格，信息密度中高\",\n  \"rendering\": \"高清 UI mockup，缩略图与文字对比清晰\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "17f026e7-d089-41e8-9374-e75e7c621bd8",
+      "position": {
+        "x": 485.5719845897811,
+        "y": 4081.05349795497
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "游玩演奏 play_mode",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目节奏玩法页模型\",\n  \"style\": \"暗黑奇幻音游 HUD；水晶判定线、星屑轨道、与首页罗盘/六角按钮呼应的装饰框\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"抽象化的教堂地面星阵，远景为管风琴剪影\",\n    \"background_colors\": [\"深海军蓝\", \"轨道青蓝\", \"判定闪光白\"],\n    \"centerpiece\": \"底部弧形判定条与四轨下落音符化为光晶\"\n  },\n  \"characters\": {\n    \"count\": 2,\n    \"items\": [\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"演奏\",\n        \"position\": \"左上 Live2D 风小窗\",\n        \"appearance\": \"银发礼服，随节拍轻微动态暗示\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右上角色名\\\" default=\\\"Ally Kizuna\\\"}\",\n        \"theme_word\": \"应援\",\n        \"position\": \"右上分数条旁头像\",\n        \"appearance\": \"蓝裙，表情专注\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 4, \"items\": [\"曲名\", \"难度\", \"暂停\", \"返回\"] },\n    \"hero_text\": { \"position\": \"中央轨上方\", \"count\": 2, \"items\": [\"连击数 COMBO\", \"判定反馈字 PERFECT 示意\"] },\n    \"feature_boxes\": { \"position\": \"右侧竖条\", \"count\": 3, \"items\": [\"技能 1\", \"技能 2\", \"血条/护盾条\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"本局\", \"count\": 4, \"items\": [\"得分\", \"准确率\", \"最高连击\", \"评级预测 SS\"] },\n    \"recent_memories\": { \"position\": \"右下迷你\", \"title\": \"任务\", \"count\": 3, \"items\": [\"三星条件 1-3\"] },\n    \"center_button\": { \"position\": \"暂停菜单中\", \"count\": 3, \"items\": [\"继续\", \"重试\", \"退出\"] },\n    \"scroll_indicator\": { \"position\": \"无\", \"count\": 0, \"items\": [] }\n  },\n  \"composition\": \"典型下落式音游 16:9 网页界面，角色占边，轨道居中下\",\n  \"rendering\": \"高分辨率游戏 HUD 概念，轨道与按键对比强\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "f71419be-1c89-4866-8494-ed6656ff24a2",
+      "position": {
+        "x": 975.5719845897811,
+        "y": 1561.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-进入世界过渡页 enter_world",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/c4d2e2dc-bbe1-4a58-b235-5d9b64c4e382",
+        "prompt": "@[进入世界过渡页 enter_world](0c1ed308-01a3-47ff-8b57-e4346277cde5)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "srcAssetId": "fca1c4d2-0ccf-4f88-a00d-c631c85ca90b",
+        "srcFileName": "图-进入世界过渡页 enter_world.png",
+        "resultThumbnails": [
+          {
+            "id": "859199f4-a990-456e-a639-3610dacb8cfb",
+            "url": "blob:http://127.0.0.1:5173/a5c89690-20b9-4a44-9626-a7bb75653b3b",
+            "assetId": "fca1c4d2-0ccf-4f88-a00d-c631c85ca90b",
+            "fileName": "图-进入世界过渡页 enter_world.png",
+            "diskPath": "F:/flowid-zy/output/图-进入世界过渡页 enter_world_f71419be1c8948668494ed6656ff24a2-2026-05-11T14-51-53-414Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-进入世界过渡页 enter_world_f71419be1c8948668494ed6656ff24a2-2026-05-11T14-51-53-414Z.png",
+        "lastRunAt": 1778511113427,
+        "mattingRefWidth": 1672,
+        "mattingRefHeight": 941,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "promptPickerMode": "model",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "6d948780-57dc-47c5-bdb1-ab72c40aee1f",
+      "position": {
+        "x": 975.5719845897811,
+        "y": 1921.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-记忆探索 explore_hub",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/93291a18-c248-45a6-a647-3e70f1e034a0",
+        "prompt": "@[记忆探索 explore_hub](9a3a3080-c8f3-409e-9c50-ce42bb17dd0a)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "16:9",
+        "cloudImageResolutionTier": "2k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "srcAssetId": "56693605-9d5c-456f-89a1-a0e2e26f729e",
+        "srcFileName": "图-记忆探索 explore_hub.png",
+        "resultThumbnails": [
+          {
+            "id": "49d2f97b-2747-4127-95cd-5e09d307933c",
+            "url": "blob:http://127.0.0.1:5173/f36d268f-22ef-453f-9310-5f77b7db96dc",
+            "assetId": "56693605-9d5c-456f-89a1-a0e2e26f729e",
+            "fileName": "图-记忆探索 explore_hub.png",
+            "diskPath": "F:/flowid-zy/output/图-记忆探索 explore_hub_6d94878057dc47c5bdb1ab72c40aee1f-2026-05-11T15-21-05-571Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-记忆探索 explore_hub_6d94878057dc47c5bdb1ab72c40aee1f-2026-05-11T15-21-05-571Z.png",
+        "lastRunAt": 1778512865611,
+        "mattingRefWidth": 2560,
+        "mattingRefHeight": 1440,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "promptPickerMode": "model",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "1ff9c4b9-c2ee-4cf2-820d-5aa695984394",
+      "position": {
+        "x": 975.5719845897811,
+        "y": 2281.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-阅读故事 read_story",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/b7675ef8-05da-4f9c-a585-24ca310d7bdb",
+        "prompt": "@[阅读故事 read_story](a4b0c7fc-63b7-4297-bffe-4377c86f0d64)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "srcAssetId": "a6d11f77-99b9-46f3-bf21-f692abec7a11",
+        "srcFileName": "图-阅读故事 read_story.png",
+        "resultThumbnails": [
+          {
+            "id": "f327326d-c63c-48dd-8b3c-fbe2e8870fc5",
+            "url": "blob:http://127.0.0.1:5173/2634cd98-b14d-4d6b-8874-42faad4e8bf7",
+            "assetId": "a6d11f77-99b9-46f3-bf21-f692abec7a11",
+            "fileName": "图-阅读故事 read_story.png",
+            "diskPath": "F:/flowid-zy/output/图-阅读故事 read_story_1ff9c4b9c2ee4cf2820d5aa695984394-2026-05-11T15-00-05-098Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-阅读故事 read_story_1ff9c4b9c2ee4cf2820d5aa695984394-2026-05-11T15-00-05-098Z.png",
+        "lastRunAt": 1778511605113,
+        "mattingRefWidth": 1672,
+        "mattingRefHeight": 941,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "8d09d329-9648-416f-abc2-3ea59be22761",
+      "position": {
+        "x": 975.5719845897811,
+        "y": 2641.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-聆听乐曲 listen_music",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/a838bc46-090b-4b90-b5ef-e8ea8bedde1c",
+        "prompt": "@[聆听乐曲 listen_music](04b4c23e-fccf-48e4-bec0-988ad654965d)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "srcAssetId": "1dbf830c-e8ef-4ad4-ac83-5769f3a5e8c9",
+        "srcFileName": "图-聆听乐曲 listen_music.png",
+        "resultThumbnails": [
+          {
+            "id": "86a53d4a-fe76-4338-a265-e4075b6bdd90",
+            "url": "blob:http://127.0.0.1:5173/1be68e67-ebd8-436e-8202-7f80c3389278",
+            "assetId": "1dbf830c-e8ef-4ad4-ac83-5769f3a5e8c9",
+            "fileName": "图-聆听乐曲 listen_music.png",
+            "diskPath": "F:/flowid-zy/output/图-聆听乐曲 listen_music_8d09d3299648416fabc23ea59be22761-2026-05-11T15-03-38-068Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-聆听乐曲 listen_music_8d09d3299648416fabc23ea59be22761-2026-05-11T15-03-38-068Z.png",
+        "lastRunAt": 1778511818090,
+        "mattingRefWidth": 1536,
+        "mattingRefHeight": 1024,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "resultThumbnailsExpanded": false
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "c0c4b4fa-9725-4add-a5b3-a027dfa782dc",
+      "position": {
+        "x": 975.5719845897811,
+        "y": 3001.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-传递思念 pass_thoughts",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/b1326ebc-6fd5-4737-8e4a-117af7d2d9b4",
+        "prompt": "@[传递思念 pass_thoughts](5cec8cfd-acd3-42ba-bc86-d8587d16699c)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "srcAssetId": "f7557057-8a2d-4048-aa84-31cbc72749cb",
+        "srcFileName": "图-传递思念 pass_thoughts.png",
+        "resultThumbnails": [
+          {
+            "id": "4cfbab4f-9f4c-4214-9067-bc5456f93693",
+            "url": "blob:http://127.0.0.1:5173/eb910493-555d-4755-888c-977b4d598346",
+            "assetId": "f7557057-8a2d-4048-aa84-31cbc72749cb",
+            "fileName": "图-传递思念 pass_thoughts.png",
+            "diskPath": "F:/flowid-zy/output/图-传递思念 pass_thoughts_c0c4b4fa97254adda5b3a027dfa782dc-2026-05-11T15-06-54-992Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-传递思念 pass_thoughts_c0c4b4fa97254adda5b3a027dfa782dc-2026-05-11T15-06-54-992Z.png",
+        "lastRunAt": 1778512015009,
+        "mattingRefWidth": 1024,
+        "mattingRefHeight": 1536,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "50ac0985-f303-4196-b280-b1803e89de28",
+      "position": {
+        "x": 975.5719845897811,
+        "y": 3361.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-祈祷时刻 prayer_time",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/0bfcada3-97f8-40d4-9658-ac4fbd068f7d",
+        "prompt": "@[祈祷时刻 prayer_time](cb117aa9-0a00-49f0-a0d7-d5472a6c46b6)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "srcAssetId": "cb14978b-b710-4bf6-a31c-82a09f49e71a",
+        "srcFileName": "图-祈祷时刻 prayer_time.png",
+        "resultThumbnails": [
+          {
+            "id": "d0bcb6ec-3fd1-473b-81df-40df866adc72",
+            "url": "blob:http://127.0.0.1:5173/4d48688c-a91c-4025-8972-a68e507104e9",
+            "assetId": "cb14978b-b710-4bf6-a31c-82a09f49e71a",
+            "fileName": "图-祈祷时刻 prayer_time.png",
+            "diskPath": "F:/flowid-zy/output/图-祈祷时刻 prayer_time_50ac0985f3034196b280b1803e89de28-2026-05-11T15-10-19-531Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-祈祷时刻 prayer_time_50ac0985f3034196b280b1803e89de28-2026-05-11T15-10-19-531Z.png",
+        "lastRunAt": 1778512219546,
+        "mattingRefWidth": 1536,
+        "mattingRefHeight": 1024,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "13d912ee-babd-49e9-b140-2fdb119e11c3",
+      "position": {
+        "x": 975.5719845897811,
+        "y": 3721.0534979549698
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-回忆残影 memory_echoes",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/b6ff59ac-fc7c-4b5f-975c-e0679bf314a3",
+        "prompt": "@[回忆残影 memory_echoes](467a68d3-bca2-4497-b2cc-1e07b10a5823)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "srcAssetId": "d7fd7b72-3c9d-4cf0-8400-82417efb8c05",
+        "srcFileName": "图-回忆残影 memory_echoes.png",
+        "resultThumbnails": [
+          {
+            "id": "9424625a-3ca1-463f-9e0d-749bdbe7e3f0",
+            "url": "blob:http://127.0.0.1:5173/7b1a8e2f-ddad-4ac0-9654-2d2ccc23b388",
+            "assetId": "d7fd7b72-3c9d-4cf0-8400-82417efb8c05",
+            "fileName": "图-回忆残影 memory_echoes.png",
+            "diskPath": "F:/flowid-zy/output/图-回忆残影 memory_echoes_13d912eebabd49e9b1402fdb119e11c3-2026-05-11T15-13-42-162Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-回忆残影 memory_echoes_13d912eebabd49e9b1402fdb119e11c3-2026-05-11T15-13-42-162Z.png",
+        "lastRunAt": 1778512422186,
+        "mattingRefWidth": 1536,
+        "mattingRefHeight": 1024,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "9062cc97-d819-411a-9c49-a489d21406c0",
+      "position": {
+        "x": 975.5719845897811,
+        "y": 4081.05349795497
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-游玩演奏 play_mode",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/8d9c1e01-70eb-4d97-a2db-2399db16833b",
+        "prompt": "@[游玩演奏 play_mode](17f026e7-d089-41e8-9374-e75e7c621bd8)",
+        "model": "flowid-(图生图)加点抠图",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "srcAssetId": "aa21b644-0318-460b-be6e-2796f0080d92",
+        "srcFileName": "图-游玩演奏 play_mode.png",
+        "resultThumbnails": [
+          {
+            "id": "56403e7b-688a-48c7-ad39-89b6ccbc439e",
+            "url": "blob:http://127.0.0.1:5173/f1deca9c-a609-46c7-9632-7af6f7255f40",
+            "assetId": "aa21b644-0318-460b-be6e-2796f0080d92",
+            "fileName": "图-游玩演奏 play_mode.png",
+            "diskPath": "F:/flowid-zy/output/图-游玩演奏 play_mode_9062cc97d819411a9c49a489d21406c0-2026-05-11T15-17-13-330Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-游玩演奏 play_mode_9062cc97d819411a9c49a489d21406c0-2026-05-11T15-17-13-330Z.png",
+        "lastRunAt": 1778512633344,
+        "mattingRefWidth": 1672,
+        "mattingRefHeight": 941,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "4309493c-7774-490a-b200-55359a06a949",
+      "position": {
+        "x": 1914.823179544594,
+        "y": 1587.8577034971634
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "进入世界过渡页 enter_world2",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目过渡页模型\",\n  \"style\": \"与首页一致的华丽暗黑奇幻视觉小说网页界面；哥特教堂深处巨大门扉微启、圣光漏入，高细节动漫，电影级体积光与蓝紫雾，半透明 UI 边框，优雅衬线字体，情绪庄重如仪式开场\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"教堂尽头双扉大门，门缝溢出青白与品红交织的光束，地面倒影与漂浮尘粒\",\n    \"background_colors\": [\"深海军蓝\", \"靛青\", \"紫罗兰\", \"青白光束\", \"品红细边\"],\n    \"centerpiece\": \"门扉中央浮现项目名称与副标题的发光铭文，两侧有细小符文环绕\"\n  },\n  \"characters\": {\n    \"count\": 1,\n    \"items\": [\n      {\n        \"name\": \"中心女主角剪影\",\n        \"theme_word\": \"接引\",\n        \"position\": \"门缝光中远处剪影，向观者伸手轮廓\",\n        \"appearance\": \"银发轮廓、蓝白花饰光边，不抢主标题\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部淡化\", \"count\": 2, \"items\": [\"小号 Logo\", \"跳过 / SKIP 文字链\"] },\n    \"hero_text\": { \"position\": \"门扉正中\", \"count\": 2, \"items\": [\"进入世界 / ENTER WORLD\", \"同步显示一句仪式性短句\"] },\n    \"feature_boxes\": { \"position\": \"无或极弱\", \"count\": 0, \"items\": [] },\n    \"stats_panel\": { \"position\": \"左下角色条\", \"title\": \"同步率\", \"count\": 1, \"items\": [\"进度环 0%→100% 装饰\"] },\n    \"recent_memories\": { \"position\": \"右下\", \"title\": \"载入提示\", \"count\": 2, \"items\": [\"资源校验…\", \"记忆同步…\"] },\n    \"center_button\": { \"position\": \"底部居中\", \"count\": 1, \"items\": [\"轻触继续 / TAP TO CONTINUE\"] },\n    \"scroll_indicator\": { \"position\": \"无\", \"count\": 0, \"items\": [] }\n  },\n  \"composition\": \"竖向对称，强透视门廊，标题在黄金分割偏上，整体为全屏网页 16:9 构图\",\n  \"rendering\": \"高端网站过渡页概念图，清晰可读英文字与中文混排，景深明显\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "e5379c24-7b6a-466a-b382-40a35122e838",
+      "position": {
+        "x": 1914.823179544594,
+        "y": 1947.8577034971631
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "记忆探索 explore_hub",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目探索地图页模型\",\n  \"style\": \"暗黑奇幻星图式网页界面；玻璃拟态面板、发光连线与节点，与首页同一教堂穹顶作为远景虚化，神秘、可导航感\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"仰视穹顶与星盘叠加，彩色玻璃化为星座底图\",\n    \"background_colors\": [\"深海军蓝\", \"靛青\", \"星点银白\", \"连线青蓝\"],\n    \"centerpiece\": \"中央大型「当前章节」记忆节点水晶，向外辐射分支路径\"\n  },\n  \"characters\": {\n    \"count\": 4,\n    \"items\": [\n      {\n        \"name\": \"{argument name=\\\"左侧角色名\\\" default=\\\"Kurona\\\"}\",\n        \"theme_word\": \"失落\",\n        \"position\": \"左侧节点立绘半身\",\n        \"appearance\": \"浅金短发、粉花、斗篷，节点旁小传一句\"\n      },\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"主视觉\",\n        \"position\": \"星盘中心小立绘头像环\",\n        \"appearance\": \"银发蓝白花饰，作为当前选中节点标识\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右上角色名\\\" default=\\\"Ally Kizuna\\\"}\",\n        \"theme_word\": \"希望\",\n        \"position\": \"右上分支节点装饰立绘\",\n        \"appearance\": \"蓝裙侧身，柔和顶光\"\n      },\n      {\n        \"name\": \"{argument name=\\\"右下角色名\\\" default=\\\"Delna\\\"}\",\n        \"theme_word\": \"欲望\",\n        \"position\": \"右下暗色分支\",\n        \"appearance\": \"黑哥特裙，节点为暗红微光\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 5, \"items\": [\"返回首页\", \"探索\", \"筛选：全部/已读/未读\", \"搜索图标\", \"设置\"] },\n    \"hero_text\": { \"position\": \"星盘上方\", \"count\": 2, \"items\": [\"记忆星图\", \"选择一条尚未踏足的路径\"] },\n    \"feature_boxes\": { \"position\": \"右侧竖条\", \"count\": 3, \"items\": [\"推荐路线\", \"隐藏节点\", \"周目加成说明\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"探索进度\", \"count\": 4, \"items\": [\"已解锁节点 12/40\", \"分歧收集 65%\", \"TE 条件提示\", \"危险度 低\"] },\n    \"recent_memories\": { \"position\": \"右下\", \"title\": \"最近解锁\", \"count\": 4, \"items\": [\"环绕星之记忆的街道\", \"机械装置的约定\", \"终焉的彼端\", \"致告别春天的你\"] },\n    \"center_button\": { \"position\": \"选中节点下方\", \"count\": 1, \"items\": [\"进入章节 / ENTER\"] },\n    \"scroll_indicator\": { \"position\": \"底栏提示\", \"count\": 1, \"items\": [\"拖拽星图 / DRAG\"] }\n  },\n  \"composition\": \"中心放射状网页 UI，节点可点击暗示，远景教堂虚化\",\n  \"rendering\": \"高分辨率游戏地图界面概念，节点与连线 UI 清晰\"\n}{\n  \"type\": \"奇幻动漫音乐项目过渡页模型\",\n  \"style\": \"与首页一致的华丽暗黑奇幻视觉小说网页界面；哥特教堂深处巨大门扉微启、圣光漏入，高细节动漫，电影级体积光与蓝紫雾，半透明 UI 边框，优雅衬线字体，情绪庄重如仪式开场\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"教堂尽头双扉大门，门缝溢出青白与品红交织的光束，地面倒影与漂浮尘粒\",\n    \"background_colors\": [\"深海军蓝\", \"靛青\", \"紫罗兰\", \"青白光束\", \"品红细边\"],\n    \"centerpiece\": \"门扉中央浮现项目名称与副标题的发光铭文，两侧有细小符文环绕\"\n  },\n  \"characters\": {\n    \"count\": 1,\n    \"items\": [\n      {\n        \"name\": \"中心女主角剪影\",\n        \"theme_word\": \"接引\",\n        \"position\": \"门缝光中远处剪影，向观者伸手轮廓\",\n        \"appearance\": \"银发轮廓、蓝白花饰光边，不抢主标题\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部淡化\", \"count\": 2, \"items\": [\"小号 Logo\", \"跳过 / SKIP 文字链\"] },\n    \"hero_text\": { \"position\": \"门扉正中\", \"count\": 2, \"items\": [\"进入世界 / ENTER WORLD\", \"同步显示一句仪式性短句\"] },\n    \"feature_boxes\": { \"position\": \"无或极弱\", \"count\": 0, \"items\": [] },\n    \"stats_panel\": { \"position\": \"左下角色条\", \"title\": \"同步率\", \"count\": 1, \"items\": [\"进度环 0%→100% 装饰\"] },\n    \"recent_memories\": { \"position\": \"右下\", \"title\": \"载入提示\", \"count\": 2, \"items\": [\"资源校验…\", \"记忆同步…\"] },\n    \"center_button\": { \"position\": \"底部居中\", \"count\": 1, \"items\": [\"轻触继续 / TAP TO CONTINUE\"] },\n    \"scroll_indicator\": { \"position\": \"无\", \"count\": 0, \"items\": [] }\n  },\n  \"composition\": \"竖向对称，强透视门廊，标题在黄金分割偏上，整体为全屏网页 16:9 构图\",\n  \"rendering\": \"高端网站过渡页概念图，清晰可读英文字与中文混排，景深明显\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "39fdc5b1-2075-4caf-acb4-8ec787b7a534",
+      "position": {
+        "x": 1914.823179544594,
+        "y": 2307.857703497163
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "阅读故事 read_story",
+        "runStatus": "idle",
+        "body": "{\n  \"type\": \"奇幻动漫音乐项目视觉小说阅读页模型\",\n  \"style\": \"暗黑奇幻 AVG 网页 UI；底部半透明对话框、立绘分层、与首页一致光色与衬线字体\",\n  \"brand\": {\n    \"name\": \"{argument name=\\\"品牌名\\\" default=\\\"KizunaVault\\\"}\",\n    \"tagline\": \"连结羁绊，故事的宝库\"\n  },\n  \"scene\": {\n    \"location\": \"教堂侧廊或记忆回廊，窗外月夜与彩玻璃反光\",\n    \"background_colors\": [\"深海军蓝\", \"冷灰石色\", \"dialogue 区淡紫透明\"],\n    \"centerpiece\": \"中央偏右大立绘为当前说话人，左侧留白给文字\"\n  },\n  \"characters\": {\n    \"count\": 2,\n    \"items\": [\n      {\n        \"name\": \"中心女主角\",\n        \"theme_word\": \"叙述\",\n        \"position\": \"右侧大半身立绘\",\n        \"appearance\": \"银发蓝白礼服，口型中性，情绪温柔\"\n      },\n      {\n        \"name\": \"{argument name=\\\"左侧角色名\\\" default=\\\"Kurona\\\"}\",\n        \"theme_word\": \"对话\",\n        \"position\": \"左侧较小半身或背影剪影\",\n        \"appearance\": \"斗篷与粉花，表示第二说话人待切换\"\n      }\n    ]\n  },\n  \"layout\": {\n    \"header\": { \"position\": \"顶部\", \"count\": 4, \"items\": [\"章节标题\", \"自动播放开关\", \"历史记录\", \"返回\"] },\n    \"hero_text\": { \"position\": \"底部对话框内\", \"count\": 3, \"items\": [\"角色名\", \"对白正文两行\", \"旁白灰字一行可选\"] },\n    \"feature_boxes\": { \"position\": \"右侧竖条\", \"count\": 3, \"items\": [\"选项 A\", \"选项 B\", \"隐藏选项锁图标\"] },\n    \"stats_panel\": { \"position\": \"左下\", \"title\": \"本章收集\", \"count\": 3, \"items\": [\"CG 1/5\", \"词条 3/12\", \"BGM 解锁\"] },\n    \"recent_memories\": { \"position\": \"右上折叠\", \"title\": \"书签\", \"count\": 3, \"items\": [\"存档 1\", \"存档 2\", \"快速存档\"] },\n    \"center_button\": { \"position\": \"对话框右下角\", \"count\": 1, \"items\": [\"下一句 / NEXT ▶\"] },\n    \"scroll_indicator\": { \"position\": \"对话框底边\", \"count\": 1, \"items\": [\"文字继续提示小三角\"] }\n  },\n  \"composition\": \"典型 16:9 视觉小说网页布局，立绘与对话框分层清晰\",\n  \"rendering\": \"高细节动漫场景 + UI mockup，英文字与中文混排\"\n}",
+        "model": "FLOWID-(文生文)空提示词",
+        "workflowEntryId": "2bd330d7-9b87-4a30-b7db-dc9e2ed61577"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "3a37cc4d-9793-473f-af71-ff7d3ad83402",
+      "position": {
+        "x": 2404.823179544594,
+        "y": 1587.8577034971634
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-进入世界过渡页 enter_world2",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/74ff2690-a13e-4724-b44d-783055a7af95",
+        "prompt": "@[进入世界过渡页 enter_world2](4309493c-7774-490a-b200-55359a06a949)",
+        "model": "flowid-(图生图)加点抠图",
+        "promptPickerMode": "model",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "srcAssetId": "6239f172-36aa-4803-af1a-80cc45fafe9b",
+        "srcFileName": "图-进入世界过渡页 enter_world2.png",
+        "resultThumbnails": [
+          {
+            "id": "1742e739-4526-4d29-9df1-02654bb3ada0",
+            "url": "blob:http://127.0.0.1:5173/cb77548c-2083-448c-a37c-eca2e374e0ec",
+            "assetId": "6239f172-36aa-4803-af1a-80cc45fafe9b",
+            "fileName": "图-进入世界过渡页 enter_world2.png",
+            "diskPath": "F:/flowid-zy/output/图-进入世界过渡页 enter_world2_3a37cc4d9793473faf71ff7d3ad83402-2026-05-11T15-56-28-291Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-进入世界过渡页 enter_world2_3a37cc4d9793473faf71ff7d3ad83402-2026-05-11T15-56-28-291Z.png",
+        "lastRunAt": 1778514988318,
+        "mattingRefWidth": 1672,
+        "mattingRefHeight": 941,
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "a6105752-83d3-4c43-9332-59755ce88ea7",
+      "position": {
+        "x": 2404.823179544594,
+        "y": 1947.8577034971631
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-记忆探索 explore_hub2",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/01c0a5dd-c373-46a2-9de0-4c078d2e7f87",
+        "prompt": "@[记忆探索 explore_hub](e5379c24-7b6a-466a-b382-40a35122e838)",
+        "model": "flowid-(图生图)加点抠图",
+        "promptPickerMode": "model",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "srcAssetId": "d1299703-ca61-4269-8b43-e5cd92ffa93e",
+        "srcFileName": "图-记忆探索 explore_hub2.png",
+        "resultThumbnails": [
+          {
+            "id": "5bb9e71c-d63e-4629-999f-a299f193a94b",
+            "url": "blob:http://127.0.0.1:5173/d4ad22ce-48ff-4ca7-8537-d8993bf0fd3a",
+            "assetId": "d1299703-ca61-4269-8b43-e5cd92ffa93e",
+            "fileName": "图-记忆探索 explore_hub2.png",
+            "diskPath": "F:/flowid-zy/output/图-记忆探索 explore_hub2_a610575283d34c43933259755ce88ea7-2026-05-11T15-59-31-754Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-记忆探索 explore_hub2_a610575283d34c43933259755ce88ea7-2026-05-11T15-59-31-754Z.png",
+        "lastRunAt": 1778515171770,
+        "mattingRefWidth": 1672,
+        "mattingRefHeight": 941,
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    },
+    {
+      "id": "feeb55ca-2d5f-456a-b764-9a13adce0c5f",
+      "position": {
+        "x": 2404.823179544594,
+        "y": 2307.857703497163
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-阅读故事 read_story2",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/5efa7c59-ae0f-4aa4-96bd-1147a84b1ea9",
+        "prompt": "@[阅读故事 read_story](39fdc5b1-2075-4caf-acb4-8ec787b7a534)",
+        "model": "flowid-(图生图)加点抠图",
+        "promptPickerMode": "model",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "comfyWorkflowWidth": 1024,
+        "comfyWorkflowHeight": 1024,
+        "comfyWorkflowAspect": "1:1",
+        "comfyWorkflowUseCustomPixels": false,
+        "workflowEntryId": "f4ba2a40-7837-4e1e-8f94-84fc10f7cddb",
+        "cloudAssistModelPick": "flowid-assist:bc7db451-57be-46bf-834f-e443781150b2\u001fgpt-image-2",
+        "cloudModelName": "gpt-image-2",
+        "cloudModelUrl": "https://nowcoding.ai",
+        "cloudApiKey": "sk-A4usdMtVMeF9OifCJaPWxIXTxIWNphQmt7x9lTvnvRpAAop4",
+        "srcAssetId": "c29e3477-0d9f-4648-90d3-fca26fd4bc66",
+        "srcFileName": "图-阅读故事 read_story2.png",
+        "resultThumbnails": [
+          {
+            "id": "36f62177-72e3-45d6-81d4-61e6f7a6362f",
+            "url": "blob:http://127.0.0.1:5173/60878523-29c8-4844-bb1f-f5ea42d2dfb6",
+            "assetId": "c29e3477-0d9f-4648-90d3-fca26fd4bc66",
+            "fileName": "图-阅读故事 read_story2.png",
+            "diskPath": "F:/flowid-zy/output/图-阅读故事 read_story2_feeb55ca2d5f456ab7649a13adce0c5f-2026-05-11T16-02-39-273Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "F:/flowid-zy/output/图-阅读故事 read_story2_feeb55ca2d5f456ab7649a13adce0c5f-2026-05-11T16-02-39-273Z.png",
+        "lastRunAt": 1778515359299,
+        "mattingRefWidth": 1672,
+        "mattingRefHeight": 941
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    }
+  ],
+  "edges": [
+    {
+      "id": "305574b9-33aa-4d66-9341-80dc66422be0",
+      "source": "dd518a26-f3d1-4345-9cdd-ba8eb0ce8515",
+      "target": "d0387d6e-fd43-45a6-bee9-3e7609058635",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "72bbd656-547a-42ad-aa0f-c4242e52d529",
+      "source": "0c1ed308-01a3-47ff-8b57-e4346277cde5",
+      "target": "f71419be-1c89-4866-8494-ed6656ff24a2",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "2cb8e691-ee05-4410-82ac-bc16d83f3343",
+      "source": "9a3a3080-c8f3-409e-9c50-ce42bb17dd0a",
+      "target": "6d948780-57dc-47c5-bdb1-ab72c40aee1f",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "086d2766-ea9a-4252-8843-05a79f4247fd",
+      "source": "a4b0c7fc-63b7-4297-bffe-4377c86f0d64",
+      "target": "1ff9c4b9-c2ee-4cf2-820d-5aa695984394",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "99156277-5b74-423d-8186-b67f0697775d",
+      "source": "04b4c23e-fccf-48e4-bec0-988ad654965d",
+      "target": "8d09d329-9648-416f-abc2-3ea59be22761",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "e63ccd5c-997d-4045-9e3c-f2297a4cf134",
+      "source": "5cec8cfd-acd3-42ba-bc86-d8587d16699c",
+      "target": "c0c4b4fa-9725-4add-a5b3-a027dfa782dc",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "447bb23b-d4f3-43da-89ff-ac2d7017d98a",
+      "source": "cb117aa9-0a00-49f0-a0d7-d5472a6c46b6",
+      "target": "50ac0985-f303-4196-b280-b1803e89de28",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "0418c1ef-6b59-4cab-b773-2ba9f530d6e4",
+      "source": "467a68d3-bca2-4497-b2cc-1e07b10a5823",
+      "target": "13d912ee-babd-49e9-b140-2fdb119e11c3",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "c9eec4fa-faa2-417a-abce-40d9a5d1eced",
+      "source": "17f026e7-d089-41e8-9374-e75e7c621bd8",
+      "target": "9062cc97-d819-411a-9c49-a489d21406c0",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "62f39054-52ce-4047-89f3-54a20f60d5bf",
+      "source": "4309493c-7774-490a-b200-55359a06a949",
+      "target": "3a37cc4d-9793-473f-af71-ff7d3ad83402",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "0551d40b-4094-4381-b91b-c3e3213a9ff8",
+      "source": "e5379c24-7b6a-466a-b382-40a35122e838",
+      "target": "a6105752-83d3-4c43-9332-59755ce88ea7",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    },
+    {
+      "id": "fae5a93a-24eb-4df0-8507-a124cf9781a2",
+      "source": "39fdc5b1-2075-4caf-acb4-8ec787b7a534",
+      "target": "feeb55ca-2d5f-456a-b764-9a13adce0c5f",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false
+    }
+  ],
+  "viewport": {
+    "x": 550.5982058458477,
+    "y": -100.91825200592348,
+    "zoom": 0.4352752816480623
+  }
+}

@@ -1,5 +1,6 @@
 import type { CloudWorkflowMeta } from './cloudWorkflowsApi'
 import { matchStudioNodeWorkflow } from './matchStudioNodeWorkflow'
+import { resolvedPromptPickerMode } from './promptPickerMode'
 import type { ImageNodeData, NodeWorkflowConfig, StudioNodeKind, VideoNodeData } from '../types'
 
 /** 与 `useWorkflowIntegration` 注入逻辑一致：占位符或 Qwen Multiangle 节点任一命中即视为支持 */
@@ -26,7 +27,7 @@ export function nodeSupportsMultiangleAngleControl(opts: {
   cloudWorkflowMetaList: CloudWorkflowMeta[]
   nodeConfigs: Record<StudioNodeKind, NodeWorkflowConfig>
 }): boolean {
-  const mode = opts.nodeData.promptPickerMode === 'model' ? 'model' : 'workflow'
+  const mode = resolvedPromptPickerMode(opts.nodeData)
   if (mode === 'model') return false
 
   if (opts.executionProvider === 'cloud') {
