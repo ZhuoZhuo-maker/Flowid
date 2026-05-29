@@ -183,6 +183,18 @@ npm run dev
 
 更多命令：`npm run dev:vite` · `npm run auth:dev` · `npm run desktop:dev` · `npm run pack:desktop`
 
+### Windows 安装包（无需 Node.js）
+
+从 [GitHub Releases](https://github.com/ZhuoZhuo-maker/Flowid/releases) 或 [Gitee Releases](https://gitee.com/zhuozhuo1786449/flowid/releases) 下载 **Flowid（内测版）_v0.0.1.exe**。
+
+| 项 | 说明 |
+|----|------|
+| 系统 | Windows 10 / 11（64 位） |
+| 首次使用 | 设置 → 配置 Comfy 地址 |
+| SmartScreen | 可能提示「未知发布者」→ 选择仍要运行 |
+
+安装包已内置预设、工作流目录与灵感小镇，**无需** `npm install` 或 3721 后端；AI 生成仍须本机/云端 Comfy 或 API 配置。详见 [v0.0.1 发布说明](./docs/releases/v0.0.1.md)。
+
 ---
 
 ## 📚 文档

@@ -26,6 +26,7 @@
     "analyzer:dev": "electron electron/analyzer-main.cjs",
     "analyzer:build": "cross-env ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/ electron-builder --win nsis --config electron-builder.analyzer.json",
     "pack:desktop": "node scripts/run-pack-flowid-desktop.mjs",
+    "publish:release": "node scripts/publish-desktop-release.mjs",
     "export:bundled-gallery": "node scripts/export-flowid-bundled-gallery.mjs",
     "sync:comfy-api-mirror": "node scripts/sync-comfy-workflow-api-to-f-drive.mjs",
     "sanitize:cloud-secrets": "node scripts/sanitize-repo-cloud-credentials.mjs",
