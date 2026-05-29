@@ -1,4 +1,4 @@
-import type { CloudWorkflowOverrideEntry, StudioNodeKind, WorkflowConfigSnapshot } from '../types'
+import type { CloudWorkflowOverrideEntry, StudioNodeKind } from '../types'
 import { fetchCloudWorkflowJson, fetchCloudWorkflowsMeta } from './cloudWorkflowsApi'
 import { joinDiskPath, sanitizePromptTitleForFilename } from './systemPromptCoverPaths'
 
@@ -6,7 +6,7 @@ import { joinDiskPath, sanitizePromptTitleForFilename } from './systemPromptCove
 const COMFY_API_BACKUP_ROOT = 'F:\\flowid(comfyui工作流api备份)'
 export const LOCAL_COMFY_WORKFLOW_API_MIRROR_DIR = `${COMFY_API_BACKUP_ROOT}\\本地comfyui_api`
 export const CLOUD_COMFY_WORKFLOW_API_MIRROR_DIR = `${COMFY_API_BACKUP_ROOT}\\云端comfyui_api`
-import { loadWorkflowConfig } from './workflowConfigStorage'
+import { loadWorkflowConfig, type WorkflowConfigSnapshot } from './workflowConfigStorage'
 
 const STUDIO_NODE_KINDS: StudioNodeKind[] = [
   'text',
