@@ -213,6 +213,10 @@ npm run dev
 
 **Flowid — 无限画布，串起 AI 内容全流程**
 
-[GitHub](https://github.com/ZhuoZhuo-maker/Flowid) · MIT License
+<br />
+
+作者 · **[ZhuoZhuo-maker](https://github.com/ZhuoZhuo-maker)**
+
+[GitHub 仓库](https://github.com/ZhuoZhuo-maker/Flowid) · [MIT License](./LICENSE)
 
 </div>
