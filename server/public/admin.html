@@ -35,12 +35,6 @@
           <p class="sub" id="admin-main-sub">健康检查、端口、环境变量说明、代理状态</p>
         </div>
       </header>
-      <div class="admin-banner admin-cross-service-hint">
-        <strong>积分 / 预扣 / SQLite 授权码</strong> 已与当前服务<strong>同端口</strong>，路径前缀 <code>/pts</code>：<strong>JWT 会员列表与权益</strong>见左侧「License 授权」；<strong>明文积分授权码生成与管理</strong>请打开
-        <a href="/pts/admin/licenses" target="_blank" rel="noopener">/pts/admin/licenses</a>
-        （总览 <a href="/pts/admin" target="_blank" rel="noopener">/pts/admin</a>）。需运行 <code style="font-size: 12px">npm run auth:dev</code> 或 <code style="font-size: 12px">npm run dev</code>。
-        HTML 管理页校验 <code>x-admin-token</code> 或 <code>?token=</code>，可与本页口令一致（未单独设置 <code>ADMIN_TOKEN</code> 时使用 <code>AUTH_ADMIN_SECRET</code>）。
-      </div>
       <div class="admin-main-body">
         <div id="admin-panel-mount"></div>
       </div>
@@ -53,7 +47,6 @@
     <script src="/admin/js/module-util.js"></script>
     <script src="/admin/js/api.js"></script>
     <script src="/admin/js/module-overview.js"></script>
-    <script src="/admin/js/module-licenses.js"></script>
     <script src="/admin/js/module-cloud-comfyui.js"></script>
     <script src="/admin/js/module-templates-pro.js"></script>
     <script src="/admin/js/module-inspiration-market.js"></script>

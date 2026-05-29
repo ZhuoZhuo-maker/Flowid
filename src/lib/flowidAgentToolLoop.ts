@@ -1,6 +1,13 @@
 import type { AiAssistantConfig } from './aiAssistantAgent'
 import { normalizeOpenAICompatibleBaseUrl } from './openaiCompat'
 import { fetchOpenAICompat } from './openaiProxy'
+import {
+  FLOWID_DRAMA_AGENT_TOOL_DEFINITIONS,
+  mergeAgentToolDefinitions,
+} from './dramaProduction/dramaAgentTools'
+import { buildDramaPmSystemPrompt } from './dramaProduction/pmSystemPrompt'
+import { buildDramaContinuationNudge } from './dramaProduction/dramaContinuation'
+import type { DramaProductionState } from './dramaProduction/types'
 
 export type AgentCanvasBriefNode = { id: string; title: string; kind: string }
 
@@ -278,6 +285,8 @@ function humanToolSummary(name: string, resultJson: string): string {
     if (name === 'flowid_set_cloud_assist_pick') return `· ${name} → 已设置云端线路`
     if (name === 'flowid_delete_nodes') return `· ${name} → ${o.error ? `失败：${o.error}` : '已删除（或用户取消）'}`
     if (name === 'flowid_run_nodes') return `· ${name} → ${o.error ? `失败：${o.error}` : '已触发批量执行（请到画布查看进度）'}`
+    if (name.startsWith('flowid_drama_invite_expert')) return `· 已邀请专家加入群聊`
+    if (name.startsWith('flowid_drama_')) return `· ${name} → ${o.error ? `失败：${o.error}` : '完成'}`
     return `· ${name} → 完成`
   } catch {
     return `· ${name} → 已执行`
@@ -306,6 +315,11 @@ export async function runFlowidAgentToolLoop(options: {
   getCanvasBrief: () => AgentCanvasBriefNode[]
   executeTool: FlowidAgentToolExecutor
   maxRounds?: number
+  /** 短剧制片模式：使用智剧通对齐 PM 提示词与 drama_* 工具 */
+  dramaProduction?: {
+    getState: () => DramaProductionState | null
+    getProjectTabId?: () => string
+  }
 }): Promise<{ lines: string[]; error?: string }> {
   const {
     config,
@@ -314,6 +328,7 @@ export async function runFlowidAgentToolLoop(options: {
     getCanvasBrief,
     executeTool,
     maxRounds = 10,
+    dramaProduction,
   } = options
 
   const rawEndpoint =
@@ -332,10 +347,23 @@ export async function runFlowidAgentToolLoop(options: {
     return { lines: [], error: '云端模式需填写 API Key' }
   }
 
+  const toolDefs = dramaProduction
+    ? mergeAgentToolDefinitions(FLOWID_AGENT_TOOL_DEFINITIONS, FLOWID_DRAMA_AGENT_TOOL_DEFINITIONS)
+    : FLOWID_AGENT_TOOL_DEFINITIONS
+
+  const buildSystemContent = (): string => {
+    const canvas = briefLine(getCanvasBrief())
+    if (dramaProduction) {
+      const state = dramaProduction.getState()
+      if (state) return buildDramaPmSystemPrompt(state, canvas)
+    }
+    return `${STATIC_SYSTEM}\n\n当前画布节点：\n${canvas}`
+  }
+
   const messages: ChatMessage[] = [
     {
       role: 'system',
-      content: `${STATIC_SYSTEM}\n\n当前画布节点：\n${briefLine(getCanvasBrief())}`,
+      content: buildSystemContent(),
     },
     ...history.map((t) => ({ role: t.role, content: t.content })),
     { role: 'user', content: userText },
@@ -343,11 +371,13 @@ export async function runFlowidAgentToolLoop(options: {
 
   const traceLines: string[] = []
   const assistantLines: string[] = []
+  let dramaAwaitingUser = false
+  const dramaMaxRounds = dramaProduction ? Math.max(maxRounds, 14) : maxRounds
 
-  for (let round = 0; round < maxRounds; round += 1) {
+  for (let round = 0; round < dramaMaxRounds; round += 1) {
     messages[0] = {
       role: 'system',
-      content: `${STATIC_SYSTEM}\n\n当前画布节点：\n${briefLine(getCanvasBrief())}`,
+      content: buildSystemContent(),
     }
 
     const res = await fetchOpenAICompat(endpoint, {
@@ -360,7 +390,7 @@ export async function runFlowidAgentToolLoop(options: {
         model,
         temperature: 0.25,
         messages,
-        tools: FLOWID_AGENT_TOOL_DEFINITIONS,
+        tools: toolDefs,
         tool_choice: 'auto',
       },
     })
@@ -394,6 +424,18 @@ export async function runFlowidAgentToolLoop(options: {
       : []
 
     if (!toolCalls.length) {
+      if (dramaProduction) {
+        const nudge = buildDramaContinuationNudge(
+          dramaProduction.getState(),
+          dramaAwaitingUser,
+          dramaProduction.getProjectTabId?.(),
+        )
+        if (nudge && round < dramaMaxRounds - 1) {
+          messages.push({ role: 'user', content: nudge })
+          dramaAwaitingUser = false
+          continue
+        }
+      }
       break
     }
 
@@ -407,6 +449,14 @@ export async function runFlowidAgentToolLoop(options: {
       const fn = tc.function
       const resultStr = await executeTool(fn.name, fn.arguments || '{}')
       traceLines.push(humanToolSummary(fn.name, resultStr))
+      if (fn.name === 'flowid_drama_ask_user') {
+        try {
+          const parsed = JSON.parse(resultStr) as { awaiting_user?: boolean }
+          if (parsed.awaiting_user) dramaAwaitingUser = true
+        } catch {
+          /* ignore */
+        }
+      }
       messages.push({
         role: 'tool',
         tool_call_id: tc.id,

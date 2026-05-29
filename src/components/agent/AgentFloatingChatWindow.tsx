@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
+import { motion } from 'motion/react'
 import {
   createEmptySession,
   loadCurrentSessionId,
@@ -29,14 +30,57 @@ import {
 } from '../../lib/sensitiveWords'
 import { alertSensitiveWordBlocked } from '../../lib/sensitiveWordUi'
 import { invokeStudioAgentChat, type StudioAgentChatTurn } from '../../lib/studioAgentBridge'
-import { loadLicenseSnapshotV2 } from '../../lib/licenseAccess'
-import { apiPointsQuote } from '../../lib/licensePointsApi'
+import { setDramaWorkspaceTab } from '../../lib/dramaProduction/dramaWorkspaceBridge'
+import {
+  getDramaAskUserPending,
+  setDramaAskUserPending,
+  subscribeDramaAskUser,
+  type DramaAskUserPayload,
+} from '../../lib/dramaProduction/dramaAskUserBridge'
+import {
+  confirmDramaStageGenChoice,
+  isDramaStageGenChoiceAsk,
+  parseDramaStageGenChoiceFromText,
+  peekPendingDramaStageGenAsk,
+  resumeDramaPipelineAfterStageGenChoice,
+} from '../../lib/dramaProduction/dramaStageGenChoice'
+import type { DramaGenStage } from '../../lib/dramaProduction/dramaGenStages'
+import '../../lib/dramaProduction/dramaAutoPipeline'
 import { AgentWorkspaceChatArea } from './workspace/AgentWorkspaceChatArea'
 import { AgentWorkspaceInputArea } from './workspace/AgentWorkspaceInputArea'
 import { AgentWorkspaceSidebar } from './workspace/AgentWorkspaceSidebar'
 import { AgentWorkspaceTopBar } from './workspace/AgentWorkspaceTopBar'
+import {
+  DramaAgentSideRail,
+  dramaRailTabNodeKeyword,
+  type DramaRailTab,
+} from './DramaAgentSideRail'
+import { DramaAgentChatHeader } from './drama/DramaAgentChatHeader'
+import { DramaAgentChatFeed } from './drama/DramaAgentChatFeed'
+import { DramaAgentInputArea } from './drama/DramaAgentInputArea'
+import {
+  getDramaChatSteps,
+  subscribeDramaChatSteps,
+} from '../../lib/dramaProduction/dramaChatStepsBridge'
+import {
+  getDramaChatEvents,
+  subscribeDramaChatEvents,
+} from '../../lib/dramaProduction/dramaChatEventsBridge'
+import { getDramaUiState, subscribeDramaUiState } from '../../lib/dramaProduction/dramaUiBridge'
+import { loadDramaProductionState, ensureDramaProductionState } from '../../lib/dramaProduction/dramaStateStore'
+import { subscribeDramaStateChanged } from '../../lib/dramaProduction/dramaWorkspaceBridge'
+import { formatDramaExpertReply } from '../../lib/dramaProduction/dramaExpertPrompts'
+import { resolveActiveExpertForState } from '../../lib/dramaProduction/dramaOrchestrator'
+import {
+  dramaHasUserTheme,
+  loadDramaProjectSessionId,
+  sanitizeDramaSessionMessages,
+  saveDramaProjectSessionId,
+} from '../../lib/dramaProduction/dramaChatSessionStorage'
 
 type ChatMsg = { id: string; role: 'user' | 'assistant'; text: string; ts: number }
+
+export type AgentWorkspaceLayout = 'fullscreen' | 'split'
 
 type Props = {
   open: boolean
@@ -45,10 +89,36 @@ type Props = {
   onSpeak?: (text: string) => Promise<void>
   /** 返回画布 / 关闭整页 Agent 视图 */
   onClose: () => void
+  /**
+   * 分栏模式下顶栏「返回画布」：默认不切全屏关闭，而是切到右侧节点画布。
+   * 未传入时 split 布局仍走 onClose。
+   */
+  onBackToCanvas?: () => void
+  /** 分栏模式：收起左侧 Agent，恢复全宽画布 */
+  onDismissSplit?: () => void
   /** 同步「正在请求模型」状态，供画布右下角虚拟人与思考动画一致 */
   onWorkspaceSendingChange?: (sending: boolean) => void
   /** 与设置面板「AI 虚拟助手」中的模型名一致，用于输入条模式按钮展示 */
   assistantModelName?: string
+  /** 从首页 Agent 工具启动时注入的首条引导（仅展示一次） */
+  initialWelcomeMessage?: string | null
+  onInitialWelcomeConsumed?: () => void
+  /** fullscreen = 全屏工作台；split = 左侧嵌入（智剧通式，右侧为画布） */
+  layout?: AgentWorkspaceLayout
+  /** drama = 短剧制片深色分栏；default = 原有助手样式 */
+  uiVariant?: 'default' | 'drama'
+  /** 短剧制片：显示左侧 剧本/角色/分镜/视频 图标栏 */
+  dramaProductionMode?: boolean
+  /** 短剧项目标签 id，用于侧栏显示当前阶段 */
+  dramaProjectTabId?: string | null
+  /** 短剧 Agent 顶栏：当前项目名称 */
+  dramaProjectTitle?: string
+  /** 短剧 Agent 顶栏：双击重命名项目 */
+  onRenameDramaProjectTitle?: (name: string) => void
+  /** 用户首条题材输入后自动重命名项目（仅一次） */
+  onDramaAutoRenameFromTheme?: (themeText: string) => void
+  /** 点击侧栏 Tab 时在右侧画布定位节点 */
+  onFocusCanvasKeyword?: (keyword: string) => void
 }
 
 function bootSessions(): { sessions: AiSession[]; currentId: string } {
@@ -151,19 +221,72 @@ export function AgentFloatingChatWindow({
   ttsEnabled,
   onSpeak,
   onClose,
+  onBackToCanvas,
+  onDismissSplit,
   onWorkspaceSendingChange,
   assistantModelName,
+  initialWelcomeMessage,
+  onInitialWelcomeConsumed,
+  layout = 'fullscreen',
+  uiVariant = 'default',
+  dramaProductionMode = false,
+  dramaProjectTabId = null,
+  dramaProjectTitle,
+  onRenameDramaProjectTitle,
+  onDramaAutoRenameFromTheme,
+  onFocusCanvasKeyword,
 }: Props) {
+  const isSplit = layout === 'split'
+  const isDrama = uiVariant === 'drama' && isSplit
   const boot = useMemo(() => bootSessions(), [])
   const [sessions, setSessions] = useState<AiSession[]>(() => boot.sessions)
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => boot.currentId)
   const [parseMode, setParseMode] = useState<AgentParseMode>(() => loadStoredAgentParseMode())
+  const [dramaRailTab, setDramaRailTab] = useState<DramaRailTab>('script')
   const [modeSwitchHint, setModeSwitchHint] = useState<string | null>(null)
   const modeHintTimerRef = useRef<number | null>(null)
   const [tasks, setTasks] = useState<AgentCanvasTaskItem[]>([])
   const [projectItems, setProjectItems] = useState<AgentProjectContextItem[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [dramaAskUser, setDramaAskUser] = useState<DramaAskUserPayload | null>(() =>
+    getDramaAskUserPending(),
+  )
+  const [dramaSteps, setDramaSteps] = useState(() =>
+    dramaProjectTabId ? getDramaChatSteps(dramaProjectTabId) : [],
+  )
+  const [dramaEvents, setDramaEvents] = useState(() =>
+    dramaProjectTabId ? getDramaChatEvents(dramaProjectTabId) : [],
+  )
+  const [dramaState, setDramaState] = useState(() =>
+    dramaProjectTabId ? loadDramaProductionState(dramaProjectTabId) : null,
+  )
+  const [dramaUi, setDramaUi] = useState(() =>
+    dramaProjectTabId ? getDramaUiState(dramaProjectTabId) : getDramaUiState(''),
+  )
+  const dramaAutoSendRef = useRef<string | null>(null)
+  useEffect(() => subscribeDramaAskUser(() => setDramaAskUser(getDramaAskUserPending())), [])
+  useEffect(() => {
+    if (!isDrama || !dramaProjectTabId) return
+    const refresh = () => {
+      setDramaSteps(getDramaChatSteps(dramaProjectTabId))
+      setDramaEvents(getDramaChatEvents(dramaProjectTabId))
+      setDramaState(loadDramaProductionState(dramaProjectTabId))
+      setDramaUi(getDramaUiState(dramaProjectTabId))
+    }
+    refresh()
+    const unsubSteps = subscribeDramaChatSteps(refresh)
+    const unsubEvents = subscribeDramaChatEvents(refresh)
+    const unsubState = subscribeDramaStateChanged(refresh)
+    const unsubUi = subscribeDramaUiState(refresh)
+    return () => {
+      unsubSteps()
+      unsubEvents()
+      unsubState()
+      unsubUi()
+    }
+  }, [isDrama, dramaProjectTabId])
+
   useEffect(() => {
     onWorkspaceSendingChange?.(sending)
     return () => {
@@ -171,9 +294,9 @@ export function AgentFloatingChatWindow({
     }
   }, [sending, onWorkspaceSendingChange])
 
-  /** 避免「对话区内一条 + 浏览器窗口最右侧一条」双滚动条：底层页面不再参与滚动 */
+  /** 全屏模式才锁底层页面滚动；分栏模式右侧画布需可交互 */
   useEffect(() => {
-    if (!open) return
+    if (!open || isSplit) return
     const html = document.documentElement
     const body = document.body
     const prevHtmlOverflow = html.style.overflow
@@ -188,53 +311,10 @@ export function AgentFloatingChatWindow({
       body.style.overflow = prevBodyOverflow
       body.style.paddingRight = prevBodyPadRight
     }
-  }, [open])
+  }, [open, isSplit])
 
-  const [sendPointsQuote, setSendPointsQuote] = useState<number | null>(null)
-  const [sendPointsQuotePending, setSendPointsQuotePending] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(isSplit)
 
-  useEffect(() => {
-    if (!open) {
-      setSendPointsQuote(null)
-      setSendPointsQuotePending(false)
-      return
-    }
-    const executionTarget = parseMode === 'llm' ? 'model' : 'workflow'
-    /** 与画布一致：LLM 走云端模型时不参与积分 quote */
-    if (executionTarget === 'model') {
-      setSendPointsQuote(null)
-      setSendPointsQuotePending(false)
-      return
-    }
-    const lic = loadLicenseSnapshotV2()
-    const lc = String(lic?.licenseCode || '').trim()
-    const mc = String(lic?.machineId || '').trim()
-    if (!lc || !mc) {
-      setSendPointsQuote(null)
-      setSendPointsQuotePending(false)
-      return
-    }
-    const metadata = {}
-    let cancelled = false
-    setSendPointsQuotePending(true)
-    void apiPointsQuote({
-      licenseCode: lc,
-      machineCode: mc,
-      nodeKind: 'text',
-      executionTarget,
-      metadata,
-    }).then((r) => {
-      if (cancelled) return
-      setSendPointsQuotePending(false)
-      if (r.success && typeof r.points === 'number') setSendPointsQuote(r.points)
-      else setSendPointsQuote(null)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [open, parseMode])
-
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [profilePanelOpen, setProfilePanelOpen] = useState(false)
   const [sessionSearchOpen, setSessionSearchOpen] = useState(false)
   const [sessionSearchQuery, setSessionSearchQuery] = useState('')
@@ -242,21 +322,97 @@ export function AgentFloatingChatWindow({
   const lastSpokenKeyRef = useRef<string | null>(null)
   /** 防止连点发送或 Enter 重复触发在同一帧内跑两次 handleSend */
   const sendInFlightRef = useRef(false)
+  const welcomeInjectedRef = useRef<string | null>(null)
+
+  /** 从首页 Agent 工具进入时同步解析模式，并注入引导消息 */
+  useEffect(() => {
+    if (!open) return
+    setParseMode(loadStoredAgentParseMode())
+    if (uiVariant === 'drama' && layout === 'split') {
+      onInitialWelcomeConsumed?.()
+      return
+    }
+    const welcome = String(initialWelcomeMessage || '').trim()
+    if (!welcome || welcomeInjectedRef.current === welcome) return
+    welcomeInjectedRef.current = welcome
+    const storedMsg: StoredAiMessage = {
+      role: 'assistant',
+      content: welcome.replace(/\*\*(.+?)\*\*/g, '$1'),
+      timestamp: Date.now(),
+    }
+    setSessions((prev) => {
+      const cid = currentSessionId
+      const next = prev.map((s) =>
+        s.id === cid
+          ? { ...s, messages: [...s.messages, storedMsg], updatedAt: Date.now() }
+          : s,
+      )
+      saveSessions(next)
+      return next
+    })
+    onInitialWelcomeConsumed?.()
+  }, [open, initialWelcomeMessage, currentSessionId, onInitialWelcomeConsumed, uiVariant, layout])
 
   const currentSession = useMemo(
     () => sessions.find((s) => s.id === currentSessionId) ?? sessions[0]!,
     [sessions, currentSessionId],
   )
 
+  const onPickDramaRailTab = useCallback(
+    (tab: DramaRailTab) => {
+      setDramaRailTab(tab)
+      setDramaWorkspaceTab(tab)
+      const kw = dramaRailTabNodeKeyword(tab)
+      if (kw) onFocusCanvasKeyword?.(kw)
+    },
+    [onFocusCanvasKeyword],
+  )
+
   const messages = useMemo(() => storedToUi(currentSession.messages), [currentSession.messages])
 
+  /** 短剧：按项目绑定独立会话；未发题材前清空误存的助手消息 */
+  useEffect(() => {
+    if (!isDrama || !dramaProjectTabId) return
+    let list = loadSessions()
+    if (!list.length) {
+      const s = createEmptySession()
+      list = [s]
+      saveSessions(list)
+    }
+
+    let sid = loadDramaProjectSessionId(dramaProjectTabId)
+    if (!sid || !list.some((s) => s.id === sid)) {
+      const fresh = createEmptySession()
+      list = [fresh, ...list]
+      sid = fresh.id
+      saveDramaProjectSessionId(dramaProjectTabId, sid)
+    }
+
+    const linked = list.find((s) => s.id === sid)
+    if (linked) {
+      const cleaned = sanitizeDramaSessionMessages(linked.messages)
+      if (cleaned.length !== linked.messages.length) {
+        list = list.map((s) =>
+          s.id === sid ? { ...s, messages: cleaned, updatedAt: Date.now() } : s,
+        )
+        saveSessions(list)
+      }
+    }
+
+    setSessions(list)
+    setCurrentSessionId(sid)
+    saveCurrentSessionId(sid)
+  }, [isDrama, dramaProjectTabId])
+
   const chatAreaMessages = useMemo(
-    () => messages.map((m) => ({ id: m.id, role: m.role, content: m.text })),
+    () => messages.map((m) => ({ id: m.id, role: m.role, content: m.text, ts: m.ts })),
     [messages],
   )
 
-  /** 尚无消息：首屏输入居中；有任意消息后沉底列表 */
-  const isHome = messages.length === 0
+  /** 尚无消息：首屏输入居中；短剧模式以「是否已发题材」为准 */
+  const isHome = isDrama
+    ? !dramaHasUserTheme(currentSession.messages)
+    : messages.length === 0
 
   /** 有任意消息后：可滚动消息列表 + 底部悬浮输入 */
   const composerDocked = !isHome
@@ -341,11 +497,16 @@ export function AgentFloatingChatWindow({
         setSessionSearchQuery('')
         return
       }
+      if (isSplit && onBackToCanvas) {
+        e.preventDefault()
+        onBackToCanvas()
+        return
+      }
       onClose()
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [open, onClose, sessionSearchOpen])
+  }, [open, onClose, onBackToCanvas, isSplit, sessionSearchOpen])
 
   useEffect(() => {
     if (!open) return
@@ -523,14 +684,29 @@ export function AgentFloatingChatWindow({
       }
     })
 
+    const isUserThemeInput = !/【用户选择】/.test(safeOutgoing)
+    const isFirstTheme =
+      isUserThemeInput && !dramaHasUserTheme(prevMsgs)
+    if (isDrama && dramaProjectTabId && isFirstTheme) {
+      onDramaAutoRenameFromTheme?.(safeOutgoing)
+    }
+
     setSending(true)
+    const chatMode: AgentParseMode = isDrama ? 'llm' : parseMode
     try {
-      const lines = await invokeStudioAgentChat(safeOutgoing, { mode: parseMode, history: historyTurns })
+      const lines = await invokeStudioAgentChat(safeOutgoing, { mode: chatMode, history: historyTurns })
       const replyNow = Date.now()
+      const dramaExpert =
+        isDrama && dramaProjectTabId
+          ? resolveActiveExpertForState(ensureDramaProductionState(dramaProjectTabId))
+          : null
       const assistantChunks: StoredAiMessage[] = []
       for (const line of lines) {
-        const t = replaceSensitiveWords(line.trim())
+        let t = replaceSensitiveWords(line.trim())
         if (!t) continue
+        if (dramaExpert && !t.startsWith('【已执行】')) {
+          t = formatDramaExpertReply(dramaExpert, t)
+        }
         assistantChunks.push({ role: 'assistant', content: t, timestamp: replyNow })
       }
       if (!assistantChunks.length) {
@@ -566,46 +742,148 @@ export function AgentFloatingChatWindow({
     currentSessionId,
     parseMode,
     upsertSession,
+    isDrama,
+    dramaProjectTabId,
+    onDramaAutoRenameFromTheme,
   ])
+
+  const dramaStageGenAskActive = useMemo(() => {
+    if (!dramaAskUser) return false
+    return (
+      dramaAskUser.kind === 'stage_gen_choice' ||
+      dramaAskUser.kind === 'image_gen_mode' ||
+      isDramaStageGenChoiceAsk(dramaAskUser.question, dramaAskUser.options)
+    )
+  }, [dramaAskUser])
+
+  const handleDramaAskUserPick = useCallback(
+    (opt: string) => {
+      if (dramaProjectTabId) {
+        const pending = getDramaAskUserPending()
+        if (
+          pending &&
+          (pending.kind === 'stage_gen_choice' ||
+            pending.kind === 'image_gen_mode' ||
+            isDramaStageGenChoiceAsk(pending.question, pending.options))
+        ) {
+          const stage: DramaGenStage =
+            pending.stage ??
+            peekPendingDramaStageGenAsk(dramaProjectTabId) ??
+            'character_design'
+          const parsed = parseDramaStageGenChoiceFromText(stage, opt)
+          if (parsed) {
+            setDramaAskUserPending(null)
+            confirmDramaStageGenChoice(dramaProjectTabId, stage, parsed)
+            resumeDramaPipelineAfterStageGenChoice(dramaProjectTabId)
+            return
+          }
+        }
+      }
+      setDramaAskUserPending(null)
+      const text = opt.startsWith('【用户选择】') ? opt : `【用户选择】${opt}`
+      dramaAutoSendRef.current = text
+      setInput(text)
+    },
+    [dramaProjectTabId],
+  )
+
+  useEffect(() => {
+    if (!dramaAutoSendRef.current || input !== dramaAutoSendRef.current) return
+    dramaAutoSendRef.current = null
+    void handleSend()
+  }, [input, handleSend])
+
+  const dramaChatFeed = isDrama ? (
+    <DramaAgentChatFeed
+      messages={chatAreaMessages}
+      steps={dramaSteps}
+      events={dramaEvents}
+      state={dramaState}
+      uiState={dramaUi}
+      sending={sending}
+      askUser={dramaAskUser}
+      askUserDisabled={blocked && !dramaStageGenAskActive}
+      onAskUserPick={handleDramaAskUserPick}
+    />
+  ) : (
+    <AgentWorkspaceChatArea messages={chatAreaMessages} variant="default" />
+  )
+
+  const dramaInputArea = (
+    <DramaAgentInputArea
+      value={input}
+      onChange={setInput}
+      onSend={() => void handleSend()}
+      disabled={blocked}
+      isHome={isHome}
+      working={sending || dramaUi.characterGen.running || dramaUi.sceneGen.running}
+    />
+  )
 
   if (!open) return null
 
+  const shellClass = isDrama
+    ? 'drama-agent-chat flex h-full min-h-0 w-full flex-col overflow-hidden'
+    : isSplit
+      ? 'flex h-full min-h-0 w-full overflow-hidden bg-aw-page text-aw-text-main'
+      : 'fixed inset-0 z-[12000] flex h-full w-full overflow-hidden bg-aw-page text-aw-text-main'
+
   return (
     <div
-      className="fixed inset-0 z-[12000] flex h-full w-full overflow-hidden bg-aw-page text-aw-text-main"
+      className={shellClass}
       data-studio-agent-workspace="1"
-      role="dialog"
-      aria-modal="true"
+      role={isSplit ? undefined : 'dialog'}
+      aria-modal={isSplit ? undefined : true}
       aria-label="AI 助手工作台"
       onMouseDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >
-      <AgentWorkspaceSidebar
-        collapsed={sidebarCollapsed}
-        onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
-        onOpenSessionSearch={() => {
-          setSessionSearchOpen(true)
-          setSessionSearchQuery('')
-        }}
-        projectItems={projectItems}
-        sessionSections={sessionSections}
-        currentSessionId={currentSessionId}
-        onNewChat={onNewChat}
-        onPickSession={onPickSession}
-        onDeleteSession={onDeleteSession}
-        onRenameSession={renameSession}
-        tasks={tasks}
-        onNavigateTask={navigateAgentCanvasToNode}
-        onOpenProfile={() => setProfilePanelOpen(true)}
-        canvasProjectTitle={canvasProjectTitle}
-        onClearAllSessions={clearAllSessions}
-      />
+      {isSplit && dramaProductionMode && !isDrama ? (
+        <DramaAgentSideRail activeTab={dramaRailTab} onTabChange={onPickDramaRailTab} />
+      ) : null}
 
-      <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-white">
+      {!isSplit ? (
+        <AgentWorkspaceSidebar
+          collapsed={sidebarCollapsed}
+          onToggleCollapsed={() => setSidebarCollapsed((c) => !c)}
+          onOpenSessionSearch={() => {
+            setSessionSearchOpen(true)
+            setSessionSearchQuery('')
+          }}
+          projectItems={projectItems}
+          sessionSections={sessionSections}
+          currentSessionId={currentSessionId}
+          onNewChat={onNewChat}
+          onPickSession={onPickSession}
+          onDeleteSession={onDeleteSession}
+          onRenameSession={renameSession}
+          tasks={tasks}
+          onNavigateTask={navigateAgentCanvasToNode}
+          onOpenProfile={() => setProfilePanelOpen(true)}
+          canvasProjectTitle={canvasProjectTitle}
+          onClearAllSessions={clearAllSessions}
+        />
+      ) : null}
+
+      <main className={isDrama ? 'drama-agent-chat__main relative flex min-h-0 min-w-0 flex-1 flex-col' : 'relative flex min-h-0 min-w-0 flex-1 flex-col bg-white'}>
+        {isDrama ? (
+          <DramaAgentChatHeader
+            title={dramaProjectTitle?.trim() || '剧情故事短片'}
+            onRenameTitle={onRenameDramaProjectTitle}
+          />
+        ) : null}
+        {!isDrama ? (
+        <>
         <AgentWorkspaceTopBar
-          title={currentSession.title}
+          title={
+            dramaProductionMode && isSplit
+              ? currentSession.title || 'AI 短剧制片'
+              : currentSession.title
+          }
           onRenameTitle={(next) => renameSession(currentSessionId, next)}
-          onBackToCanvas={onClose}
+          onBackToCanvas={isSplit && onBackToCanvas ? onBackToCanvas : onClose}
+          backLabel={isSplit && dramaProductionMode ? '节点画布' : '返回画布'}
+          onDismissSplit={isSplit && onDismissSplit ? onDismissSplit : undefined}
           sidebarCollapsed={sidebarCollapsed}
           onExpandSidebar={() => setSidebarCollapsed(false)}
         />
@@ -667,20 +945,23 @@ export function AgentFloatingChatWindow({
             <p className="border-t border-aw-border px-4 py-2 text-center text-[11px] text-aw-text-sub">Esc 关闭</p>
           </div>
         ) : null}
+        </>
+        ) : null}
 
         {/* 不用 overflow-hidden：底部输入条上「向上展开」的模式菜单会伸入对话区，hidden 会把第一项裁掉 */}
-        <div className="relative flex min-h-0 flex-1 flex-col overflow-x-hidden">
+        <div className={`relative flex min-h-0 flex-1 flex-col overflow-x-hidden${isDrama ? ' drama-agent-chat__stream' : ''}`}>
           {composerDocked ? (
             <>
               <div
                 ref={listRef}
                 className="agent-workspace-scroll min-h-0 flex-1 overflow-y-auto"
+                data-drama-chat-selectable={isDrama ? '1' : undefined}
                 onDragOver={handleMainFileDragOver}
                 onDrop={(e) => void handleMainFileDrop(e)}
               >
-                <AgentWorkspaceChatArea messages={chatAreaMessages} />
+                {dramaChatFeed}
               </div>
-              {sending ? (
+              {sending && !isDrama ? (
                 <div className="pointer-events-none absolute bottom-32 left-1/2 z-10 flex w-full max-w-2xl -translate-x-1/2 px-10 py-4">
                   <div className="flex w-fit items-center gap-1.5 rounded-full border border-aw-border bg-white/80 px-3 py-1.5 shadow-sm backdrop-blur">
                     <div
@@ -701,6 +982,32 @@ export function AgentFloatingChatWindow({
                   </div>
                 </div>
               ) : null}
+              {dramaAskUser && !isDrama ? (
+                <motion.div
+                  className="mx-10 mb-3 rounded-2xl border border-orange-200 bg-orange-50/90 px-4 py-3 shadow-sm"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                >
+                  <p className="text-[13px] font-bold text-orange-950/90 mb-2">{dramaAskUser.question}</p>
+                  <div className="flex flex-wrap gap-2">
+                    {dramaAskUser.options.map((opt) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        disabled={blocked}
+                        className="rounded-full border border-orange-300/80 bg-white px-3 py-1.5 text-[12px] font-bold text-orange-900 hover:bg-orange-600 hover:text-white transition-colors disabled:opacity-50"
+                        onClick={() => {
+                          setDramaAskUserPending(null)
+                          setInput(`【用户选择】${opt}`)
+                        }}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                </motion.div>
+              ) : null}
+              {isDrama ? dramaInputArea : (
               <AgentWorkspaceInputArea
                 value={input}
                 onChange={setInput}
@@ -712,25 +1019,27 @@ export function AgentFloatingChatWindow({
                 onParseModeChange={onPickParseMode}
                 modeBanner={modeSwitchHint}
                 assistantModelName={assistantModelName}
-                sendPointsQuote={sendPointsQuote}
-                sendPointsQuotePending={sendPointsQuotePending}
               />
+              )}
             </>
           ) : (
             <div
               ref={listRef}
-              className={`agent-workspace-scroll flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8 ${
-                chatAreaMessages.length > 0 ? 'gap-8' : ''
+              className={`agent-workspace-scroll flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8${
+                chatAreaMessages.length > 0 ? ' gap-8' : ''
               }`}
+              data-drama-chat-selectable={isDrama ? '1' : undefined}
               onDragOver={handleMainFileDragOver}
               onDrop={(e) => void handleMainFileDrop(e)}
             >
               {chatAreaMessages.length > 0 ? (
-                <div className="w-full max-w-3xl shrink-0">
-                  <AgentWorkspaceChatArea messages={chatAreaMessages} compact />
+                <div className={`w-full shrink-0${isDrama ? '' : ' max-w-3xl'}`}>
+                  {isDrama ? dramaChatFeed : (
+                    <AgentWorkspaceChatArea messages={chatAreaMessages} compact />
+                  )}
                 </div>
               ) : null}
-              {sending ? (
+              {sending && !isDrama ? (
                 <div className="flex shrink-0 justify-center px-4 py-2">
                   <div className="flex w-fit items-center gap-1.5 rounded-full border border-aw-border bg-white/90 px-3 py-1.5 shadow-sm backdrop-blur">
                     <div
@@ -751,6 +1060,11 @@ export function AgentFloatingChatWindow({
                   </div>
                 </div>
               ) : null}
+              {isDrama ? (
+                <div className={`drama-agent-input-wrap${isHome ? ' drama-agent-input-wrap--home' : ''}`}>
+                  {dramaInputArea}
+                </div>
+              ) : (
               <AgentWorkspaceInputArea
                 value={input}
                 onChange={setInput}
@@ -762,9 +1076,8 @@ export function AgentFloatingChatWindow({
                 onParseModeChange={onPickParseMode}
                 modeBanner={modeSwitchHint}
                 assistantModelName={assistantModelName}
-                sendPointsQuote={sendPointsQuote}
-                sendPointsQuotePending={sendPointsQuotePending}
               />
+              )}
             </div>
           )}
         </div>

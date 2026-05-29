@@ -1,6 +1,6 @@
 /**
  * 本地打包：预设模板 + 灵感小镇走随包静态资源（JSON/封面），不向授权服务拉列表与大图，省流量。
- * 构建时设置 VITE_FLOWID_LOCAL_GALLERY=1（见 pack-flowid-user-config / cross-env）。
+ * 构建时设置 VITE_FLOWID_LOCAL_GALLERY=1（见 npm run pack:desktop / cross-env）。
  *
  * 资源目录：public/flowid-bundled/ → 构建后位于 dist/flowid-bundled/（Electron base 为 ./，用当前页 URL 解析）
  */

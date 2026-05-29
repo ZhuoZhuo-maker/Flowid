@@ -7,6 +7,7 @@ import {
   type AuthSession,
 } from '../../lib/auth'
 import { saveLocalLicenseSnapshot } from '../../lib/license'
+import { isLicenseServerOriginLockedByBuild } from '../../lib/licenseAccess'
 
 type AuthModalProps = {
   open: boolean
@@ -22,6 +23,7 @@ export function AuthModal({ open, session, onClose, onSuccess }: AuthModalProps)
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [account, setAccount] = useState('')
   const [password, setPassword] = useState('')
+  const authLocked = useMemo(() => isLicenseServerOriginLockedByBuild(), [])
   const [apiBaseUrl, setApiBaseUrl] = useState(() => loadAuthApiConfig().baseUrl)
   const [submitting, setSubmitting] = useState(false)
 
@@ -32,13 +34,14 @@ export function AuthModal({ open, session, onClose, onSuccess }: AuthModalProps)
   const submit = async () => {
     try {
       setSubmitting(true)
-      const next = await authenticateRemote(apiBaseUrl, account, password, mode)
+      const base = authLocked ? loadAuthApiConfig().baseUrl : apiBaseUrl
+      const next = await authenticateRemote(base, account, password, mode)
       saveLocalLicenseSnapshot({
         status: next.licenseStatus,
         expiresAtMs: next.expiresAtMs,
         lastNoticeAtMs: undefined,
       })
-      saveAuthApiConfig({ baseUrl: apiBaseUrl })
+      if (!authLocked) saveAuthApiConfig({ baseUrl: apiBaseUrl })
       onSuccess(next)
       onClose()
       window.alert(mode === 'login' ? '登录成功' : '注册成功')
@@ -94,10 +97,12 @@ export function AuthModal({ open, session, onClose, onSuccess }: AuthModalProps)
               <label className="auth-modal__field">
                 <span>认证服务地址</span>
                 <input
-                  value={apiBaseUrl}
-                  onChange={(e) => setApiBaseUrl(e.target.value)}
-                  placeholder="例如：https://api.example.com"
+                  value={authLocked ? loadAuthApiConfig().baseUrl : apiBaseUrl}
+                  onChange={authLocked ? undefined : (e) => setApiBaseUrl(e.target.value)}
+                  readOnly={authLocked}
+                  placeholder={authLocked ? '' : '例如：https://api.example.com'}
                 />
+                {authLocked ? <span className="auth-modal__hint">当前版本已固定认证服务地址，不可修改。</span> : null}
               </label>
               <label className="auth-modal__field">
                 <span>账号</span>

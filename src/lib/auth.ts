@@ -58,15 +58,18 @@ export function clearAuthSession(): void {
  */
 export function loadAuthApiConfig(): AuthApiConfig {
   const fallback = buildTimePublicServerOrigin()
+  if (fallback) {
+    return { baseUrl: fallback }
+  }
   try {
     const raw = localStorage.getItem(AUTH_API_CONFIG_STORAGE_KEY)
-    if (!raw) return { baseUrl: fallback }
+    if (!raw) return { baseUrl: '' }
     const parsed = JSON.parse(raw) as AuthApiConfig
-    if (!parsed || typeof parsed !== 'object') return { baseUrl: fallback }
+    if (!parsed || typeof parsed !== 'object') return { baseUrl: '' }
     const b = String(parsed.baseUrl || '').trim()
-    return { baseUrl: b || fallback }
+    return { baseUrl: b }
   } catch {
-    return { baseUrl: fallback }
+    return { baseUrl: '' }
   }
 }
 
@@ -74,6 +77,9 @@ export function loadAuthApiConfig(): AuthApiConfig {
  * 保存认证服务配置。
  */
 export function saveAuthApiConfig(config: AuthApiConfig): void {
+  if (buildTimePublicServerOrigin()) {
+    return
+  }
   localStorage.setItem(
     AUTH_API_CONFIG_STORAGE_KEY,
     JSON.stringify({

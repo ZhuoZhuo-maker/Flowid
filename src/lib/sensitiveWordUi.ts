@@ -69,7 +69,7 @@ export function alertSensitiveWordBlocked(reason?: string | null): void {
 
   const card = document.createElement('div')
   card.style.cssText = [
-    'max-width:420px',
+    'max-width:min(480px,calc(100vw - 32px))',
     'width:100%',
     'border-radius:12px',
     'padding:20px 22px',
@@ -87,7 +87,8 @@ export function alertSensitiveWordBlocked(reason?: string | null): void {
 
   const body = document.createElement('div')
   body.textContent = detail
-  body.style.cssText = 'white-space:pre-wrap;word-break:break-word;margin-bottom:18px;color:#cbd5e1;'
+  body.style.cssText =
+    'white-space:pre-wrap;word-break:break-word;margin-bottom:18px;color:#cbd5e1;max-height:min(52vh,420px);overflow-y:auto'
 
   const row = document.createElement('div')
   row.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;'

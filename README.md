@@ -1,60 +1,53 @@
 # Flowid
 
-Flowid 无限画布工作室（React + TypeScript + Vite）。
+Flowid 无限画布工作室（React + TypeScript + Vite）。**开源协议：MIT**（见 [LICENSE](./LICENSE)）。
 
-## 授权服务部署（线上授权码 / 预设模板）
+**开源版说明**：客户端不再包含授权码激活、积分预扣/计费；画布与 Agent 可直接执行工作流。可选自建 **Auth 服务** 分发预设模板、云端工作流元数据等（非强制）。
 
-把 **`server/auth-server.cjs`** 部署到公网时，可按步骤操作：**[docs/deploy-auth-server.md](./docs/deploy-auth-server.md)**。
+### 云端模型 / API Key（开源仓库）
 
-## 本地积分服务（SQLite + `npm run points:dev`）
+- 仓库内 **`server/cloud-assist-models.json`** 默认为空目录，**不包含**任何第三方 API 地址或 Key。
+- 自建 Auth 时可参考 **`server/cloud-assist-models.example.json`**，在管理后台「云端模型配置」中填写自己的 OpenAI 兼容网关。
+- 示例预设 workflow（`server/templates/*.workflow.json`）已清空节点上的 `cloudModelUrl` / `cloudApiKey` / `flowid-assist` 绑定；使用者需在「设置 → 云端模型」或节点里自行配置。
+- **`public/flowid-bundled/`**、**`release/`**、**`dist/`** 已在 `.gitignore` 中，不会随 Git 提交；重新打包前请勿把私钥写入模板再执行 `export:bundled-gallery`。
+- 若曾将真实 Key 提交过 Git，请在服务商侧**轮换 Key**，勿仅依赖删除文件（历史提交仍可能被检索）。
+- 发布前执行 **`npm run check:open-source-secrets`**；完整步骤见 **[docs/open-source-security-checklist.md](./docs/open-source-security-checklist.md)**。
 
-- 默认数据库：`data/flowid.db`（可用环境变量 **`DB_PATH`** 覆盖）。
-- 积分 SQLite 管理页与 API：与 Auth **同端口 3721**，路径前缀 **`/pts`**（例如 `http://127.0.0.1:3721/pts/admin/licenses`）。`npm run dev` 会并行启动 Vite + Auth（已含 `/pts`）。口令可用 **`ADMIN_TOKEN`** 或回退 **`AUTH_ADMIN_SECRET`**，请求头 `x-admin-token` 或 URL `?token=`。
-- 管理 API 前缀：`/api/admin/*`；积分 API：`/api/points/*`。
+## 本地开发
 
-### 历史死信时间戳回填
+```bash
+npm install
+npm run dev          # Vite (5173) + Auth (3721)
+# 或仅前端：npm run dev:vite
+# 或仅 Auth：npm run auth:dev
+```
 
-1. 在 SQLite 客户端打开与线上相同的库文件。
-2. 执行 **`scripts/points-confirm-failures-backfill-preview.sql`** 中的 **SELECT / COUNT**（仅预览）。
-3. 核对行数与样例无误后，**先备份数据库**，再取消注释其中的 **UPDATE** 段执行：用 `created_at` 回填 `resolved_at` / `ignored_at`，`resolved_by` / `ignored_by` 置为 `'backfill'`。
+- 画布：<http://127.0.0.1:5173>
+- Auth 健康检查：<http://127.0.0.1:3721/healthz>
+- Auth 管理控制台：<http://127.0.0.1:3721/admin.html>
 
-### 授权码生成与管理
+## Auth 服务部署
 
-- **命令行生成**：`npm run gen-license -- --points 1000 --count 10 --expireDays 30`（`--expireDays 0` 表示永久）。写入 `licenses` 表，并导出 CSV 至 **`exports/licenses_YYYYMMDD_HHMMSS.csv`**（列：code, points, expire_time, created_at, status）。也可用 `node scripts/generate-licenses.js`（与 `.mjs` 等价）。
-- **Web 管理**：浏览器打开 `/admin/licenses`，支持按 code 模糊、按状态（active / 已过期 / revoked）筛选、每页 20 条、批量生成弹窗、单条禁用（二次确认）。
-- **API**：`GET /api/admin/licenses`（`code`、`statusFilter`、`page`、`pageSize`）、`POST /api/admin/licenses`（body：`points`, `count`, `expireDays`）、`POST /api/admin/licenses/:code/revoke`。
+把 **`server/auth-server.cjs`** 部署到公网时，见 **[docs/deploy-auth-server.md](./docs/deploy-auth-server.md)**。
 
-### 积分低余额提示
+管理端可维护：云端 Comfy 工作流、预设模板、系统提示词、灵感小镇、用户协议等。环境变量示例见 **`.env.example`**。
 
-- 接口：`GET /api/points/balance-alert?licenseCode=&machineCode=&threshold=100`（须通过授权 + 机器码校验）。
-- 客户端：`LicenseModal` 在打开且已有所需信息后请求该接口；若 `belowThreshold=true`，顶部显示黄色提示条（可关闭，关闭后仅本次会话内隐藏；再次打开弹窗会重新检测）。
+## 桌面端打包
 
-### 死信自动重试（定时任务）
+```bash
+# 设置 FLOWID_PUBLIC_SERVER 等环境变量，或编辑 scripts/run-pack-flowid-desktop.mjs 中的 PACK_DEFAULTS：
+npm run pack:desktop
+```
 
-- 脚本：`npm run retry-dlq`（即 `node scripts/retry-dlq.js`，可加 `--once` 与定时任务约定一致；当前每次进程均只跑一轮）。对 `points_confirm_failures` 中 **`status=pending`** 的记录调用本机 **`POST /api/points/confirm`**；成功则死信标为 **resolved**（`resolved_by=auto_retry`）；失败则 **`retry_count`** 自增，**≥3** 后标为 **ignored**（`ignored_by=auto_retry`）。环境变量 **`POINTS_API_BASE`** 默认 `http://127.0.0.1:3721/pts`，**`DB_PATH`** 默认 `data/flowid.db`。
-- **Linux cron**（每小时，需先 `cd` 到仓库根目录并保证 `node` 在 PATH）：
+注入的环境变量包括 **`VITE_FLOWID_PUBLIC_SERVER_ORIGIN`**（Auth 根地址）、**`VITE_FLOWID_EXCHANGE_GROUP_QQ`**、可选 **`VITE_FLOWID_LOCAL_GALLERY`**。不再使用 `VITE_LICENSE_API_URL`。
 
-  `0 * * * * cd /path/to/FLOWID && /usr/bin/node scripts/retry-dlq.js >> /var/log/flowid-retry-dlq.log 2>&1`
-
-- **Windows 任务计划程序**：创建基本任务 → 触发器「每天」后改为「重复任务间隔 1 小时」→ 操作「启动程序」：`程序` 填 `node`，`参数` 填 `scripts\retry-dlq.js`，`起始于` 填仓库根目录。
-
-### 积分 API 单元测试
-
-- `npm run test:points`：内存 SQLite + 临时 HTTP，覆盖 reserve / confirm / cancel / 余额不足 / confirm-failure 死信写入。
-- 若报错 **better-sqlite3 与当前 Node 版本不匹配**，在本机仓库根目录执行 **`npm rebuild better-sqlite3`** 后重试。
-
-### 运维检查清单（建议）
-
-- **每日**：查看死信表是否存在 **`pending` 超过 24 小时** 的记录（可用 `/admin/confirm-failures` 筛选 + 时间条件）。
-- **每月**：导出授权码列表备份（管理页 CSV 或 `GET /api/admin/licenses` 拉取）。
-- **每月**：将超过 **1 年** 的 `points_log` **归档**到外存或汇总表后按需清理（执行前务必备份库）。
+随包画廊与远端拉取区别见 **[docs/pack-bundled-vs-remote.md](./docs/pack-bundled-vs-remote.md)**。
 
 ## 敏感词主词库（Aho–Corasick + 按需加载）
 
-- **运行时**：`src/lib/sensitiveWords.ts` 对外 API 不变；启动后先请求轻量 **`public/lexicon/sensitive.meta.json`** 比对版本，IndexedDB 命中同版本则**不下载**大文件 `sensitive.json`；否则再拉取主词库并缓存。首包仅内置 **`src/data/sensitiveCore.ts`** 小表作 fast path。
-- **更新词库**：先按需拉取开源子集（若使用）`npm run gen:sensitive-lexicon`，再合并生成 JSON：  
-  **`npm run build:lexicon`** → 写入 `public/lexicon/sensitive.json` 与 **`sensitive.meta.json`**（勿手改，可提交到仓库或随 CI 产物发布）。
-- **测试**：`npm run test:sensitive`；**性能粗测**：`npm run bench:sensitive`（需已执行 `build:lexicon`）。
+- **运行时**：`src/lib/sensitiveWords.ts`；启动后先请求 **`public/lexicon/sensitive.meta.json`**，IndexedDB 命中同版本则跳过大文件下载。
+- **更新词库**：`npm run build:lexicon` → 写入 `public/lexicon/sensitive.json` 与 `sensitive.meta.json`。
+- **测试**：`npm run test:sensitive`；**粗测**：`npm run bench:sensitive`。
 
 ---
 

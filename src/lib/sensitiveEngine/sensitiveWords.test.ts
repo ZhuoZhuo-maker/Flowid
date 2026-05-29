@@ -1,5 +1,7 @@
 import { describe, expect, it, beforeEach } from 'vitest'
+import { __setSensitiveFilterEnabledForTest } from '../sensitiveFilterConfig'
 import {
+  canSend,
   checkSensitiveWords,
   replaceSensitiveWords,
   replaceSensitiveWordsByLevel,
@@ -15,6 +17,7 @@ const tiny: SensitiveWord[] = [
 ]
 
 beforeEach(() => {
+  __setSensitiveFilterEnabledForTest(true)
   __resetEnginesForTest()
   __installFullEngineForTest(tiny)
 })
@@ -49,6 +52,38 @@ describe('checkSensitiveWords', () => {
     expect(r.level).toBe('block')
     expect(r.words.some((w) => w.word === 'BADWORD')).toBe(true)
     expect(r.words.some((w) => w.word === '赌博')).toBe(true)
+  })
+
+  it('pure ASCII sensitive tokens need identifier boundaries', () => {
+    __installFullEngineForTest([
+      { word: 'sm', level: 'block', category: 'other' },
+      { word: 'BADWORD', level: 'block', category: 'other' },
+      { word: '赌博', level: 'block', category: 'illegal' },
+    ])
+    expect(checkSensitiveWords('english_small_caps').hasSensitive).toBe(false)
+    expect(checkSensitiveWords('small').hasSensitive).toBe(false)
+    expect(checkSensitiveWords(' sm ').hasSensitive).toBe(true)
+    expect(checkSensitiveWords('xbADWORDy').hasSensitive).toBe(false)
+    expect(checkSensitiveWords('hello BADWORD there').hasSensitive).toBe(true)
+    expect(checkSensitiveWords('去赌博').hasSensitive).toBe(true)
+  })
+
+  it('canSend reason lists hit words with category', () => {
+    __installFullEngineForTest([
+      { word: '色猫', level: 'block', category: 'porn' },
+      { word: '炸弹', level: 'warning', category: 'violence' },
+    ])
+    const blocked = canSend('水色猫测试')
+    expect(blocked.allowed).toBe(false)
+    expect(blocked.reason).toContain('色猫')
+    expect(blocked.reason).toContain('命中')
+    expect(blocked.reason).toContain('色情')
+
+    const warned = canSend('这里有炸弹', true)
+    expect(warned.allowed).toBe(false)
+    expect(warned.reason).toContain('炸弹')
+    expect(warned.reason).toContain('命中')
+    expect(warned.reason).toContain('暴力')
   })
 })
 

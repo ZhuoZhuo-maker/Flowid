@@ -9,6 +9,7 @@ import type {
 } from '../../types'
 import { useCanvasActions } from '../../context/CanvasContext'
 import { setFlowidMaterialDragData } from '../../lib/materialLibrary'
+import { compactValidResultThumbnails } from '../../lib/nodeResultThumbnails'
 
 type StripNodeKind = Extract<StudioNodeKind, 'image' | 'video' | 'audio' | 'music'>
 
@@ -126,7 +127,7 @@ export function NodeOutputThumbnailStrip({
 
   const removeOne = (target: NodeResultThumbnail) => {
     removeHistoryBySource(target.url)
-    const next = items.filter((i) => i.id !== target.id)
+    const next = compactValidResultThumbnails(items.filter((i) => i.id !== target.id))
 
     if (dataKind === 'audio' || dataKind === 'music') {
       const prevSources = audioResultSources ?? []

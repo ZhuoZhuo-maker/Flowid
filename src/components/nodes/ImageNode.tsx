@@ -1,4 +1,5 @@
-﻿import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { STUDIO_FLOW_SOURCE_HANDLE_ID, STUDIO_FLOW_TARGET_HANDLE_ID } from '../../lib/studioFlowHandles'
 import type { Node } from '@xyflow/react'
 import {
   useCallback,
@@ -19,6 +20,7 @@ import {
 } from '../../lib/localImageAssetStore'
 import type { ImageNodeData, MattingPoint } from '../../types'
 import { imageDownloadFileName, parseFlowidMaterialDragPayload, setFlowidMaterialDragData } from '../../lib/materialLibrary'
+import { compactValidResultThumbnails } from '../../lib/nodeResultThumbnails'
 import { NodeChrome } from './NodeChrome'
 import { NodeOutputThumbnailStrip } from './NodeOutputThumbnailStrip'
 
@@ -298,13 +300,35 @@ export function ImageNode({
   const imageDownloadName =
     data.src ? imageDownloadFileName(data.title, data.src, data.srcFileName) : '图片.png'
 
-  const stripItems = useMemo(() => data.resultThumbnails ?? [], [data.resultThumbnails])
+  const stripItems = useMemo(
+    () => compactValidResultThumbnails(data.resultThumbnails),
+    [data.resultThumbnails],
+  )
+
+  useEffect(() => {
+    const raw = data.resultThumbnails
+    if (!raw?.length) return
+    const compacted = compactValidResultThumbnails(raw)
+    const same =
+      compacted.length === raw.length &&
+      compacted.every((t, i) => t.id === raw[i]?.id && t.url === raw[i]?.url)
+    if (same) return
+    updateNodeData(id, {
+      kind: 'image',
+      resultThumbnails: compacted.length ? compacted : undefined,
+    })
+  }, [id, data.resultThumbnails, updateNodeData])
 
   const geo = readMattingGeometry(imgRef.current)
 
   return (
     <>
-      <Handle type="target" position={Position.Left} className="studio-handle" />
+      <Handle
+        type="target"
+        position={Position.Left}
+        id={STUDIO_FLOW_TARGET_HANDLE_ID}
+        className="studio-handle"
+      />
       <NodeChrome
         icon={<span className="glyph">图</span>}
         title={data.title}
@@ -478,7 +502,12 @@ export function ImageNode({
           />
         </div>
       </NodeChrome>
-      <Handle type="source" position={Position.Right} className="studio-handle" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id={STUDIO_FLOW_SOURCE_HANDLE_ID}
+        className="studio-handle"
+      />
     </>
   )
 }

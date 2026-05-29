@@ -112,7 +112,8 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
     return list
   }, [filtered])
 
-  const buildToken = (title: string) => `@系统提示词(${String(title || '').trim()})`
+  // token 格式：`@系统提示词([id]标题)`，id 用于拖入时获取完整文本
+  const buildToken = (preset: SystemPromptPresetMeta) => `@系统提示词([${preset.id}]${String(preset.name || '').trim()})`
 
   /** 从封面目录加载缩略图（桌面端）；失败则无封面 */
   useEffect(() => {
@@ -296,7 +297,7 @@ export function SystemPromptsPanel({ embedded = false }: { embedded?: boolean })
           <div className="space-y-2">
             {sortedFiltered.map((preset) => {
               const selected = preset.id === activeId
-              const token = buildToken(preset.name)
+              const token = buildToken(preset)
               const coverUrl = coverUrlById[preset.id]
               const busy = uploadBusyId === preset.id
               return (

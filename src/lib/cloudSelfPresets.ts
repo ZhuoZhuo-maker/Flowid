@@ -1,20 +1,26 @@
 export type CloudProviderId = 'doubao' | 'gemini' | 'openai'
 
-/** custom：用户自填 baseUrl；official：baseUrl 由构建环境变量注入，不落盘到 localStorage */
+/** @deprecated 仅兼容旧数据；新配置不再展示分类 */
 export type CloudSelfConnectionSource = 'custom' | 'official'
+
+/** API 调用方式：auto 根据地址与响应自动判断 */
+export type CloudSelfApiMode = 'auto' | 'openai' | 'async'
 
 export type CloudSelfPreset = {
   id: string
   /** 匹配的节点类型（为空表示可用于任意节点） */
   nodeKind?: string
-  providerId: CloudProviderId
+  /** @deprecated 旧版分类字段，新配置可省略 */
+  providerId?: CloudProviderId
   baseUrl: string
   apiKey: string
   model: string
   createdAtMs: number
   updatedAtMs: number
-  /** 默认 custom；official 时不在界面展示 API 地址，且保存时不写入 baseUrl */
+  /** @deprecated 旧版平台固定线路 */
   connectionSource?: CloudSelfConnectionSource
+  /** 默认 auto：OpenAI 同步或 ModelScope 式异步 */
+  apiMode?: CloudSelfApiMode
 }
 
 const KEY_LIST = 'flowid.cloud.self.presets.v1'
@@ -44,22 +50,28 @@ export function hasOfficialCloudBaseUrl(providerId: CloudProviderId): boolean {
   return Boolean(getOfficialCloudBaseUrl(providerId))
 }
 
+export function parseCloudSelfApiMode(v: unknown): CloudSelfApiMode {
+  if (v === 'openai' || v === 'async') return v
+  return 'auto'
+}
+
 export function resolveCloudSelfPreset(p: CloudSelfPreset | null): {
   baseUrl: string
   apiKey: string
   model: string
-  providerId: CloudProviderId
+  apiMode: CloudSelfApiMode
 } | null {
-  if (!p || !p.id || !p.providerId) return null
+  if (!p || !p.id) return null
+  const apiMode = parseCloudSelfApiMode(p.apiMode)
   const src = parseConnectionSource(p.connectionSource)
-  if (src === 'official') {
+  if (src === 'official' && p.providerId) {
     const baseUrl = getOfficialCloudBaseUrl(p.providerId)
     if (!baseUrl) return null
     return {
       baseUrl,
       apiKey: String(p.apiKey || '').trim(),
       model: String(p.model || '').trim(),
-      providerId: p.providerId,
+      apiMode,
     }
   }
   const baseUrl = String(p.baseUrl || '').trim()
@@ -68,7 +80,7 @@ export function resolveCloudSelfPreset(p: CloudSelfPreset | null): {
     baseUrl,
     apiKey: String(p.apiKey || '').trim(),
     model: String(p.model || '').trim(),
-    providerId: p.providerId,
+    apiMode,
   }
 }
 
@@ -88,10 +100,11 @@ function safeParseList(raw: string | null): CloudSelfPreset[] {
         createdAtMs: Number((p as any)?.createdAtMs || 0),
         updatedAtMs: Number((p as any)?.updatedAtMs || 0),
         connectionSource: parseConnectionSource((p as any)?.connectionSource),
+        apiMode: parseCloudSelfApiMode((p as any)?.apiMode),
       }))
       .filter((p) => {
-        if (!p.id || !p.providerId) return false
-        if (p.connectionSource === 'official') {
+        if (!p.id) return false
+        if (p.connectionSource === 'official' && p.providerId) {
           return Boolean(p.model && p.apiKey && getOfficialCloudBaseUrl(p.providerId))
         }
         return Boolean(p.baseUrl || p.apiKey || p.model)
@@ -141,16 +154,18 @@ export function upsertCloudSelfPreset(
           model: '',
           createdAtMs: patch.createdAtMs || now,
           updatedAtMs: now,
+          apiMode: 'auto',
         }
   const src = parseConnectionSource((patch as any).connectionSource ?? base.connectionSource)
   const merged: CloudSelfPreset = {
     ...base,
     nodeKind: String(patch.nodeKind || ''),
-    providerId: patch.providerId,
+    providerId: patch.providerId ?? base.providerId,
     baseUrl: src === 'official' ? '' : String(patch.baseUrl || ''),
     apiKey: String(patch.apiKey || ''),
     model: String(patch.model || ''),
     connectionSource: src,
+    apiMode: parseCloudSelfApiMode((patch as any).apiMode ?? base.apiMode),
     updatedAtMs: now,
   }
   const next = idx >= 0 ? list.map((x, i) => (i === idx ? merged : x)) : [merged, ...list]
@@ -204,7 +219,12 @@ export function getActiveCloudSelfPreset(): CloudSelfPreset | null {
 /**
  * 与画布执行逻辑一致：按当前「使用」的自助预设 + 节点类型，解析出 model / baseUrl / apiKey。
  */
-export function getActiveCloudSelfDefaultsForNodeKind(nodeKind: string): { model: string; baseUrl: string; apiKey: string } {
+export function getActiveCloudSelfDefaultsForNodeKind(nodeKind: string): {
+  model: string
+  baseUrl: string
+  apiKey: string
+  apiMode: CloudSelfApiMode
+} {
   const list = loadCloudSelfPresets()
   const activeId = String(loadActiveCloudSelfPresetId() || '').trim()
   const byNodeKind = list.filter((x) => {
@@ -218,7 +238,7 @@ export function getActiveCloudSelfDefaultsForNodeKind(nodeKind: string): { model
     list[0] ||
     null
   const r = resolveCloudSelfPreset(hit)
-  if (!r) return { model: '', baseUrl: '', apiKey: '' }
-  return { model: r.model, baseUrl: r.baseUrl, apiKey: r.apiKey }
+  if (!r) return { model: '', baseUrl: '', apiKey: '', apiMode: 'auto' }
+  return { model: r.model, baseUrl: r.baseUrl, apiKey: r.apiKey, apiMode: r.apiMode }
 }
 

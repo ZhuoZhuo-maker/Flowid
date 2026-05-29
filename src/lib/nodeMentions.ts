@@ -206,7 +206,10 @@ type ResolvedVisualMentionWithUrl = {
   ref: ParsedMentionRef
   node: Node<StudioNodeData>
   url: string
+  assetId?: string
 }
+
+export type MentionImageResolvedEntry = { url: string; assetId: string }
 
 /**
  * 按默认标题中的序号升序排列；无序号标题排在有序号之后，同组内按原文中 `@` 出现位置。
@@ -256,8 +259,34 @@ function collectResolvedVisualMentionsWithUrl(
     const d = hit.data as ImageNodeData
     const src = String(d.src || '').trim()
     const refsList = d.referenceImageSources?.filter(Boolean) ?? []
-    const url = src || refsList[0]
-    if (url) out.push({ ref, node: hit, url })
+    const url = src || refsList[0] || ''
+    const assetId = String(d.srcAssetId || '').trim()
+    if (url || assetId) out.push({ ref, node: hit, url, assetId: assetId || undefined })
+  }
+  return out
+}
+
+/**
+ * 从 @ 引用收集图片/全景 URL 与 assetId（顺序与 `collectMentionImageSources` 一致）。
+ */
+export function collectMentionImageResolvedEntries(
+  text: string,
+  nodes: Array<Node<StudioNodeData>>,
+  currentNodeId?: string,
+  edges?: Edge[],
+): MentionImageResolvedEntry[] {
+  const entries = sortMentionsByDefaultTitleIndex(
+    collectResolvedVisualMentionsWithUrl(text, nodes, currentNodeId, undefined, edges),
+  )
+  const out: MentionImageResolvedEntry[] = []
+  const seen = new Set<string>()
+  for (const e of entries) {
+    const url = String(e.url || '').trim()
+    const assetId = String(e.assetId || '').trim()
+    const key = url || (assetId ? `asset:${assetId}` : '')
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    out.push({ url, assetId })
   }
   return out
 }
@@ -283,7 +312,7 @@ export function resolveMentionRefToNode(
   if (ref.nodeId) {
     const hit = nodes.find((n) => n.id === ref.nodeId)
     if (hit && nodeOk(hit)) return hit
-    return undefined
+    /** uuid 失效（复制/重建节点后）：回退到标题匹配，避免 @ 无法展开。 */
   }
 
   const titleToNode = new Map<string, Node<StudioNodeData>>()
@@ -346,9 +375,9 @@ export function collectMentionImageSources(
   /** 有边时：无 uuid 的 @ 仅在上游祖先节点中解析 */
   edges?: Edge[],
 ): string[] {
-  const entries = collectResolvedVisualMentionsWithUrl(text, nodes, currentNodeId, undefined, edges)
-  const urls = entries.map((e) => e.url)
-  return Array.from(new Set(urls))
+  return collectMentionImageResolvedEntries(text, nodes, currentNodeId, edges)
+    .map((e) => e.url)
+    .filter(Boolean)
 }
 
 export type MentionAudioResolvedEntry = { url: string; assetId: string }
@@ -357,6 +386,35 @@ export type MentionAudioResolvedEntry = { url: string; assetId: string }
  * 从 @ 引用收集「配音 / 音乐」节点的主音频（原文出现顺序，按 URL 去重保序）。
  * 带上 `srcAssetId`，便于 `blob:` 失效后从本地资产恢复（与图片 @ 引用一致）。
  */
+/**
+ * 与视频节点有连线的「配音 / 音乐」节点主音频（数字人 LTX 等：除 @ 外也支持只拉线不传 @）。
+ */
+export function collectInboundAudioResolvedEntries(
+  hostNodeId: string,
+  edges: Edge[] | undefined,
+  allNodes: Array<Node<StudioNodeData>>,
+): MentionAudioResolvedEntry[] {
+  if (!hostNodeId || !edges?.length || !allNodes.length) return []
+  const out: MentionAudioResolvedEntry[] = []
+  const seen = new Set<string>()
+  for (const e of edges) {
+    let sid: string | undefined
+    if (e.target === hostNodeId) sid = e.source
+    else if (e.source === hostNodeId) sid = e.target
+    if (!sid) continue
+    const hit = allNodes.find((x) => x.id === sid)
+    if (!hit) continue
+    const k = hit.data.kind
+    if (k !== 'audio' && k !== 'music') continue
+    const u = String((hit.data as { src?: string }).src || '').trim()
+    const assetId = String((hit.data as { srcAssetId?: string }).srcAssetId || '').trim()
+    if (!u || seen.has(u)) continue
+    seen.add(u)
+    out.push({ url: u, assetId })
+  }
+  return out
+}
+
 export function collectMentionAudioResolvedEntries(
   text: string,
   nodes: Array<Node<StudioNodeData>>,
@@ -392,6 +450,37 @@ export function collectMentionAudioSources(
   edges?: Edge[],
 ): string[] {
   return collectMentionAudioResolvedEntries(text, nodes, currentNodeId, edges).map((e) => e.url)
+}
+
+export type MentionVideoResolvedEntry = { url: string; assetId: string }
+
+/**
+ * 从 @ 引用收集「视频」节点的主视频（原文出现顺序，按 URL 去重保序）。
+ * 带上 `srcAssetId`，便于 `blob:` 失效后从本地资产恢复。
+ */
+export function collectMentionVideoResolvedEntries(
+  text: string,
+  nodes: Array<Node<StudioNodeData>>,
+  currentNodeId?: string,
+  edges?: Edge[],
+): MentionVideoResolvedEntry[] {
+  const restrict =
+    currentNodeId && edges?.length ? collectUpstreamNodeIds(currentNodeId, edges) : undefined
+  const refs = parseMentionRefs(text)
+  const out: MentionVideoResolvedEntry[] = []
+  const seen = new Set<string>()
+  for (const ref of refs) {
+    const hit = resolveMentionRefToNode(ref, nodes, currentNodeId, undefined, restrict)
+    if (!hit) continue
+    if (hit.data.kind !== 'video') continue
+    const u = String((hit.data as { src?: string }).src || '').trim()
+    const assetId = String((hit.data as { srcAssetId?: string }).srcAssetId || '').trim()
+    const dedupeKey = u || `asset:${assetId}`
+    if (!dedupeKey || dedupeKey === 'asset:' || seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+    out.push({ url: u, assetId })
+  }
+  return out
 }
 
 /**

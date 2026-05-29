@@ -1,12 +1,14 @@
-﻿import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { Handle, Position, type NodeProps } from '@xyflow/react'
 import type { Node } from '@xyflow/react'
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { compactValidResultThumbnails } from '../../lib/nodeResultThumbnails'
 import { useCanvasActions } from '../../context/CanvasContext'
 import type { VideoNodeData } from '../../types'
 import { parseFlowidMaterialDragPayload, setFlowidMaterialDragData } from '../../lib/materialLibrary'
 import { NodeChrome } from './NodeChrome'
 import { NodeOutputThumbnailStrip } from './NodeOutputThumbnailStrip'
 import { VIDEO_IN_UNIFIED } from '../../lib/videoNodeInports'
+import { STUDIO_FLOW_SOURCE_HANDLE_ID } from '../../lib/studioFlowHandles'
 
 /**
  * 视频节点：成片或片段占位，后续可接预览播放器与关键帧。
@@ -42,7 +44,25 @@ export function VideoNode({
     return null
   }, [])
 
-  const stripItems = useMemo(() => data.resultThumbnails ?? [], [data.resultThumbnails])
+  const stripItems = useMemo(
+    () => compactValidResultThumbnails(data.resultThumbnails),
+    [data.resultThumbnails],
+  )
+
+  /** 持久化数据里剔除失效空槽，避免输出条计数与黑块残留 */
+  useEffect(() => {
+    const raw = data.resultThumbnails
+    if (!raw?.length) return
+    const compacted = compactValidResultThumbnails(raw)
+    const same =
+      compacted.length === raw.length &&
+      compacted.every((t, i) => t.id === raw[i]?.id && t.url === raw[i]?.url)
+    if (same) return
+    updateNodeData(id, {
+      kind: 'video',
+      resultThumbnails: compacted.length ? compacted : undefined,
+    })
+  }, [id, data.resultThumbnails, updateNodeData])
 
   return (
     <>
@@ -182,7 +202,12 @@ export function VideoNode({
           />
         </div>
       </NodeChrome>
-      <Handle type="source" position={Position.Right} className="studio-handle" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id={STUDIO_FLOW_SOURCE_HANDLE_ID}
+        className="studio-handle"
+      />
     </>
   )
 }

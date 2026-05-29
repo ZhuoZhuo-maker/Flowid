@@ -29,11 +29,21 @@ server/inspiration-market/*.prompt.txt
 # 随包图库导出目录（体积大，见 public/flowid-bundled/README.txt）
 public/flowid-bundled/
 
-# 本地打包用的后端地址（勿提交）
-pack-flowid-user-config.bat
 data/*.db
 data/*.db-shm
 data/*.db-wal
+
+# Auth 开发库（含账号哈希；首次 npm run auth:dev 会从 example 或自动创建）
+server/auth-db.json
+
+# PyInstaller 中间产物
+build/pyi_work/
+
+# 本地临时工作流导入目录（非随包 cloud-workflows）
+workflows/
+
+# 管理端误导出的授权码 CSV（勿提交）
+licenses_export_*.csv
 
 # Editor directories and files
 .vscode/*

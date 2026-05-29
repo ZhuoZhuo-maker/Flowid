@@ -1,6 +1,7 @@
 import type { ProjectSnapshot } from '../types'
 import { createDefaultProject } from '../data/defaultProject'
 import { LEGACY_LOCAL_STORAGE_KEYS } from './legacyLocalStorageKeys'
+import { migrateStudioFlowHandleIds } from './studioFlowHandles'
 import { migrateVideoTargetEdges } from './videoNodeInports'
 
 const STORAGE_KEY = 'flowid.project.v1'
@@ -93,6 +94,20 @@ function normalizeSnapshotNodeSize(snapshot: ProjectSnapshot): ProjectSnapshot {
 }
 
 /**
+ * 工程边集迁移入口：视频统一入边桩 + 图/文等节点的左右 Handle id（与读档后节点组件一致）。
+ */
+export function migrateProjectEdges(
+  nodes: ProjectSnapshot['nodes'],
+  edges: ProjectSnapshot['edges'],
+): ProjectSnapshot['edges'] {
+  return migrateStudioFlowHandleIds(nodes, migrateVideoTargetEdges(nodes, edges))
+}
+
+function snapshotWithMigratedEdges(snapshot: ProjectSnapshot): ProjectSnapshot {
+  return { ...snapshot, edges: migrateProjectEdges(snapshot.nodes, snapshot.edges) }
+}
+
+/**
  * 从 localStorage 读取工程；失败或不存在则返回默认示例。
  */
 export function loadStoredProject(): ProjectSnapshot {
@@ -107,22 +122,22 @@ export function loadStoredProject(): ProjectSnapshot {
         raw = legacy
       }
     }
-    if (!raw) return createDefaultProject()
+    if (!raw) return snapshotWithMigratedEdges(createDefaultProject())
     const parsed = JSON.parse(raw) as ProjectSnapshot
     if (parsed?.version !== 1 || !Array.isArray(parsed.nodes)) {
-      return createDefaultProject()
+      return snapshotWithMigratedEdges(createDefaultProject())
     }
     const normalized = normalizeSnapshotNodeSize(parsed)
     const safe = sanitizeSnapshotForRuntime(normalized)
     if (!safe.nodes.length) {
-      return createDefaultProject()
+      return snapshotWithMigratedEdges(createDefaultProject())
     }
     return {
       ...safe,
-      edges: migrateVideoTargetEdges(safe.nodes, safe.edges),
+      edges: migrateProjectEdges(safe.nodes, safe.edges),
     }
   } catch {
-    return createDefaultProject()
+    return snapshotWithMigratedEdges(createDefaultProject())
   }
 }
 
@@ -158,6 +173,6 @@ export function parseProjectFile(text: string): ProjectSnapshot {
   }
   return {
     ...safe,
-    edges: migrateVideoTargetEdges(safe.nodes, safe.edges),
+    edges: migrateProjectEdges(safe.nodes, safe.edges),
   }
 }

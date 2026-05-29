@@ -1,19 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import {
-  getLicenseNoticeMessage,
-  loadLocalLicenseSnapshot,
-  saveLocalLicenseSnapshot,
-} from './lib/license'
 import { Plus, Search, ChevronDown, Trash2, ImageUp } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'
 import { StudioApp } from './components/StudioApp'
 import { FlowidMark } from './components/FlowidMark'
 import { PresetTemplateCoverImage } from './components/PresetTemplateCoverImage'
+import { PresetTemplateImportControls } from './components/PresetTemplateImportControls'
 import { loadLocalDiskPathsSettings } from './lib/localDiskPathsSettings'
 import { applyDesktopDefaultFlowidZyPathsIfNeeded } from './lib/applyDesktopDefaultLocalPaths'
+import { requestComfyWorkflowApiBackupOnIdle } from './lib/comfyWorkflowApiBackup'
 import { parseProjectFile } from './lib/persistence'
-import { computeAccessState, loadLicenseSnapshotV2 } from './lib/licenseAccess'
-import { openStudioSettingsDeviceActivation } from './lib/studioSettingsOpen'
 import {
   USER_AGREEMENT_TEXT,
   USER_AGREEMENT_VERSION,
@@ -23,13 +18,14 @@ import { persistUserAgreementExeStamp } from './lib/userAgreementExeStamp'
 import './App.css'
 import {
   buildPresetTemplateCategoryTabs,
-  fetchPresetTemplatesFromServer,
-  fetchPresetTemplateWorkflowText,
+  fetchPresetTemplateCatalog,
+  loadPresetTemplateSnapshot,
   makePresetThumbDataUri,
   type PresetTemplate,
   type PresetTemplateCatalogResult,
 } from './lib/templateCatalog'
 import { isLocalGalleryBundleEnabled } from './lib/localGalleryBundle'
+import { deleteUserPresetTemplate } from './lib/userPresetTemplateStore'
 import { imageMimeTypeFromPath } from './lib/materialLibrary'
 import {
   SYSTEM_PROMPT_COVER_EXT_TRIES,
@@ -55,7 +51,12 @@ function isDesktopCoverIo(): boolean {
 const COVER_UPLOAD_TRIGGER_CLASS =
   'flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-white/10 bg-black/60 text-white/65 backdrop-blur hover:border-orange-400/45 hover:bg-orange-600/22 hover:text-white transition-colors disabled:opacity-40'
 
-type View = 'archive' | 'templates' | 'inspiration' | 'inspiration-detail' | 'workspace'
+type View =
+  | 'archive'
+  | 'templates'
+  | 'inspiration'
+  | 'inspiration-detail'
+  | 'workspace'
 
 /** 刷新 / 重载后恢复当前分区，避免「在工作区点生成 → 整页重载 → 又回项目档案」的错觉 */
 const VIEW_SESSION_KEY = 'flowid.app.activeView.v1'
@@ -69,7 +70,9 @@ const VALID_VIEWS = new Set<View>([
 
 function readInitialView(): View {
   try {
-    const v = sessionStorage.getItem(VIEW_SESSION_KEY) as View | null
+    const raw = sessionStorage.getItem(VIEW_SESSION_KEY)
+    if (raw === 'agent-tools' || raw === 'agent-tools-detail') return 'archive'
+    const v = raw as View | null
     if (!v || !VALID_VIEWS.has(v)) return 'archive'
     /** 详情 id 未入 session，重开标签后无法还原详情页 */
     if (v === 'inspiration-detail') return 'inspiration'
@@ -165,13 +168,9 @@ function nextUnnamedProjectDisplayNumber(): number {
 function Navigation({
   activeView,
   setView,
-  accessState,
-  onOpenLicense,
 }: {
   activeView: View
   setView: (v: View) => void
-  accessState: 'unauthorized' | 'valid' | 'expired' | 'tampered_need_verify'
-  onOpenLicense: () => void
 }) {
   return (
     <header className="fixed top-6 inset-x-8 h-14 flex items-center justify-between z-50 pointer-events-none">
@@ -217,20 +216,6 @@ function Navigation({
         </div>
       </div>
 
-      <div className="flex items-center gap-3 pointer-events-auto">
-        <button
-          className="bg-white text-black font-black text-[14px] uppercase tracking-widest px-8 py-2.5 rounded-full hover:bg-orange-500 hover:text-white transition-all shadow-xl"
-          onClick={onOpenLicense}
-        >
-          {accessState === 'valid'
-            ? '会员已激活'
-            : accessState === 'expired'
-              ? '授权已过期'
-              : accessState === 'tampered_need_verify'
-                ? '授权需校验'
-                : '输入授权码'}
-        </button>
-      </div>
     </header>
   )
 }
@@ -424,12 +409,17 @@ function TemplateCard({
   onInvoke,
   coverUploadBusy,
   onUploadCover,
+  onDeleteUserLocal,
+  deleteUserLocalBusy,
 }: {
   template: Template
   busy: boolean
   onInvoke: (t: Template) => void | Promise<void>
   coverUploadBusy?: boolean
   onUploadCover?: () => void
+  /** 仅本机 IndexedDB 预设可删 */
+  onDeleteUserLocal?: (t: Template) => void | Promise<void>
+  deleteUserLocalBusy?: boolean
 }) {
   return (
     <motion.div
@@ -446,10 +436,15 @@ function TemplateCard({
           alt={template.name}
           className="w-full h-full object-cover grayscale opacity-50 group-hover:opacity-100 group-hover:grayscale-0 transition-all duration-1000 group-hover:scale-110 pointer-events-none"
         />
-        <div className="absolute top-4 left-4 z-10">
+        <div className="absolute top-4 left-4 z-10 flex flex-col gap-1.5">
           <div className="bg-black/60 backdrop-blur px-3 py-1 border border-white/10 rounded text-[13px] font-mono uppercase tracking-widest text-orange-500">
             {template.category}
           </div>
+          {template.isUserLocal ? (
+            <div className="bg-sky-950/80 backdrop-blur px-3 py-1 border border-sky-500/30 rounded text-[11px] font-mono uppercase tracking-widest text-sky-300">
+              本机预设
+            </div>
+          ) : null}
         </div>
         <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
           {onUploadCover ? (
@@ -483,12 +478,24 @@ function TemplateCard({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="w-full py-3 bg-white/5 hover:bg-orange-600 hover:text-white transition-all text-[14px] font-black uppercase tracking-widest border border-white/10 group-hover:border-orange-500 disabled:opacity-50 disabled:pointer-events-none"
-            disabled={busy}
+            className="min-w-0 flex-1 py-3 bg-white/5 hover:bg-orange-600 hover:text-white transition-all text-[14px] font-black uppercase tracking-widest border border-white/10 group-hover:border-orange-500 disabled:opacity-50 disabled:pointer-events-none"
+            disabled={busy || deleteUserLocalBusy}
             onClick={() => void onInvoke(template)}
           >
             {busy ? '加载中…' : '调用预设'}
           </button>
+          {template.isUserLocal && onDeleteUserLocal ? (
+            <button
+              type="button"
+              className="shrink-0 flex h-[46px] w-[46px] items-center justify-center rounded border border-red-500/35 bg-red-950/40 text-red-300 transition-colors hover:bg-red-600/30 hover:text-white disabled:opacity-50"
+              disabled={busy || deleteUserLocalBusy}
+              title="删除本机预设"
+              aria-label="删除本机预设"
+              onClick={() => void onDeleteUserLocal(template)}
+            >
+              <Trash2 className="h-[18px] w-[18px]" strokeWidth={2} />
+            </button>
+          ) : null}
         </div>
       </div>
     </motion.div>
@@ -549,7 +556,9 @@ function App() {
     }
   }, [view])
   useEffect(() => {
-    void applyDesktopDefaultFlowidZyPathsIfNeeded()
+    void applyDesktopDefaultFlowidZyPathsIfNeeded().then(() => {
+      requestComfyWorkflowApiBackupOnIdle('app-start')
+    })
   }, [])
   useEffect(() => {
     if (view === 'inspiration-detail' && !inspirationDetailId) {
@@ -562,12 +571,12 @@ function App() {
   const [templatePage, setTemplatePage] = useState(0)
   const [projects, setProjects] = useState<Project[]>(MOCK_PROJECTS)
   const [projectsLoading, setProjectsLoading] = useState(false)
-  const [licenseSnap, setLicenseSnap] = useState(() => loadLicenseSnapshotV2())
   const [templateCatalog, setTemplateCatalog] = useState<PresetTemplateCatalogResult | null>(null)
   const [templateCatalogLoading, setTemplateCatalogLoading] = useState(true)
   const [templateInvokeBusyId, setTemplateInvokeBusyId] = useState<string | null>(null)
   const [coverUploadBusyId, setCoverUploadBusyId] = useState<string | null>(null)
   const [presetTemplateCoverBusyId, setPresetTemplateCoverBusyId] = useState<string | null>(null)
+  const [userPresetDeleteBusyId, setUserPresetDeleteBusyId] = useState<string | null>(null)
   const projectThumbBlobUrlsRef = useRef<string[]>([])
   const projectCoverFileInputRef = useRef<HTMLInputElement>(null)
   const projectCoverPickIdRef = useRef<string | null>(null)
@@ -575,13 +584,10 @@ function App() {
   const presetTemplateCoverFileInputRef = useRef<HTMLInputElement>(null)
   const presetTemplateCoverPickRef = useRef<{ id: string; name: string } | null>(null)
 
-  const accessState = computeAccessState(licenseSnap)
-
   const openTemplateAsProject = useCallback(async (template: Template) => {
     setTemplateInvokeBusyId(template.id)
     try {
-      const text = await fetchPresetTemplateWorkflowText(template.id)
-      const snap = parseProjectFile(text)
+      const snap = await loadPresetTemplateSnapshot(template.id)
       window.dispatchEvent(
         new CustomEvent('flowid:archive-open-project', {
           detail: {
@@ -597,13 +603,11 @@ function App() {
       setView('workspace')
     } catch (e) {
       const msg = String(e instanceof Error ? e.message : e)
-      if (msg === 'MEMBER_ONLY') {
-        window.alert('该模板为会员内容，请在设置 → 授权码中完成授权。')
-        setView('workspace')
-        openStudioSettingsDeviceActivation()
-        return
-      }
-      window.alert(msg)
+      window.alert(
+        template.isUserLocal
+          ? `加载本机预设失败：${msg}`
+          : msg,
+      )
     } finally {
       setTemplateInvokeBusyId(null)
     }
@@ -612,12 +616,32 @@ function App() {
   const refreshTemplateCatalog = useCallback(async () => {
     setTemplateCatalogLoading(true)
     try {
-      const r = await fetchPresetTemplatesFromServer()
+      const r = await fetchPresetTemplateCatalog()
       setTemplateCatalog(r)
     } finally {
       setTemplateCatalogLoading(false)
     }
   }, [])
+
+  const deleteUserLocalPresetTemplate = useCallback(
+    async (template: Template) => {
+      if (!template.isUserLocal) return
+      if (!window.confirm(`确定删除本机预设「${template.name}」？删除后需重新导入 zip 或从项目保存。`)) {
+        return
+      }
+      setUserPresetDeleteBusyId(template.id)
+      try {
+        await deleteUserPresetTemplate(template.id)
+        await refreshTemplateCatalog()
+      } catch (e) {
+        const msg = String(e instanceof Error ? e.message : e)
+        window.alert(`删除失败：${msg}`)
+      } finally {
+        setUserPresetDeleteBusyId(null)
+      }
+    },
+    [refreshTemplateCatalog],
+  )
 
   const baseTemplateSource = useMemo(() => {
     return templateCatalog?.ok ? templateCatalog.items : []
@@ -666,12 +690,9 @@ function App() {
   }, [refreshTemplateCatalog])
 
   useEffect(() => {
-    const onChanged = () => {
-      setLicenseSnap(loadLicenseSnapshotV2())
-      void refreshTemplateCatalog()
-    }
-    window.addEventListener('flowid:license-changed', onChanged as EventListener)
-    return () => window.removeEventListener('flowid:license-changed', onChanged as EventListener)
+    const onUserPresets = () => void refreshTemplateCatalog()
+    window.addEventListener('flowid:user-presets-changed', onUserPresets as EventListener)
+    return () => window.removeEventListener('flowid:user-presets-changed', onUserPresets as EventListener)
   }, [refreshTemplateCatalog])
 
   useEffect(() => {
@@ -700,33 +721,6 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [])
-
-  useEffect(() => {
-    const onLicenseChanged = () => {
-      void (async () => {
-        const remote = await fetchRemoteUserAgreement()
-        if (remote) {
-          setAgreementDisplay({
-            version: remote.version,
-            text: remote.text,
-            updatedAtMs: remote.updatedAtMs,
-          })
-          const v2 = readAcceptedAgreementV2Ms()
-          const need = v2 == null || remote.updatedAtMs > v2
-          setAgreementAccepted(!need)
-          return
-        }
-        setAgreementDisplay({
-          version: USER_AGREEMENT_VERSION,
-          text: USER_AGREEMENT_TEXT,
-          updatedAtMs: 0,
-        })
-        setAgreementAccepted(readAcceptedAgreementV1Ok())
-      })()
-    }
-    window.addEventListener('flowid:license-changed', onLicenseChanged as EventListener)
-    return () => window.removeEventListener('flowid:license-changed', onLicenseChanged as EventListener)
   }, [])
 
   const refreshProjectsFromDisk = async () => {
@@ -1008,17 +1002,6 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    const snapshot = loadLocalLicenseSnapshot()
-    const notice = getLicenseNoticeMessage(snapshot)
-    if (!notice || !snapshot) return
-    window.alert(notice)
-    saveLocalLicenseSnapshot({
-      ...snapshot,
-      lastNoticeAtMs: Date.now(),
-    })
-  }, [])
-
   return (
     <>
       <input
@@ -1128,8 +1111,18 @@ function App() {
         </div>
       ) : null}
 
-      <div className="fixed inset-0" style={{ display: view === 'workspace' ? 'block' : 'none' }}>
-        <StudioApp onGoHome={() => setView('archive')} />
+      <div
+        className="fixed inset-0 z-0"
+        style={{
+          visibility: view === 'workspace' ? 'visible' : 'hidden',
+          pointerEvents: view === 'workspace' ? 'auto' : 'none',
+        }}
+        aria-hidden={view !== 'workspace'}
+      >
+        <StudioApp
+          workspaceActive={view === 'workspace'}
+          onGoHome={() => setView('archive')}
+        />
       </div>
 
       <div
@@ -1145,15 +1138,7 @@ function App() {
         }}
       />
 
-      <Navigation
-        activeView={view}
-        setView={setView}
-        accessState={accessState}
-        onOpenLicense={() => {
-          setView('workspace')
-          openStudioSettingsDeviceActivation()
-        }}
-      />
+      <Navigation activeView={view} setView={setView} />
 
       {view === 'inspiration-detail' && inspirationDetailId ? (
         <InspirationMarketDetailPage
@@ -1348,6 +1333,21 @@ function App() {
                 </h1>
               </div>
 
+              <div className="mb-8 flex flex-wrap items-center gap-4">
+                <PresetTemplateImportControls
+                  onImported={(info) => {
+                    void refreshTemplateCatalog()
+                    window.alert(
+                      `已导入「${info.name}」。请在下方找到左上角标有「本机预设」的卡片，再点「调用预设」。`,
+                    )
+                  }}
+                />
+                <p className="m-0 text-[12px] text-white/45 max-w-xl">
+                  可将项目保存为「我的预设」，或导入 <code className="text-orange-400/90">.flowid-preset.zip</code>{' '}
+                  后直接出现在下方列表（本机 IndexedDB，无需 Auth 上架）。
+                </p>
+              </div>
+
               <div className="flex gap-4 mb-16 overflow-x-auto pb-4">
                 {templateCategoryOptions.map((category) => (
                   <button
@@ -1366,7 +1366,11 @@ function App() {
 
               {templateCatalogLoading ? (
                 <div className="rounded-2xl border border-white/10 bg-white/5 px-8 py-16 text-center text-white/55">
-                  <p className="text-[15px] font-bold tracking-wide">正在从后端加载预设模板…</p>
+                  <p className="text-[15px] font-bold tracking-wide">
+                    {isLocalGalleryBundleEnabled()
+                      ? '正在从随包本地画廊加载预设模板…'
+                      : '正在从后端加载预设模板…'}
+                  </p>
                 </div>
               ) : templateCatalog && !templateCatalog.ok ? (
                 <div className="rounded-2xl border border-orange-500/25 bg-orange-950/20 px-8 py-12 text-left">
@@ -1429,6 +1433,10 @@ function App() {
                           ? () => requestPresetTemplateCoverUpload(t)
                           : undefined
                       }
+                      onDeleteUserLocal={
+                        t.isUserLocal ? (item) => void deleteUserLocalPresetTemplate(item) : undefined
+                      }
+                      deleteUserLocalBusy={userPresetDeleteBusyId === t.id}
                     />
                   ))}
                 </div>

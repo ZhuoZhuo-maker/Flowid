@@ -9,7 +9,6 @@ export default defineConfig([
   globalIgnores([
     'dist',
     'src/data/sensitiveLexiconOpenSource.generated.ts',
-    'src/backend/**',
     'src/frontend/**',
   ]),
   {

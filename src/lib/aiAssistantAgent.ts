@@ -60,7 +60,8 @@ export function getDefaultAiAssistantConfig(): AiAssistantConfig {
     provider: 'ollama',
     endpoint: 'http://127.0.0.1:11434/v1/chat/completions',
     apiKey: '',
-    model: 'qwen3:14b',
+    /** 不设具体模型名：避免 UI 显示成「已配置 qwen」而用户从未填写过；请在设置里填写或选预设后「使用」。 */
+    model: '',
     ttsEnabled: false,
     ttsEndpoint: 'http://127.0.0.1:7860/',
     ttsApiKey: '',

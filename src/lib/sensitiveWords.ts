@@ -13,10 +13,40 @@ import {
   replaceSensitiveWordsByLevelSync,
   replaceSensitiveWordsSync,
 } from './sensitiveEngine/engineFacade'
-import type { SensitiveWord } from './sensitiveEngine/types'
+import type { SensitiveCategory, SensitiveWord } from './sensitiveEngine/types'
+import { isSensitiveFilterEnabled } from './sensitiveFilterConfig'
 
 export type { SensitiveCategory, SensitiveLevel, SensitiveWord } from './sensitiveEngine/types'
 
+const SENSITIVE_CATEGORY_LABEL: Record<SensitiveCategory, string> = {
+  political: '政治',
+  porn: '色情',
+  violence: '暴力',
+  illegal: '违法',
+  ad: '广告',
+  other: '其他',
+}
+
+const SENSITIVE_REASON_HIT_MARKER = '\n\n命中：'
+
+/** 拼接进 `canSend` 的 `reason`，便于提示文案列出命中词条 */
+function formatSensitiveHitDetail(words: readonly SensitiveWord[], level: 'block' | 'warning', max = 16): string {
+  const subset = words.filter((w) => w.level === level)
+  const seen = new Set<string>()
+  const parts: string[] = []
+  for (const w of subset) {
+    if (seen.has(w.word)) continue
+    seen.add(w.word)
+    const lab = SENSITIVE_CATEGORY_LABEL[w.category] ?? '其他'
+    parts.push(`${w.word}（${lab}）`)
+  }
+  if (!parts.length) return ''
+  const head = parts.slice(0, max)
+  const tail = parts.length > max ? ` …等共 ${parts.length} 条` : ''
+  return `${SENSITIVE_REASON_HIT_MARKER}${head.join('、')}${tail}`
+}
+
+export { isSensitiveFilterEnabled } from './sensitiveFilterConfig'
 export { awaitSensitiveLexiconSettled, ensureLexiconLoading, isLexiconReady } from './sensitiveEngine/engineFacade'
 
 /**
@@ -25,6 +55,14 @@ export { awaitSensitiveLexiconSettled, ensureLexiconLoading, isLexiconReady } fr
  */
 export const sensitiveWordsDB: typeof SENSITIVE_CORE = SENSITIVE_CORE
 
+const CLEAN_SENSITIVE_RESULT = {
+  hasSensitive: false,
+  words: [] as SensitiveWord[],
+  level: 'clean' as const,
+  blockedCount: 0,
+  warningCount: 0,
+}
+
 export function checkSensitiveWords(text: string): {
   hasSensitive: boolean
   words: SensitiveWord[]
@@ -32,11 +70,13 @@ export function checkSensitiveWords(text: string): {
   blockedCount: number
   warningCount: number
 } {
+  if (!isSensitiveFilterEnabled()) return { ...CLEAN_SENSITIVE_RESULT }
   ensureLexiconLoading()
   return checkSensitiveWordsSync(text)
 }
 
 export function replaceSensitiveWords(text: string, replaceChar: string = '*'): string {
+  if (!isSensitiveFilterEnabled()) return text
   ensureLexiconLoading()
   return replaceSensitiveWordsSync(text, replaceChar)
 }
@@ -46,6 +86,7 @@ export function replaceSensitiveWordsByLevel(
   levels: Array<'block' | 'warning'>,
   replaceChar: string = '*',
 ): string {
+  if (!isSensitiveFilterEnabled()) return text
   ensureLexiconLoading()
   return replaceSensitiveWordsByLevelSync(text, levels, replaceChar)
 }
@@ -58,20 +99,23 @@ export function canSend(
   reason?: string
   blockedCount?: number
 } {
+  if (!isSensitiveFilterEnabled()) return { allowed: true }
   const result = checkSensitiveWords(text)
 
   if (result.level === 'block') {
+    const detail = formatSensitiveHitDetail(result.words, 'block')
     return {
       allowed: false,
-      reason: `消息包含 ${result.blockedCount} 个敏感词，已被拦截`,
+      reason: `消息包含 ${result.blockedCount} 个敏感词，已被拦截。${detail}`.trimEnd(),
       blockedCount: result.blockedCount,
     }
   }
 
   if (result.level === 'warning' && blockWarning) {
+    const detail = formatSensitiveHitDetail(result.words, 'warning')
     return {
       allowed: false,
-      reason: `消息包含 ${result.warningCount} 个敏感词（警告级），提交时已拦截，请修改后再执行`,
+      reason: `消息包含 ${result.warningCount} 个敏感词（警告级），提交时已拦截，请修改后再执行。${detail}`.trimEnd(),
       blockedCount: 0,
     }
   }
@@ -181,6 +225,7 @@ export function sanitizeStudioNodeDataUserFields(data: StudioNodeData): Partial<
 }
 
 export function applySensitiveFilterToNodeDataPatch(patch: Partial<StudioNodeData>): Partial<StudioNodeData> {
+  if (!isSensitiveFilterEnabled()) return patch
   const out: Record<string, unknown> = { ...patch }
   const sf = (v: unknown) =>
     typeof v === 'string' ? replaceSensitiveWordsByLevel(v, ['block']) : v

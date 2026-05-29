@@ -1,6 +1,28 @@
 {
   "prompts": [
     {
+      "id": "95eded8c-70b4-4a8f-91ec-5efd26eeefb7",
+      "name": "商业海报策划",
+      "version": "1.0.2",
+      "category": "生图",
+      "tier": "free",
+      "description": "默认 1 段；多段需用户写明数量。输出不含画幅比例。",
+      "promptFile": "95eded8c-70b4-4a8f-91ec-5efd26eeefb7.system-prompt.txt",
+      "sha256": "0663b1f308c4dae8505f8f3dc28d7aa6f34b7c9bf5e33040cfeee61103d4e86a",
+      "sig": "0c1a40639fa2b4533cee4be463ec33dfd6015eaa8fc75deeebc683b122f020f1"
+    },
+    {
+      "id": "f6f320f7-68a8-4e95-bdad-5f17546ac844",
+      "name": "动态壁纸设计提示词专家",
+      "version": "1.0.0",
+      "category": "生图",
+      "tier": "free",
+      "description": "",
+      "promptFile": "f6f320f7-68a8-4e95-bdad-5f17546ac844.system-prompt.txt",
+      "sha256": "069c06d76a3caab2fee1909f35049874a103b8448a3a4ababf76977013e982c6",
+      "sig": "7f1d9f139bd0ce6584c716d76dffa4ffa805baf783b5d31bd2b74439bed34389"
+    },
+    {
       "id": "7ab625b8-b2cb-4f3b-b0cd-3e0c1ff4193b",
       "name": "角色三视图提示词",
       "version": "1.0.0",
@@ -98,6 +120,72 @@
       "promptFile": "5f101eda-ac3a-46e4-8d94-d46d31a3199e.system-prompt.txt",
       "sha256": "ae0ade53be72b4ca6ca68055d31590facb584381e3d727babb6fd24c50679db1",
       "sig": "ee859e1b3586f822afebb05fc8cfc534ecaa11a8a1887d40f11e33daeaf6bb25"
+    },
+    {
+      "id": "e7b4c291-8d3a-4f5e-b6c2-9a1f0e3d5c7b",
+      "name": "即梦剧集视频提示词（主题+风格）",
+      "version": "1.0.0",
+      "category": "视频",
+      "tier": "free",
+      "description": "输入主题与风格，输出人物设定、场景画质、分段时间轴、音效与运镜，可直接粘贴即梦/Seedance。",
+      "promptFile": "e7b4c291-8d3a-4f5e-b6c2-9a1f0e3d5c7b.system-prompt.txt",
+      "sha256": "c993a6bff7be7596c2eb8b0e12c4e4719af4411aca29bdf0f70b4a36f35ae020",
+      "sig": "a30930089383efa23e2eda6a388f7810050d3a466b45b3e9e8e2b2563e2a1c28"
+    },
+    {
+      "id": "c4a8e291-6d3b-4f2e-a1c0-9e7f5b8d3a2e",
+      "name": "即梦视频反推（五段式）",
+      "version": "1.0.1",
+      "category": "视频",
+      "tier": "free",
+      "description": "视频反推专用：按画面反推五段式；自动对齐源视频时长，分镜末段不超过实测秒数。",
+      "promptFile": "c4a8e291-6d3b-4f2e-a1c0-9e7f5b8d3a2e.system-prompt.txt",
+      "sha256": "ae394c822da4914f3c247ab5c94455eb9a1fe9014386cad099a7b5286783a2ed",
+      "sig": "36d1e5eaa03d99859481e0a3feff4e1e67e9a931d015b6fb12eebdbddccb120d"
+    },
+    {
+      "id": "e8f4a291-7c2d-4b5e-9f0a-3c1d6e8b7f4a",
+      "name": "图片反推·动态壁纸分镜（六秒三段式）",
+      "version": "1.0.1",
+      "category": "生图",
+      "tier": "free",
+      "description": "单图→【全程震撼分镜】【音效与特效】【运镜】；默认 6 秒，可写总时长；图生视频/动态壁纸。分类在「生图」与「分镜」均可从「全部」找到。",
+      "promptFile": "e8f4a291-7c2d-4b5e-9f0a-3c1d6e8b7f4a.system-prompt.txt",
+      "sha256": "d3dc6dc2bd8422da0993a658cb4193a24d59bbb7773edde15d3f4d43ec12a3eb",
+      "sig": "e3e08cc19016a669c67956da2634249e0afe6f869e5a29d874ba6a11b41ece84"
+    },
+    {
+      "id": "d8f1a402-7e2c-4b9a-b3f1-0c8d6e5a4b2c",
+      "name": "图片反推（UI 结构化 JSON）",
+      "version": "1.0.2",
+      "category": "生图",
+      "tier": "free",
+      "description": "图生文反推 UI JSON；禁止 chat 刷屏/伪造 app 名；优先保证 JSON 闭合与 rendering_instructions。",
+      "promptFile": "d8f1a402-7e2c-4b9a-b3f1-0c8d6e5a4b2c.system-prompt.txt",
+      "sha256": "4848555c3404452d7906edf8587d1000e6519ff6ff25e690e54296d2edb4020c",
+      "sig": "30250298f02910f1cd7c857ce5f1ba5bb18b0c2e2e3c38626fc47651620ee22d"
+    },
+    {
+      "id": "e9a3b1c2-5d4f-4e8a-b9c0-1d2e3f4a5b6c",
+      "name": "图片反推（叙事式生图提示词）",
+      "version": "1.0.0",
+      "category": "生图",
+      "tier": "free",
+      "description": "图生文反推为单段中文叙事 prompt；支持 {argument name default} 占位，适合动漫插画/概念稿复刻。",
+      "promptFile": "e9a3b1c2-5d4f-4e8a-b9c0-1d2e3f4a5b6c.system-prompt.txt",
+      "sha256": "a647b1d0ae3eb7bbd0054fefe5c9fd54f7352432c50ffa66cd1a7ce2301bbac6",
+      "sig": "6dd2ec1f9e16f32d00ba56aba323127f20d79c8e841d56a55e5041ac4ee63641"
+    },
+    {
+      "id": "f7c2e891-3a4b-4d5e-b6c7-8d9e0f1a2b3c",
+      "name": "Wan2.2 SVI 分镜提示词（5秒·强动感·### 三路）",
+      "version": "1.0.2",
+      "category": "视频",
+      "tier": "free",
+      "description": "强动感 SVI：0～4 秒 5 条（2+2+1），每段含动作/运镜动词，### 分隔，对应 __PROMPT__ / __PROMPT2__ / __PROMPT3__。",
+      "promptFile": "f7c2e891-3a4b-4d5e-b6c7-8d9e0f1a2b3c.system-prompt.txt",
+      "sha256": "f67703da45b0b439725d744d5899d314bf0e22fb7fc108c21f66970c337b8004",
+      "sig": "bf6370690f203b16b9b22703918f6652de39f5a766ad5f0e4f50b6e996241fbe"
     },
     {
       "id": "4fc50850-153a-4029-b964-2a072dbc81cc",

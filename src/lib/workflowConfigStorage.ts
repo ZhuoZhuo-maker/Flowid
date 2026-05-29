@@ -8,6 +8,7 @@ import type {
   StudioNodeKind,
 } from '../types'
 import { LEGACY_LOCAL_STORAGE_KEYS } from './legacyLocalStorageKeys'
+import { requestComfyWorkflowApiBackupDebounced } from './comfyWorkflowApiBackup'
 
 const STORAGE_KEY = 'flowid.workflow.config.v1'
 
@@ -241,6 +242,7 @@ export function loadWorkflowConfig(): WorkflowConfigSnapshot {
 export function saveWorkflowConfig(snapshot: WorkflowConfigSnapshot) {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot))
+    requestComfyWorkflowApiBackupDebounced('workflow-config-saved')
   } catch (error) {
     console.warn('[Flowid] 保存工作流配置失败（localStorage 配额不足）', error)
   }

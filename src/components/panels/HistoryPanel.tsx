@@ -75,8 +75,23 @@ function resolveMimeByExt(fileName: string): string {
 }
 
 function resolveLocalFilePath(item: HistoryItem): string {
-  // Our disk-mapped history items use id: `output:${file.path}`.
+  // 磁盘扫描写入的历史：id 为 `output:${绝对路径}`
   if (item.id && item.id.startsWith('output:')) return item.id.slice('output:'.length)
+  // 内存历史（如 applyWorkflowResultToNode 写入的镜像 file://）：从 src 还原绝对路径供 readBinaryFile
+  const src = String(item.src || '').trim()
+  if (src.startsWith('file://')) {
+    try {
+      const u = new URL(src)
+      let pathname = decodeURIComponent(u.pathname || '')
+      if (pathname.startsWith('/') && /^\/[a-zA-Z]:\//.test(pathname)) {
+        pathname = pathname.slice(1)
+        return pathname.replace(/\//g, '\\')
+      }
+      return pathname
+    } catch {
+      return ''
+    }
+  }
   return ''
 }
 

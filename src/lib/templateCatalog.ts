@@ -1,6 +1,13 @@
 import type { ProjectSnapshot } from '../types'
+import { hydratePresetSnapshotBundledMedia, hydrateUserPresetSnapshotMedia } from './presetTemplateMediaBundle'
+import {
+  isUserLocalPresetCatalogId,
+  listUserPresetMeta,
+  loadUserPresetWorkflowJson,
+  toUserLocalPresetCatalogId,
+} from './userPresetTemplateStore'
 import { parseProjectFile } from './persistence'
-import { loadLicenseServerConfig, loadLicenseSnapshotV2 } from './licenseAccess'
+import { loadLicenseServerConfig } from './licenseAccess'
 import { fetchBundledJson, isLocalGalleryBundleEnabled, resolveBundledGalleryUrl } from './localGalleryBundle'
 
 /** 画布拖拽预设卡片时使用 */
@@ -13,6 +20,8 @@ export type PresetTemplate = {
   image: string
   description: string
   tier: 'free' | 'pro'
+  /** 本机 IndexedDB 导入/保存的用户预设 */
+  isUserLocal?: boolean
 }
 
 function hashToHue(input: string): number {
@@ -160,6 +169,41 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   }
 }
 
+function userMetaToPresetTemplate(meta: {
+  templateId: string
+  name: string
+  category: string
+}): PresetTemplate {
+  const catalogId = toUserLocalPresetCatalogId(meta.templateId)
+  return {
+    id: catalogId,
+    name: meta.name,
+    category: meta.category || '我的预设',
+    image: makePresetThumbDataUri(catalogId),
+    description: '',
+    tier: 'free',
+    isUserLocal: true,
+  }
+}
+
+/** 合并本机用户预设与服务器/随包预设列表 */
+export async function fetchPresetTemplateCatalog(): Promise<PresetTemplateCatalogResult> {
+  const userMetas = await listUserPresetMeta()
+  const userItems = userMetas.map(userMetaToPresetTemplate)
+  const server = await fetchPresetTemplatesFromServer()
+  if (!server.ok) {
+    if (!userItems.length) return server
+    return {
+      ok: true,
+      items: userItems,
+      categoryOrder: userItems.some((t) => t.category === '我的预设') ? ['我的预设'] : undefined,
+    }
+  }
+  const merged = [...userItems, ...server.items]
+  const order = server.categoryOrder ? ['我的预设', ...server.categoryOrder] : undefined
+  return { ok: true, items: merged, categoryOrder: userItems.length ? order : server.categoryOrder }
+}
+
 export async function fetchPresetTemplatesFromServer(): Promise<PresetTemplateCatalogResult> {
   if (isLocalGalleryBundleEnabled()) {
     const json = await fetchBundledJson<PresetGroupsPayload>('flowid-bundled/preset-groups.json')
@@ -186,17 +230,11 @@ export async function fetchPresetTemplatesFromServer(): Promise<PresetTemplateCa
       ok: false,
       reason: 'no_base_url',
       message:
-        '未配置授权服务地址，无法加载预设模板。请在「设置 → 授权」中填写后端根地址（与浏览器能打开 /healthz 的地址一致）；使用内测安装包时通常已内置，若仍出现本提示可联系管理员。',
+        '未配置 Auth 服务地址，无法加载预设模板。开发环境请运行 npm run auth:dev（默认 http://127.0.0.1:3721）；打包版若已内置公网地址仍出现本提示，请检查网络与服务是否可达。',
     }
   }
-  const snap = loadLicenseSnapshotV2()
-  const headers: Record<string, string> = {}
-  if (snap?.licenseCode && snap?.machineId) {
-    headers['x-license-code'] = snap.licenseCode
-    headers['x-machine-id'] = snap.machineId
-  }
   try {
-    const res = await fetch(`${base}/templates/groups`, { headers })
+    const res = await fetch(`${base}/templates/groups`)
     const json = (await res.json().catch(() => ({}))) as PresetGroupsPayload
     if (!res.ok) {
       throw new Error(String(json.message || `拉取模板列表失败：HTTP ${res.status}`))
@@ -217,6 +255,9 @@ export async function fetchPresetTemplatesFromServer(): Promise<PresetTemplateCa
 }
 
 export async function fetchPresetTemplateWorkflowText(templateId: string): Promise<string> {
+  if (isUserLocalPresetCatalogId(templateId)) {
+    return loadUserPresetWorkflowJson(templateId)
+  }
   if (isLocalGalleryBundleEnabled()) {
     const url = resolveBundledGalleryUrl(
       `flowid-bundled/presets/workflows/${encodeURIComponent(templateId)}.json`,
@@ -237,14 +278,8 @@ export async function fetchPresetTemplateWorkflowText(templateId: string): Promi
     .replace(/\/+$/, '')
   if (!base) {
     throw new Error(
-      '未配置授权服务地址：请在工作区「工作流 / 授权」相关设置中填写可访问的授权服务 baseUrl（开发环境常见为 http://127.0.0.1:3721）。',
+      '未配置 Auth 服务地址（开发环境常见为 http://127.0.0.1:3721，请运行 npm run auth:dev）。',
     )
-  }
-  const snapTok = loadLicenseSnapshotV2()
-  const headers: Record<string, string> = {}
-  if (snapTok?.licenseCode && snapTok?.machineId) {
-    headers['x-license-code'] = snapTok.licenseCode
-    headers['x-machine-id'] = snapTok.machineId
   }
   const workflowUrls = [
     `${base}/templates/${encodeURIComponent(templateId)}/workflow`,
@@ -252,13 +287,12 @@ export async function fetchPresetTemplateWorkflowText(templateId: string): Promi
   ]
   let res: Response | null = null
   for (const u of workflowUrls) {
-    const r = await fetchWithTimeout(u, { headers }, PRESET_WORKFLOW_FETCH_TIMEOUT_MS)
+    const r = await fetchWithTimeout(u, {}, PRESET_WORKFLOW_FETCH_TIMEOUT_MS)
     res = r
     if (r.ok) break
     if (r.status !== 404) break
   }
   if (!res) throw new Error('加载预设失败：未发起请求')
-  if (res.status === 403) throw new Error('MEMBER_ONLY')
   if (!res.ok) {
     const j = (await res.json().catch(() => ({}))) as { message?: string }
     const detail = j.message ? String(j.message) : ''
@@ -280,8 +314,14 @@ export async function fetchPresetTemplateWorkflowText(templateId: string): Promi
 }
 
 export async function loadPresetTemplateSnapshot(templateId: string): Promise<ProjectSnapshot> {
+  if (isUserLocalPresetCatalogId(templateId)) {
+    const text = await loadUserPresetWorkflowJson(templateId)
+    const snapshot = parseProjectFile(text)
+    return hydrateUserPresetSnapshotMedia(snapshot, templateId)
+  }
   const text = await fetchPresetTemplateWorkflowText(templateId)
-  return parseProjectFile(text)
+  const snapshot = parseProjectFile(text)
+  return hydratePresetSnapshotBundledMedia(snapshot)
 }
 
 export type PresetTemplateDragPayload = Pick<PresetTemplate, 'id' | 'name' | 'tier'>

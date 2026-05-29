@@ -262,60 +262,6 @@ function setupAutoUpdate() {
 
 ipcMain.handle('desktop:get-app-version', () => app.getVersion())
 
-const pointsDb = require('./pointsDb.cjs')
-
-ipcMain.handle('flowid:points-get', async (_event, payload) => {
-  try {
-    const code = String(payload?.licenseCode || '').trim()
-    if (!code) return { ok: false, error: 'missing_license_code' }
-    await pointsDb.ensureOpen(app.getPath('userData'))
-    const row = pointsDb.getLicense(code)
-    return { ok: true, row }
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err || 'points-get-failed') }
-  }
-})
-
-ipcMain.handle('flowid:points-bind', async (_event, payload) => {
-  try {
-    await pointsDb.ensureOpen(app.getPath('userData'))
-    return pointsDb.bindLicense(
-      String(payload?.licenseCode || '').trim(),
-      String(payload?.machineCode || '').trim(),
-      payload?.expireTimeIso,
-    )
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err || 'points-bind-failed') }
-  }
-})
-
-ipcMain.handle('flowid:points-adjust', async (_event, payload) => {
-  try {
-    await pointsDb.ensureOpen(app.getPath('userData'))
-    return pointsDb.adjustPoints(
-      String(payload?.licenseCode || '').trim(),
-      String(payload?.machineCode || '').trim(),
-      Number(payload?.amount),
-      String(payload?.type || '').trim(),
-      String(payload?.description || ''),
-    )
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err || 'points-adjust-failed') }
-  }
-})
-
-ipcMain.handle('flowid:points-log', async (_event, payload) => {
-  try {
-    const code = String(payload?.licenseCode || '').trim()
-    if (!code) return { ok: false, error: 'missing_license_code' }
-    await pointsDb.ensureOpen(app.getPath('userData'))
-    const rows = pointsDb.listPointsLog(code, Number(payload?.limit) || 100)
-    return { ok: true, rows }
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err || 'points-log-failed') }
-  }
-})
-
 /**
  * 获取稳定的机器标识（用于授权绑定）。
  * 注意：这是“桌面端最小可用实现”，若后续需要更强的防重装/换用户名能力，可替换为原生方案（如读取 Windows MachineGuid）。

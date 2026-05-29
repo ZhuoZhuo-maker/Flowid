@@ -191,3 +191,71 @@ export function applyComfyTdRefAudioRoleRowsToPrompt(
     raw.inputs.name = name
   }
 }
+
+function markTdDefineSpeakerUnused(
+  prompt: Record<string, unknown>,
+  nodeId: string,
+  slotIndex: number,
+): void {
+  const raw = prompt[nodeId] as { class_type?: string; inputs?: Record<string, unknown> } | undefined
+  if (raw?.class_type !== 'TDQwen3TTSDefineSpeaker' || !raw.inputs) return
+  raw.inputs.name = `__flowid_unused_${slotIndex}__`
+}
+
+/**
+ * 模板 `TDQwen3TTSMultiDialog` 常固定接满 speaker_1…10（含主预览「旁白」与多路重复「崔桂英」）。
+ * 台本行若未命中角色名，Comfy 会按 speaker 序号轮询，听感即「一句换一个音色」。
+ * 在写入匹配表角色名后：仅把前 N 路接到有效 DefineSpeaker，其余 speaker 接到·最后一个角色·，并标记废弃槽位名。
+ */
+export function rebindTdMultiDialogSpeakersForRefRoleMap(
+  prompt: Record<string, unknown>,
+  speakerNodeIdsInSlotOrder: string[],
+  rows: Array<{ roleName?: string }> | undefined,
+  opts?: { skipLeadingSlots?: number },
+): void {
+  const skip = Math.max(0, Math.floor(opts?.skipLeadingSlots ?? 0))
+  if (!rows?.length || !speakerNodeIdsInSlotOrder.length) return
+  const maxRows = speakerNodeIdsInSlotOrder.length - skip
+  if (maxRows <= 0) return
+  const n = Math.min(rows.length, maxRows)
+
+  const activeSpeakerNodeIds: string[] = []
+  for (let i = 0; i < n; i += 1) {
+    const name = String(rows[i]?.roleName ?? '').trim()
+    if (!name) continue
+    activeSpeakerNodeIds.push(speakerNodeIdsInSlotOrder[i + skip]!)
+  }
+  if (activeSpeakerNodeIds.length === 0) return
+
+  const activeSet = new Set(activeSpeakerNodeIds)
+  for (let s = 0; s < skip; s += 1) {
+    markTdDefineSpeakerUnused(prompt, speakerNodeIdsInSlotOrder[s]!, s)
+  }
+  for (let s = skip + n; s < speakerNodeIdsInSlotOrder.length; s += 1) {
+    const id = speakerNodeIdsInSlotOrder[s]!
+    if (!activeSet.has(id)) markTdDefineSpeakerUnused(prompt, id, s)
+  }
+
+  const lastWire = activeSpeakerNodeIds[activeSpeakerNodeIds.length - 1]!
+  const wire = (id: string): [string, number] => [id, 0]
+
+  for (const [, rawNode] of Object.entries(prompt)) {
+    if (!rawNode || typeof rawNode !== 'object' || Array.isArray(rawNode)) continue
+    const o = rawNode as { class_type?: string; inputs?: Record<string, unknown> }
+    if (o.class_type !== 'TDQwen3TTSMultiDialog' || !o.inputs) continue
+
+    const speakerKeys = Object.keys(o.inputs)
+      .map((k) => /^speaker_(\d+)$/.exec(k))
+      .filter((m): m is RegExpExecArray => Boolean(m))
+      .map((m) => Number(m[1]))
+      .sort((a, b) => a - b)
+    if (!speakerKeys.length) return
+
+    for (const si of speakerKeys) {
+      const key = `speaker_${si}`
+      const pick = activeSpeakerNodeIds[si - 1] ?? lastWire
+      o.inputs[key] = wire(pick)
+    }
+    return
+  }
+}

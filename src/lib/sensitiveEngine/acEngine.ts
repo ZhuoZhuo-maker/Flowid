@@ -12,6 +12,26 @@ function chKey(ch: string): string {
 }
 
 /**
+ * 词条为纯 `[A-Za-z0-9_]` 时，仅在与「标识符字符」不相连时计为命中，
+ * 避免 `sm` 命中 `small`、`english_small_caps` 等子串误杀。
+ * 含中文、空格、符号等的词条仍按子串匹配，以免漏拦中文组合词。
+ */
+function patternUsesAsciiIdentifierWordBoundaries(pattern: string): boolean {
+  return /^[A-Za-z0-9_]+$/.test(pattern)
+}
+
+function isAsciiIdentifierPart(ch: string): boolean {
+  return ch.length > 0 && /[A-Za-z0-9_]/.test(ch)
+}
+
+function matchRespectsAsciiWordBoundary(text: string, start: number, end: number, patternWord: string): boolean {
+  if (!patternUsesAsciiIdentifierWordBoundaries(patternWord)) return true
+  if (start > 0 && isAsciiIdentifierPart(text[start - 1]!)) return false
+  if (end < text.length && isAsciiIdentifierPart(text[end]!)) return false
+  return true
+}
+
+/**
  * Aho-Corasick：多模式匹配，扫描长度 O(|text| + 命中数)，与词表规模近似线性仅在构建阶段。
  */
 export class AhoCorasick {
@@ -134,7 +154,7 @@ export class AhoCorasick {
         tmp = this.nodes[tmp]!.fail
       }
     }
-    return out
+    return out.filter((m) => matchRespectsAsciiWordBoundary(text, m.start, m.end, m.word))
   }
 
   /** 与旧 `checkSensitiveWords` 一致：每个词表条目最多计一次（无论出现几次） */

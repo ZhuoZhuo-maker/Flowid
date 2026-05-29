@@ -1,13 +1,13 @@
 {
   "templates": [
     {
-      "id": "33aab845-2bab-4cbb-a8fe-5ccf0f8e4030",
+      "id": "39a1c49d-1410-40eb-aeba-852cdad0c193",
       "name": "云端comfyui示例",
       "version": "1.0.0",
       "category": "其他",
       "tier": "free",
-      "description": "云端comfyui工作流示例",
-      "workflowFile": "33aab845-2bab-4cbb-a8fe-5ccf0f8e4030.workflow.json",
+      "description": "",
+      "workflowFile": "39a1c49d-1410-40eb-aeba-852cdad0c193.workflow.json",
       "paramsSchema": {}
     },
     {

@@ -1,28 +1,33 @@
 import type { Node } from '@xyflow/react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion } from 'motion/react'
 import type { StudioNodeData } from '../../types'
 import { PresetTemplateCoverImage } from '../PresetTemplateCoverImage'
 import {
   FLOWID_PRESET_TEMPLATE_DRAG_MIME,
   buildPresetTemplateCategoryTabs,
-  fetchPresetTemplatesFromServer,
+  fetchPresetTemplateCatalog,
   filterPresetTemplatesByCategory,
   type PresetTemplate,
   type PresetTemplateCatalogResult,
   type PresetTemplateDragPayload,
 } from '../../lib/templateCatalog'
+import { isLocalGalleryBundleEnabled } from '../../lib/localGalleryBundle'
+import { deleteUserPresetTemplate } from '../../lib/userPresetTemplateStore'
+import { PresetTemplateImportControls } from '../PresetTemplateImportControls'
 
 function PresetTemplateTile({
   t,
   onMergePresetTemplate,
   setDragPayload,
   canvasDayMode = false,
+  onDeleteUserLocal,
 }: {
   t: PresetTemplate
   onMergePresetTemplate?: (payload: PresetTemplateDragPayload) => void | Promise<void>
   setDragPayload: (e: React.DragEvent, t: PresetTemplate) => void
   canvasDayMode?: boolean
+  onDeleteUserLocal?: (t: PresetTemplate) => void
 }) {
   return (
     <div
@@ -75,10 +80,28 @@ function PresetTemplateTile({
           }
         >
           <span className="truncate uppercase">{t.category}</span>
-          {t.tier === 'pro' ? (
+          {t.isUserLocal ? (
+            <span className={canvasDayMode ? 'shrink-0 text-[#2563eb]' : 'shrink-0 text-sky-400'}>本机</span>
+          ) : t.tier === 'pro' ? (
             <span className={canvasDayMode ? 'shrink-0 text-orange-600' : 'shrink-0 text-orange-400'}>PRO</span>
           ) : null}
         </div>
+        {t.isUserLocal && onDeleteUserLocal ? (
+          <button
+            type="button"
+            className={
+              canvasDayMode
+                ? 'mt-1 w-full rounded border border-[#E8E8E8] bg-white py-0.5 text-[9px] font-bold text-[#737373] hover:bg-[#FAFAFA]'
+                : 'mt-1 w-full rounded border border-white/10 bg-white/5 py-0.5 text-[9px] font-bold text-white/50 hover:bg-white/10'
+            }
+            onClick={(e) => {
+              e.stopPropagation()
+              onDeleteUserLocal(t)
+            }}
+          >
+            删除本机预设
+          </button>
+        ) : null}
       </div>
     </div>
   )
@@ -112,20 +135,22 @@ export function DownloadPanel({
     return () => window.removeEventListener('flowid:license-changed', onLic as EventListener)
   }, [])
 
+  const reloadCatalog = useCallback(async () => {
+    setCatalogLoading(true)
+    const merged = await fetchPresetTemplateCatalog()
+    setCatalog(merged)
+    setCatalogLoading(false)
+  }, [])
+
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      setCatalogLoading(true)
-      const fromServer = await fetchPresetTemplatesFromServer()
-      if (!cancelled) {
-        setCatalog(fromServer)
-        setCatalogLoading(false)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [licenseTick])
+    void reloadCatalog()
+  }, [licenseTick, reloadCatalog])
+
+  useEffect(() => {
+    const onUserPresets = () => void reloadCatalog()
+    window.addEventListener('flowid:user-presets-changed', onUserPresets as EventListener)
+    return () => window.removeEventListener('flowid:user-presets-changed', onUserPresets as EventListener)
+  }, [reloadCatalog])
 
   const baseList = useMemo(() => (catalog?.ok ? catalog.items : []), [catalog])
 
@@ -144,9 +169,17 @@ export function DownloadPanel({
   )
 
   const emptyHint = useMemo(() => {
-    if (catalogLoading) return '正在从后端加载预设模板…'
+    if (catalogLoading) {
+      return isLocalGalleryBundleEnabled()
+        ? '正在从随包本地画廊加载预设模板…'
+        : '正在从后端加载预设模板…'
+    }
     if (catalog && !catalog.ok) return catalog.message
-    if (!filtered.length) return '后端暂无预设模板；请在 Auth 管理端配置后重试。'
+    if (!filtered.length) {
+      return isLocalGalleryBundleEnabled()
+        ? '随包画廊暂无预设条目；请确认打包前已导出 public/flowid-bundled/ 且 VITE_FLOWID_LOCAL_GALLERY=1。'
+        : '暂无预设；可点击「导入预设包」或从项目标签右键「保存到我的预设」。'
+    }
     return ''
   }, [catalogLoading, catalog, filtered.length])
 
@@ -214,8 +247,15 @@ export function DownloadPanel({
               : 'm-0 mb-2 font-mono text-[11px] uppercase tracking-wider text-white/35'
           }
         >
-          拖到画布空白处即可合并节点；封面上传在「预设模板」页
+          拖到画布空白处合并节点；本机预设可导入 zip 或从项目标签保存
         </p>
+        <div className="mb-3">
+          <PresetTemplateImportControls
+            compact
+            canvasDayMode={canvasDayMode}
+            onImported={() => void reloadCatalog()}
+          />
+        </div>
         {catalogLoading || !filtered.length ? (
           <div
             className={`flex flex-col items-center justify-center px-2 py-12 text-center ${
@@ -242,6 +282,14 @@ export function DownloadPanel({
                 canvasDayMode={canvasDayMode}
                 onMergePresetTemplate={onMergePresetTemplate}
                 setDragPayload={setDragPayload}
+                onDeleteUserLocal={
+                  t.isUserLocal
+                    ? (item) => {
+                        if (!window.confirm(`删除本机预设「${item.name}」？`)) return
+                        void deleteUserPresetTemplate(item.id)
+                      }
+                    : undefined
+                }
               />
             ))}
           </div>

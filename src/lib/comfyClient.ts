@@ -35,6 +35,15 @@ function parseComfyPathLikeRef(raw: string): {
 } | null {
   const normalized = raw.replace(/\\/g, '/').trim()
   if (!normalized) return null
+  /** Wan/VHS 控制台常打印绝对路径：`/root/ComfyUI/output/Video/2026-05-10/foo.mp4` */
+  const outputTail = /\/(?:comfyui\/)?output\/(.+)$/i.exec(normalized)
+  if (outputTail?.[1]) {
+    const parts = outputTail[1].split('/').filter(Boolean)
+    const filename = parts[parts.length - 1]
+    if (!filename) return null
+    const subfolder = parts.length > 1 ? parts.slice(0, -1).join('/') : undefined
+    return { filename, subfolder, type: 'output' }
+  }
   const parts = normalized.split('/').filter(Boolean)
   const filename = parts[parts.length - 1]
   if (!filename) return null
@@ -357,14 +366,22 @@ export async function uploadComfyInputImageAsPng({
 
 function guessBinaryUploadExtension(mediaUrl: string, blob: Blob): string {
   const t = String(blob.type || '').toLowerCase()
+  if (t.startsWith('video/')) {
+    if (t.includes('webm')) return '.webm'
+    if (t.includes('quicktime') || t.includes('mov')) return '.mov'
+    return '.mp4'
+  }
   if (t.includes('wav')) return '.wav'
   if (t.includes('mpeg') || t.includes('mp3')) return '.mp3'
-  if (t.includes('mp4') || t.includes('m4a')) return '.m4a'
+  if (t.includes('m4a') || (t.includes('mp4') && t.startsWith('audio/'))) return '.m4a'
   if (t.includes('flac')) return '.flac'
   if (t.includes('ogg')) return '.ogg'
   if (t.includes('aac')) return '.aac'
   if (t.includes('opus')) return '.opus'
   const pathLower = mediaUrl.split('?')[0].toLowerCase()
+  for (const ext of MEDIA_FILE_EXTENSIONS) {
+    if (pathLower.endsWith(ext)) return ext
+  }
   for (const ext of AUDIO_FILE_EXTENSIONS) {
     if (pathLower.endsWith(ext)) return ext
   }
@@ -519,7 +536,7 @@ export async function verifyComfyMediaUrl({
 /**
  * 将 URL 统一处理为无尾斜杠格式。
  */
-function normalizeBaseUrl(baseUrl: string): string {
+export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
 }
 
@@ -583,7 +600,7 @@ function absolutizeComfyBaseForFetch(baseUrl: string): string {
  * 远程 http(s) Comfy（如云 GPU）在开发态同样走 `/__comfy_dev_proxy__/` 同源反代，避免上传/轮询被 CORS 拦截。
  * 生产构建无 Vite 代理时，必须使用真实 baseUrl（由 Comfy 开启 CORS 或同源反代）。
  */
-function resolveRequestBase(baseUrl: string): string {
+export function resolveRequestBase(baseUrl: string): string {
   const normalized = normalizeBaseUrl(baseUrl)
   const absolute = absolutizeComfyBaseForFetch(normalized)
   if (!import.meta.env.DEV) {
@@ -620,7 +637,7 @@ function getJsonHeaders(config: WorkflowProviderConfig): HeadersInit {
   }
 }
 
-function getAuthHeaders(config: WorkflowProviderConfig): HeadersInit {
+export function getAuthHeaders(config: WorkflowProviderConfig): HeadersInit {
   if (!config.apiKey?.trim()) {
     return {}
   }
@@ -895,6 +912,40 @@ export async function refetchHistoryEntryWithRasterVisual({
       const e = matches[i]
       const out = normalizeHistoryOutputs(e)
       if (out && historyOutputsContainRasterVisual(out)) return e
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+/**
+ * 视频节点：全量 history 中选取已含 mp4/webm 成片且 completed 的条目（VHS 晚于 PreviewImage 写入）。
+ */
+export async function refetchHistoryEntryWithVideoOutput({
+  providerConfig,
+  promptId,
+}: {
+  providerConfig: WorkflowProviderConfig
+  promptId: string
+}): Promise<Record<string, unknown> | null> {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const pid = promptId.trim()
+  if (!pid) return null
+  try {
+    const response = await fetchWithTimeout(
+      `${requestBase}/history`,
+      { headers: getAuthHeaders(providerConfig) },
+      Math.min(60000, Math.max(8000, (providerConfig.timeoutSec || 120) * 1000)),
+    )
+    if (!response.ok) return null
+    const payload = (await response.json()) as Record<string, unknown>
+    const matches = collectHistoryEntriesMatchingPrompt(payload, pid)
+    for (let i = matches.length - 1; i >= 0; i -= 1) {
+      const e = matches[i]
+      if (!historyEntryCompleted(e)) continue
+      if (historyEntryContainsVideoProduct(e)) return e
     }
   } catch {
     return null
@@ -1487,6 +1538,16 @@ function collectMediaRefsFromAny(value: unknown, refs: ComfyMediaRef[]) {
     return
   }
   const record = value as Record<string, unknown>
+  if (String(record.type || '').toLowerCase() === 'video' && typeof record.video === 'string') {
+    const parsed = parseComfyPathLikeRef(record.video)
+    if (parsed) {
+      refs.push({
+        filename: parsed.filename,
+        subfolder: parsed.subfolder,
+        type: parsed.type ?? 'output',
+      })
+    }
+  }
   if (typeof record.filename === 'string') {
     const filenameLower = record.filename.toLowerCase()
     const isMediaLike = Array.from(MEDIA_FILE_EXTENSIONS).some((ext) =>
@@ -1588,28 +1649,7 @@ function collectComfyHistoryVisualRefsForResult(
   allowFullEntryFallback: boolean,
 ): ComfyMediaRef[] {
   const pushImageLikeRefs = (nodeOutput: Record<string, unknown>, target: ComfyMediaRef[]) => {
-    const pushRef = (item: ComfyImageRef) => {
-      const filename = String(item.filename ?? item.name ?? '').trim()
-      if (!filename) return
-      target.push({
-        filename,
-        subfolder: item.subfolder,
-        type: item.type,
-      })
-    }
-    const images = nodeOutput.images as ComfyImageRef[] | undefined
-    if (images?.length) {
-      images.forEach((item) => pushRef(item))
-    }
-    const gifs = nodeOutput.gifs as ComfyImageRef[] | undefined
-    if (gifs?.length) {
-      gifs.forEach((item) => pushRef(item))
-    }
-    const videos = nodeOutput.videos as ComfyImageRef[] | undefined
-    if (videos?.length) {
-      videos.forEach((item) => pushRef(item))
-    }
-    collectMediaRefsFromAny(nodeOutput, target)
+    pushComfyOutputNodeMediaArrays(nodeOutput, target, { includeRasterImages: true })
   }
 
   const refs: ComfyMediaRef[] = []
@@ -1641,6 +1681,293 @@ function collectComfyHistoryVisualRefsForResult(
   const fallbackRefs: ComfyMediaRef[] = []
   collectMediaRefsFromAny(historyEntry, fallbackRefs)
   return fallbackRefs
+}
+
+/**
+ * 工作流是否含 VHS 成片节点（图生视频/配音轨等常见）。
+ * @param {Record<string, unknown>} prompt
+ */
+export function promptHasVhsVideoCombineNode(prompt: Record<string, unknown>): boolean {
+  for (const raw of Object.values(prompt)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const ct = String((raw as Record<string, unknown>).class_type || '')
+    if (/VHS_VideoCombine/i.test(ct)) return true
+  }
+  return false
+}
+
+/**
+ * 工作流是否含 Wan 首尾帧视频节点。
+ * @param {Record<string, unknown>} prompt
+ */
+export function promptHasWanFirstLastFrameToVideoNode(prompt: Record<string, unknown>): boolean {
+  for (const raw of Object.values(prompt)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const ct = String((raw as Record<string, unknown>).class_type || '')
+    if (/WanFirstLastFrameToVideo/i.test(ct)) return true
+  }
+  return false
+}
+
+/**
+ * 仅从 VHS_VideoCombine / PreviewImage 等「展示用输出节点」收集 history 视觉产物，
+ * 避免深度扫描把中间节点的 temp 引用也算进 FLOWID 输出条。
+ * @param {Record<string, unknown>} historyEntry
+ * @param {{ vhsVideosOnly?: boolean }} [options] 为 true 时只收 VHS 节点的 mp4/webm 等（不收 PreviewImage 中间帧 png）
+ */
+function pushComfyOutputNodeMediaArrays(
+  rec: Record<string, unknown>,
+  target: ComfyMediaRef[],
+  opts: { vhsVideosOnly?: boolean; includeRasterImages?: boolean },
+): void {
+  const pushRef = (item: ComfyImageRef) => {
+    const filename = String(item.filename ?? item.name ?? '').trim()
+    if (!filename) return
+    if (opts.vhsVideosOnly && !isComfyVideoFilename(filename)) return
+    target.push({
+      filename,
+      subfolder: item.subfolder,
+      type: item.type,
+    })
+  }
+  const arrayKeys = ['images', 'gifs', 'videos', 'animated', 'files'] as const
+  for (const key of arrayKeys) {
+    if (key === 'images' && !opts.includeRasterImages) continue
+    const arr = rec[key] as ComfyImageRef[] | undefined
+    if (arr?.length) arr.forEach((item) => pushRef(item))
+  }
+  collectMediaRefsFromAny(rec, target)
+}
+
+function collectComfyVideoPublishVisualRefs(
+  historyEntry: Record<string, unknown>,
+  options?: { vhsVideosOnly?: boolean },
+): ComfyMediaRef[] {
+  const workflow = extractWorkflowNodeMapFromHistory(historyEntry)
+  const outputs = normalizeHistoryOutputs(historyEntry)
+  if (!outputs) return []
+  const allowedNodeIds = new Set<string>()
+  const vhsVideosOnly = options?.vhsVideosOnly === true
+  if (workflow) {
+    for (const [nodeId, raw] of Object.entries(workflow)) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const ct = String((raw as Record<string, unknown>).class_type || '')
+      if (vhsVideosOnly) {
+        if (/VHS_VideoCombine/i.test(ct)) allowedNodeIds.add(nodeId)
+      } else if (/PreviewImage/i.test(ct) || /VHS_VideoCombine/i.test(ct)) {
+        allowedNodeIds.add(nodeId)
+      }
+    }
+  }
+  /** 反代/旧版 history 无 `prompt` 工作流时：扫描全部 outputs，避免 VHS 成片被漏掉 */
+  if (allowedNodeIds.size === 0) {
+    for (const nodeKey of Object.keys(outputs)) allowedNodeIds.add(nodeKey)
+  }
+  const refs: ComfyMediaRef[] = []
+  for (const [nodeKey, nodeOutput] of Object.entries(outputs)) {
+    if (!allowedNodeIds.has(nodeKey)) continue
+    if (!nodeOutput || typeof nodeOutput !== 'object' || Array.isArray(nodeOutput)) continue
+    pushComfyOutputNodeMediaArrays(nodeOutput as Record<string, unknown>, refs, {
+      vhsVideosOnly,
+      includeRasterImages: !vhsVideosOnly,
+    })
+  }
+  return refs
+}
+
+/**
+ * 从 history 的 outputs / ui / status 收集视频文件引用（不扫描 `prompt` 工作流 JSON，避免误匹配模板路径）。
+ */
+function collectVideoMediaRefsFromHistoryEntry(entry: Record<string, unknown>): ComfyMediaRef[] {
+  const refs: ComfyMediaRef[] = []
+  const out = normalizeHistoryOutputs(entry)
+  if (out) collectMediaRefsFromAny(out, refs)
+  const ui = entry.ui
+  if (ui && typeof ui === 'object' && !Array.isArray(ui)) {
+    collectMediaRefsFromAny(ui, refs)
+  }
+  const status = entry.status
+  if (status && typeof status === 'object' && !Array.isArray(status)) {
+    collectMediaRefsFromAny(status, refs)
+  }
+  const seen = new Set<string>()
+  const videoOnly: ComfyMediaRef[] = []
+  for (const r of refs) {
+    if (!isComfyVideoFilename(r.filename)) continue
+    const k = mediaRefDedupeKey(r)
+    if (seen.has(k)) continue
+    seen.add(k)
+    videoOnly.push(r)
+  }
+  return videoOnly
+}
+
+function shouldLogComfyVideoPickDebug(): boolean {
+  if (import.meta.env.DEV) return true
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('flowid.debugComfyVideo') === '1'
+  } catch {
+    return false
+  }
+}
+
+function logComfyVideoPickDebug(args: {
+  stage: string
+  historyEntry: Record<string, unknown>
+  chosenUrl: string | null
+  tried: Record<string, unknown>
+}): void {
+  if (!shouldLogComfyVideoPickDebug()) return
+  const out = normalizeHistoryOutputs(args.historyEntry)
+  const outKeys = out ? Object.keys(out) : []
+  const perNode: Record<string, string[]> = {}
+  if (out) {
+    for (const [k, v] of Object.entries(out)) {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) continue
+      const rec = v as Record<string, unknown>
+      const keys = Object.keys(rec).filter((x) => {
+        const val = rec[x]
+        return Array.isArray(val) && val.length > 0
+      })
+      if (keys.length) perNode[k] = keys
+    }
+  }
+  const deep = collectVideoMediaRefsFromHistoryEntry(args.historyEntry)
+  console.info('[Flowid Comfy · 视频结果选取调试]', {
+    阶段: args.stage,
+    说明: '生产环境可执行 localStorage.setItem("flowid.debugComfyVideo","1") 后刷新',
+    history里outputs的节点键: outKeys,
+    各节点非空输出字段: perNode,
+    深度扫描到的视频文件: deep.map((r) => ({
+      filename: r.filename,
+      subfolder: r.subfolder ?? '',
+      type: r.type ?? '',
+    })),
+    选取URL: args.chosenUrl || '（无）',
+    尝试路径: args.tried,
+  })
+}
+
+/**
+ * 将 Comfy refs 转为 view URL 列表（按 output 优先、basename 去重）。
+ */
+function comfyPublishRefsToViewUrls(
+  refs: ComfyMediaRef[],
+  requestBase: string,
+  exclude: Set<string>,
+  maxItems: number,
+): string[] {
+  const ranked = [...refs]
+    .filter((r) => mediaRefRank(r) < 3)
+    .sort((a, b) => mediaRefRank(a) - mediaRefRank(b))
+  const seenBasename = new Set<string>()
+  const out: string[] = []
+  for (const ref of ranked) {
+    const refFn = String(ref.filename || '').trim()
+    const baseKey = refFn.replace(/\\/g, '/').split('/').pop()?.toLowerCase() ?? ''
+    if (!baseKey || seenBasename.has(baseKey)) continue
+    seenBasename.add(baseKey)
+    const url = buildComfyViewUrl(requestBase, ref)
+    const fn = readFilenameFromComfyViewUrl(url)
+    if (fn && exclude.has(fn)) continue
+    out.push(url)
+    if (out.length >= maxItems) break
+  }
+  return out
+}
+
+/**
+ * Wan 首尾帧视频节点输出条：对齐 Comfy 的 PreviewImage + VHS 成片，并按文件名去重。
+ */
+export function pickWanFirstLastFrameResultViewUrls({
+  providerConfig,
+  historyEntry,
+  excludeFilenames,
+}: {
+  providerConfig: WorkflowProviderConfig
+  historyEntry: Record<string, unknown>
+  excludeFilenames?: Iterable<string>
+}): string[] {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const exclude = new Set(
+    Array.from(excludeFilenames ?? [])
+      .map((s) => String(s || '').trim())
+      .filter(Boolean),
+  )
+  let refs = collectComfyVideoPublishVisualRefs(historyEntry)
+  if (!refs.length) {
+    refs = collectComfyHistoryVisualRefsForResult(historyEntry, true)
+  }
+  return comfyPublishRefsToViewUrls(refs, requestBase, exclude, 12)
+}
+
+/**
+ * 画布「视频节点」输出条：优先 VHS/Wan 成片节点，排除中间 png 与无效 temp，减少黑块占位。
+ * @param {Record<string, unknown>} [workflowPrompt] 本次提交的 workflow API 图（用于判断 VHS / Wan）
+ */
+export function pickComfyVideoNodeResultViewUrls({
+  providerConfig,
+  historyEntry,
+  excludeFilenames,
+  workflowPrompt,
+  maxItems = 6,
+}: {
+  providerConfig: WorkflowProviderConfig
+  historyEntry: Record<string, unknown>
+  excludeFilenames?: Iterable<string>
+  workflowPrompt?: Record<string, unknown>
+  maxItems?: number
+}): string[] {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const exclude = new Set(
+    Array.from(excludeFilenames ?? [])
+      .map((s) => String(s || '').trim())
+      .filter(Boolean),
+  )
+  const cap = Math.max(1, Math.min(12, maxItems))
+  const prompt =
+    workflowPrompt && typeof workflowPrompt === 'object' && !Array.isArray(workflowPrompt)
+      ? workflowPrompt
+      : extractWorkflowNodeMapFromHistory(historyEntry) ?? {}
+  const wan = promptHasWanFirstLastFrameToVideoNode(prompt)
+  const vhs = promptHasVhsVideoCombineNode(prompt)
+
+  if (wan) {
+    const urls = pickWanFirstLastFrameResultViewUrls({
+      providerConfig,
+      historyEntry,
+      excludeFilenames,
+    })
+    if (urls.length) return urls.slice(0, cap)
+  }
+
+  if (vhs) {
+    let refs = collectComfyVideoPublishVisualRefs(historyEntry, { vhsVideosOnly: true })
+    if (!refs.length) {
+      refs = collectComfyVideoPublishVisualRefs(historyEntry)
+    }
+    const fromSink = comfyPublishRefsToViewUrls(refs, requestBase, exclude, cap)
+    if (fromSink.length) return fromSink
+  }
+
+  const strip = pickComfyResultVideoStripUrls({
+    providerConfig,
+    historyEntry,
+    excludeFilenames,
+    maxItems: cap,
+  })
+  if (strip.length) return strip
+
+  return pickComfyResultImageViewUrls({
+    providerConfig,
+    historyEntry,
+    allowFullEntryFallback: true,
+    excludeFilenames,
+    omitStaticRasterFilenamesForVideoStrip: true,
+    dedupeByFilenameBasename: true,
+  }).slice(0, cap)
 }
 
 /**
@@ -1690,7 +2017,7 @@ function resolveQueueTaskState(
 }
 
 /** 轮询历史时期望的结果类型：决定「何时算就绪」，避免被中间节点/尺寸文本误判为已完成 */
-export type ComfyHistoryResultExpectation = 'visual' | 'audio' | 'general'
+export type ComfyHistoryResultExpectation = 'visual' | 'video' | 'audio' | 'general'
 export type ComfyHistoryTaskFingerprint = {
   /** 提交前对 prompt 对象计算的摘要（用于并发时精确认领 history 条目） */
   promptDigest?: string
@@ -1750,6 +2077,90 @@ function historyOutputsContainRasterVisual(outputs: Record<string, unknown>): bo
   return deepOutputsContainRasterVisual(outputs, 0)
 }
 
+/**
+ * 图/视频节点成片：history 中是否已有可播放视频文件（mp4/webm 等），不含仅 PreviewImage 的 png。
+ */
+function historyOutputsContainVideoProduct(outputs: Record<string, unknown>): boolean {
+  return deepOutputsContainVideoProduct(outputs, 0)
+}
+
+function historyEntryContainsVideoProduct(entry: Record<string, unknown>): boolean {
+  const out = normalizeHistoryOutputs(entry)
+  if (out && historyOutputsContainVideoProduct(out)) return true
+  const ui = entry.ui
+  if (ui && typeof ui === 'object' && !Array.isArray(ui) && historyUiContainVideoProduct(ui as Record<string, unknown>)) {
+    return true
+  }
+  return collectVideoMediaRefsFromHistoryEntry(entry).length > 0
+}
+
+function deepOutputsContainVideoProduct(value: unknown, depth = 0): boolean {
+  if (depth > DEEP_OUTPUT_SCAN_MAX_DEPTH || value == null) return false
+  if (Array.isArray(value)) {
+    return value.some((item) => deepOutputsContainVideoProduct(item, depth + 1))
+  }
+  if (typeof value !== 'object') return false
+  const rec = value as Record<string, unknown>
+  for (const key of ['images', 'gifs', 'videos'] as const) {
+    const arr = rec[key] as ComfyImageRef[] | undefined
+    if (
+      Array.isArray(arr) &&
+      arr.some((it) => isComfyVideoFilename(String(it?.filename ?? it?.name ?? '').trim()))
+    ) {
+      return true
+    }
+  }
+  const refs: ComfyMediaRef[] = []
+  collectMediaRefsFromAny(rec, refs)
+  if (refs.some((item) => isComfyVideoFilename(item.filename))) return true
+  return Object.values(rec).some((v) => deepOutputsContainVideoProduct(v, depth + 1))
+}
+
+function historyUiContainVideoProduct(ui: Record<string, unknown>): boolean {
+  const refs: ComfyMediaRef[] = []
+  collectMediaRefsFromAny(ui, refs)
+  return refs.some((item) => isComfyVideoFilename(item.filename))
+}
+
+function historyEntryCompleted(entry: Record<string, unknown>): boolean {
+  const status = entry.status
+  return Boolean(
+    status &&
+      typeof status === 'object' &&
+      !Array.isArray(status) &&
+      (status as Record<string, unknown>).completed === true,
+  )
+}
+
+/**
+ * 轮询提前结束：视频任务必须解析出 mp4/webm view URL，避免 PreviewImage 的 png 导致过早返回。
+ */
+function canEndVisualHistoryPollEarly(
+  expectation: ComfyHistoryResultExpectation,
+  providerConfig: WorkflowProviderConfig,
+  historyEntry: Record<string, unknown>,
+): boolean {
+  if (expectation === 'video') {
+    const url = pickComfyResultVideoUrl({
+      providerConfig,
+      historyEntry,
+      allowFullEntryFallback: false,
+    })
+    return Boolean(url)
+  }
+  if (expectation === 'visual') {
+    return Boolean(
+      pickComfyResultImageUrl({
+        providerConfig,
+        historyEntry,
+        allowFullEntryFallback: false,
+        preferVideoOutput: false,
+      }),
+    )
+  }
+  return false
+}
+
 function historyUiContainRasterVisual(ui: Record<string, unknown>): boolean {
   const refs: ComfyMediaRef[] = []
   collectMediaRefsFromAny(ui, refs)
@@ -1805,7 +2216,7 @@ function historyUiHasAudioSignals(ui: Record<string, unknown>): boolean {
 
 /**
  * 判断历史条目是否已写入可消费结果，避免过早返回导致拿不到 outputs/audio。
- * @param expectation `visual`：必须已有图/视频产物（**不能**仅凭 `completed` 或仅有尺寸 text）；`audio`：优先音频；`general`：文本等，但排除「仅尺寸类 text」的假完成。
+ * @param expectation `visual`：必须已有图/视频产物（**不能**仅凭 `completed` 或仅有尺寸 text）；`video`：须 `completed` 且含 mp4/webm 成片；`audio`：优先音频；`general`：文本等，但排除「仅尺寸类 text」的假完成。
  */
 function isHistoryEntryReady(
   entry: Record<string, unknown>,
@@ -1815,11 +2226,15 @@ function isHistoryEntryReady(
   const ui = entry.ui
   const uiObj = ui && typeof ui === 'object' && !Array.isArray(ui) ? (ui as Record<string, unknown>) : null
 
-  const status = entry.status
-  const completed =
-    status && typeof status === 'object' && !Array.isArray(status)
-      ? (status as Record<string, unknown>).completed === true
-      : false
+  const completed = historyEntryCompleted(entry)
+
+  if (expectation === 'video') {
+    /**
+     * 首尾帧 / VHS：PreviewImage 的 png 会先写入 history，须等任务 completed 且 VHS 的 mp4 落库。
+     */
+    if (!completed) return false
+    return historyEntryContainsVideoProduct(entry)
+  }
 
   if (expectation === 'visual') {
     if (outObj && Object.keys(outObj).length > 0 && historyOutputsContainRasterVisual(outObj)) {
@@ -1921,13 +2336,15 @@ export async function submitComfyPrompt({
 }
 
 /**
- * 根据队列与历史就绪情况映射 UI 进度（近似值，非 Comfy 内部步数）。
- */
-/**
  * 轮询队列/历史时遇到不可恢复错误，抛出后由上层弹窗提示，避免无限请求。
  */
 export class ComfyPollFatalError extends Error {
   override readonly name = 'ComfyPollFatalError'
+}
+
+/** 历史已落盘且 Comfy 明确报告失败/中断：与网络轮询异常区分，须立即向上抛出以更新节点 UI。 */
+export class ComfyTaskFailedError extends Error {
+  override readonly name = 'ComfyTaskFailedError'
 }
 
 /** 鉴权类 HTTP 状态：继续轮询无意义 */
@@ -1935,6 +2352,67 @@ function isComfyUnauthorizedStatus(status: number): boolean {
   return status === 401 || status === 403
 }
 
+function isComfyGpuOutOfMemoryMessage(msg: string): boolean {
+  const lower = msg.toLowerCase()
+  return (
+    lower.includes('allocation on device') ||
+    lower.includes('out of memory') ||
+    lower.includes('cuda out of memory') ||
+    lower.includes('ran out of memory') ||
+    lower.includes('cudnncreate')
+  )
+}
+
+/** 将 Comfy 原始报错转为更易读的 UI 文案（显存不足等常见场景附加排查提示） */
+function enrichComfyExecutionErrorUserMessage(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed) return trimmed
+  if (!isComfyGpuOutOfMemoryMessage(trimmed)) return trimmed.slice(0, 500)
+  return [
+    trimmed.slice(0, 400),
+    '【GPU 显存不足】Wan2.2 SVI 加速稿默认按 16GB 显存设计（512×896 + 多段 SVI + RIFE×4）。',
+    '可尝试：关闭其它占 GPU 的程序并重启 Comfy；在工作流里降低 Scale 分辨率（如 384×672）；RIFE 倍率 4→2；Comfy 以 --lowvram 启动。',
+    '本工作流无 batch_size 节点，一般不是批量大小问题。',
+  ].join('\n')
+}
+
+function pickComfyExecutionErrorUserMessage(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null
+  const p = payload as Record<string, unknown>
+  const msg = String(p.exception_message ?? p.message ?? '').trim()
+  if (msg) return enrichComfyExecutionErrorUserMessage(msg)
+  const typ = String(p.exception_type ?? '').trim()
+  if (typ) return enrichComfyExecutionErrorUserMessage(typ)
+  return null
+}
+
+/**
+ * history 里已有对应 prompt 条目，但 Comfy 已标记失败/中断（无可用输出仍轮询会卡在「86% 等待就绪」）。
+ */
+function extractHistoryEntryTerminalFailureMessage(entry: Record<string, unknown>): string | null {
+  const status = entry.status
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return null
+  const st = status as Record<string, unknown>
+  const statusStr = String(st.status_str || '').trim().toLowerCase()
+  if (statusStr === 'error') {
+    return pickComfyExecutionErrorUserMessage(st) || 'Comfy 报告任务失败'
+  }
+  const messages = st.messages
+  if (!Array.isArray(messages)) return null
+  for (const m of messages) {
+    if (!Array.isArray(m) || m.length < 1) continue
+    const head = String(m[0] || '').trim()
+    if (head === 'execution_error') {
+      return pickComfyExecutionErrorUserMessage(m[1]) || 'Comfy 执行错误'
+    }
+    if (head === 'execution_interrupted') {
+      return 'Comfy 任务被中断'
+    }
+  }
+  return null
+}
+
+/** 根据队列与历史就绪情况映射 UI 进度（近似值，非 Comfy 内部步数）。 */
 function mapComfyWaitProgress(args: {
   queueState: 'running' | 'pending' | 'not_found'
   seenInQueue: boolean
@@ -2050,24 +2528,20 @@ export async function waitComfyHistory({
           emitProgress({ percent: 88, label: '任务已完成，正在获取输出…' })
           return scopedEntry
         }
-        /**
-         * 图/视频：严格 `isHistoryEntryReady(visual)` 与 `pick` 的边界情况可能不一致；
-         * 若已能从 outputs/ui 解析出 view URL（且不扫整条 prompt），即视为可结束轮询。
-         */
         if (
-          resultExpectation === 'visual' &&
+          (resultExpectation === 'visual' || resultExpectation === 'video') &&
           scopedEntry &&
-          !isHistoryEntryReady(scopedEntry, 'visual') &&
-          pickComfyResultImageUrl({
-            providerConfig,
-            historyEntry: scopedEntry,
-            allowFullEntryFallback: false,
-          })
+          !isHistoryEntryReady(scopedEntry, resultExpectation) &&
+          canEndVisualHistoryPollEarly(resultExpectation, providerConfig, scopedEntry)
         ) {
           emitProgress({ percent: 88, label: '任务已完成，正在获取输出…' })
           return scopedEntry
         }
         if (scopedEntry) {
+          const failMsg = extractHistoryEntryTerminalFailureMessage(scopedEntry)
+          if (failMsg) {
+            throw new ComfyTaskFailedError(failMsg)
+          }
           hasUnreadyEntry = true
           lastStatus = '已找到任务但结果尚未就绪'
         }
@@ -2111,19 +2585,19 @@ export async function waitComfyHistory({
           return fullEntry
         }
         if (
-          resultExpectation === 'visual' &&
+          (resultExpectation === 'visual' || resultExpectation === 'video') &&
           fullEntry &&
-          !isHistoryEntryReady(fullEntry, 'visual') &&
-          pickComfyResultImageUrl({
-            providerConfig,
-            historyEntry: fullEntry,
-            allowFullEntryFallback: false,
-          })
+          !isHistoryEntryReady(fullEntry, resultExpectation) &&
+          canEndVisualHistoryPollEarly(resultExpectation, providerConfig, fullEntry)
         ) {
           emitProgress({ percent: 88, label: '任务已完成，正在获取输出…' })
           return fullEntry
         }
         if (fullEntry) {
+          const failMsg = extractHistoryEntryTerminalFailureMessage(fullEntry)
+          if (failMsg) {
+            throw new ComfyTaskFailedError(failMsg)
+          }
           hasUnreadyEntry = true
           lastStatus = '全量历史已找到任务但结果尚未就绪'
         } else if (queueState === 'not_found') {
@@ -2160,6 +2634,9 @@ export async function waitComfyHistory({
       if (error instanceof ComfyPollFatalError) {
         throw error
       }
+      if (error instanceof ComfyTaskFailedError) {
+        throw error
+      }
       consecutiveIoExceptions += 1
       lastStatus = (error as Error)?.message || '历史查询网络异常'
       if (consecutiveIoExceptions >= maxIoExceptionsBeforeAbort) {
@@ -2187,21 +2664,166 @@ export function pickComfyResultImageUrl({
    * 轮询「就绪」探测时应传 false。
    */
   allowFullEntryFallback = true,
+  /** 为 true 时优先返回 mp4/webm 等成片（图生视频/首尾帧工作流避免误选中间 png） */
+  preferVideoOutput = false,
 }: {
   providerConfig: WorkflowProviderConfig
   historyEntry: Record<string, unknown>
   allowFullEntryFallback?: boolean
+  preferVideoOutput?: boolean
 }): string | null {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
   const refs = collectComfyHistoryVisualRefsForResult(historyEntry, allowFullEntryFallback)
-  const first = pickFirstMediaRef(refs)
+  const pool = preferVideoOutput
+    ? refs.filter((r) => isComfyVideoFilename(r.filename))
+    : refs
+  const first = pickFirstMediaRef(pool.length ? pool : refs)
   if (!first) return null
   return buildComfyViewUrl(requestBase, first)
 }
 
+/**
+ * 视频节点主预览：VHS 成片 → 深度扫描 outputs/ui/status → 通用 preferVideo 回退。
+ */
+export function pickComfyResultVideoUrl({
+  providerConfig,
+  historyEntry,
+  allowFullEntryFallback = true,
+  excludeFilenames,
+  workflowPrompt,
+}: {
+  providerConfig: WorkflowProviderConfig
+  historyEntry: Record<string, unknown>
+  allowFullEntryFallback?: boolean
+  excludeFilenames?: Iterable<string>
+  workflowPrompt?: Record<string, unknown>
+}): string | null {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const exclude = new Set(
+    Array.from(excludeFilenames ?? [])
+      .map((s) => String(s || '').trim())
+      .filter(Boolean),
+  )
+  const tried: Record<string, unknown> = {}
+
+  const strip = pickComfyVideoNodeResultViewUrls({
+    providerConfig,
+    historyEntry,
+    excludeFilenames,
+    workflowPrompt,
+    maxItems: 1,
+  })
+  tried.VHS_Wan输出条 = strip.length
+  if (strip[0]) {
+    logComfyVideoPickDebug({ stage: 'vhs-strip', historyEntry, chosenUrl: strip[0], tried })
+    return strip[0]!
+  }
+
+  const deepRefs = collectVideoMediaRefsFromHistoryEntry(historyEntry)
+  tried.深度扫描视频数 = deepRefs.length
+  const deepFirst = pickFirstMediaRef(deepRefs)
+  if (deepFirst) {
+    const url = buildComfyViewUrl(requestBase, deepFirst)
+    const fn = readFilenameFromComfyViewUrl(url)
+    if (!fn || !exclude.has(fn)) {
+      logComfyVideoPickDebug({ stage: 'deep-scan', historyEntry, chosenUrl: url, tried })
+      return url
+    }
+  }
+
+  const generic = pickComfyResultImageUrl({
+    providerConfig,
+    historyEntry,
+    allowFullEntryFallback,
+    preferVideoOutput: true,
+  })
+  tried.通用preferVideo = generic ? '有' : '无'
+  logComfyVideoPickDebug({ stage: 'generic-fallback', historyEntry, chosenUrl: generic, tried })
+  return generic
+}
+
+/**
+ * 视频节点底部输出条：只收集可播放的成片视频 URL（最多 2 条），避免中间预览图/无效链接在条里显示为黑块。
+ */
+export function pickComfyResultVideoStripUrls({
+  providerConfig,
+  historyEntry,
+  allowFullEntryFallback = true,
+  excludeFilenames,
+  maxItems = 2,
+}: {
+  providerConfig: WorkflowProviderConfig
+  historyEntry: Record<string, unknown>
+  allowFullEntryFallback?: boolean
+  excludeFilenames?: Iterable<string>
+  maxItems?: number
+}): string[] {
+  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
+  const requestBase = resolveRequestBase(baseUrl)
+  const exclude = new Set(
+    Array.from(excludeFilenames ?? [])
+      .map((s) => String(s || '').trim())
+      .filter(Boolean),
+  )
+  const refs = collectComfyHistoryVisualRefsForResult(historyEntry, allowFullEntryFallback)
+  const ranked = [...refs]
+    .filter((r) => isComfyVideoFilename(r.filename) && mediaRefRank(r) < 3)
+    .sort((a, b) => mediaRefRank(a) - mediaRefRank(b))
+  const cap = Math.max(1, Math.min(4, maxItems))
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const ref of ranked) {
+    const key = mediaRefDedupeKey(ref)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const url = buildComfyViewUrl(requestBase, ref)
+    const fn = readFilenameFromComfyViewUrl(url)
+    if (fn && exclude.has(fn)) continue
+    out.push(url)
+    if (out.length >= cap) break
+  }
+  return out
+}
+
 /** 视频节点输出条：排除 PreviewImage/SaveImage 等产生的静态栅格图，避免与 `<video>` 预览组合出现「黑块」。 */
-const COMFY_STATIC_RASTER_FILENAME_RE = /\.(png|jpe?g|webp|bmp)$/i
+const COMFY_STATIC_RASTER_FILENAME_RE = /\.(png|jpe?g|webp|bmp|gif)$/i
+
+/** 可当作成片在 `<video>` 中播放的扩展名 */
+const COMFY_VIDEO_FILENAME_RE = /\.(mp4|webm|mov|mkv|avi|m4v|ogv)(\?|#|$)/i
+
+function isComfyVideoFilename(filename: string): boolean {
+  return COMFY_VIDEO_FILENAME_RE.test(String(filename || '').trim())
+}
+
+/**
+ * 是否像可上传给 LoadAudio 的音频（排除视频节点主槽里常见的无声 mp4 预览）。
+ * 勿把无后缀的 blob: 一律当音频，否则会误伤侧栏参考图 blob，导致「@ 有图但输入图为 0」。
+ */
+export function isLikelyAudioMediaUrl(url: string | null | undefined): boolean {
+  const raw = String(url || '').trim()
+  if (!raw) return false
+  if (isComfyViewUrlLikelyVideo(raw)) return false
+  const path = raw.split(/[?#]/)[0].toLowerCase()
+  if (/\.(mp4|webm|mov|mkv|avi|m4v|ogv)(\?|#|$)/i.test(path)) return false
+  const fn = readFilenameFromComfyViewUrl(raw)
+  if (fn) {
+    if (isComfyVideoFilename(fn)) return false
+    if (/\.(wav|mp3|flac|m4a|aac|ogg|opus|weba)(\?|#|$)/i.test(fn)) return true
+  }
+  return /\.(wav|mp3|flac|m4a|aac|ogg|opus|weba)(\?|#|$)/i.test(path)
+}
+
+/** 判断 Comfy `/view?...` 或直链是否像可播放视频（用于视频节点优先选片，避免误用 PreviewAudio）。 */
+export function isComfyViewUrlLikelyVideo(url: string | null | undefined): boolean {
+  const raw = String(url || '').trim()
+  if (!raw) return false
+  const fn = readFilenameFromComfyViewUrl(raw)
+  if (fn && isComfyVideoFilename(fn)) return true
+  const path = raw.split(/[?#]/)[0] || ''
+  return COMFY_VIDEO_FILENAME_RE.test(path)
+}
 
 /**
  * 从 ComfyUI history 提取本次任务全部视觉输出 view URL（多分镜/多 SaveImage 等），排除 input 档与可选文件名黑名单。
@@ -2216,6 +2838,8 @@ export function pickComfyResultImageViewUrls({
    * 用于画布「视频节点」底部缩略条：Comfy 图生视频工作流常在 history 里混入大量中间预览图，用 video 标签无法解码静态图会显示全黑。
    */
   omitStaticRasterFilenamesForVideoStrip = false,
+  /** 同一文件名在 temp/output 各出现一次时只保留一条（按 output 优先排序后的首次出现） */
+  dedupeByFilenameBasename = false,
 }: {
   providerConfig: WorkflowProviderConfig
   historyEntry: Record<string, unknown>
@@ -2223,6 +2847,7 @@ export function pickComfyResultImageViewUrls({
   /** 与本次上传注入文件名一致时跳过，避免把参考图回显当输出 */
   excludeFilenames?: Iterable<string>
   omitStaticRasterFilenamesForVideoStrip?: boolean
+  dedupeByFilenameBasename?: boolean
 }): string[] {
   const baseUrl = normalizeBaseUrl(providerConfig.baseUrl)
   const requestBase = resolveRequestBase(baseUrl)
@@ -2238,8 +2863,14 @@ export function pickComfyResultImageViewUrls({
   const seen = new Set<string>()
   const out: string[] = []
   for (const ref of ranked) {
-    const key = mediaRefDedupeKey(ref)
-    if (seen.has(key)) continue
+    const key = dedupeByFilenameBasename
+      ? String(ref.filename || '')
+          .replace(/\\/g, '/')
+          .split('/')
+          .pop()
+          ?.toLowerCase() ?? ''
+      : mediaRefDedupeKey(ref)
+    if (!key || seen.has(key)) continue
     seen.add(key)
     const refFn = String(ref.filename || '').trim()
     if (omitStaticRasterFilenamesForVideoStrip && COMFY_STATIC_RASTER_FILENAME_RE.test(refFn)) {

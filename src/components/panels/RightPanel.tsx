@@ -151,7 +151,9 @@ export function RightPanel({
                 {activeTab === 'history' ? (
                   <HistoryPanel historyItems={historyItems} onRemoveHistoryItems={onRemoveHistoryItems} embedded />
                 ) : null}
-                {activeTab === 'inspiration-town' ? <InspirationTownPanel embedded /> : null}
+                {activeTab === 'inspiration-town' ? (
+                  <InspirationTownPanel embedded canvasDayMode={canvasDayMode} />
+                ) : null}
                 {activeTab === 'system-prompts' ? <SystemPromptsPanel embedded /> : null}
               </div>
             </motion.div>

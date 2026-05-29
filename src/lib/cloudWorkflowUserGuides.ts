@@ -48,14 +48,23 @@ export type CloudWorkflowUserGuide = {
 
 const GUIDES: Record<string, CloudWorkflowUserGuide> = {
   '12c6b358-d5c2-4b9c-9eaf-4c7154f48a2e': {
-    summary: '文生图通用模板：以文字描述为主生成单张或多张结果图。',
+    summary: '文生图通用模板：以文字描述为主生成单张或多张结果图；支持侧栏/批量统一设置输出比例。',
     inputs: [
       { media: 'text', title: '提示词 / 创意描述', count: '1', detail: '写在节点「提示词」；会参与正向条件编码。' },
       { media: 'text', title: '负向 / 补充说明（若有）', count: '0～1（可选）', detail: '依工作流内节点而定，可在参数设置里查看默认文案。' },
       { media: 'image', title: '参考图', count: '0～多（可选）', detail: '画布引用其它图片节点或上传；用于风格/构图参考时由工作流读入。' },
+      {
+        media: 'numeric',
+        title: '输出宽高',
+        count: '1 组',
+        detail: '工作流内 `__WIDTH__` / `__HEIGHT__` 注入至空 Latent 宽高常量（与电商等模板一致，由画布比例映射像素）。',
+      },
     ],
     outputs: [{ media: 'image', title: '生成图像', count: '1～多', detail: '结果写入当前图片节点输出。' }],
-    canvasHints: ['在「云端 Comfy」执行环境下，从下拉选用与此处相同名称的工作流即可对应本说明。'],
+    canvasHints: [
+      '在「云端 Comfy」执行环境下，从下拉选用与此处相同名称的工作流即可对应本说明。',
+      '底部提示框「输出」或右键批量统一工作流后可选择 9:16、4:5 等比例。',
+    ],
   },
   '4e750db8-5879-4ff6-bebc-4b61931f02e3': {
     summary: '根据商品/场景类文字描述，生成电商模特或展示相关的提示词文案。',
@@ -95,10 +104,17 @@ const GUIDES: Record<string, CloudWorkflowUserGuide> = {
     summary: '向外扩展画布（ outpainting ），根据文字指定延伸内容与风格。',
     inputs: [
       { media: 'image', title: '底图', count: '1' },
-      { media: 'text', title: '扩图方向与内容描述', count: '1', detail: '描述四周或单侧要补全的画面。' },
+      {
+        media: 'text',
+        title: '画面延伸描述',
+        count: '1',
+        detail: '描述要补全的区域与风格；四向扩图像素在提示词框上方「扩图」行填写。',
+      },
     ],
     outputs: [{ media: 'image', title: '扩展后的整图', count: '1' }],
-    canvasHints: ['扩图比例、步数等在工作流节点中；可在「参数设置」微调。'],
+    canvasHints: [
+      '提示词框「扩图」：左 / 上 / 右 / 下（像素），默认左右 400、上下 0；下方正文只写延伸内容。',
+    ],
   },
   '9a853fc9-76b1-45b2-b081-17ac36007100': {
     summary: '按英文语义分割/抠图；提示词建议使用英文描述要保留或移除的区域。',
@@ -229,7 +245,11 @@ const GUIDES: Record<string, CloudWorkflowUserGuide> = {
       { media: 'numeric', title: '视频分辨率', count: '0～1 组（可选）', detail: '`__WIDTH__` / `__HEIGHT__`。' },
     ],
     outputs: [{ media: 'video', title: '数字人视频', count: '1' }],
-    canvasHints: [],
+    canvasHints: [
+      'FLOWID 侧上传成功仍可能因云端 Comfy 版本报错：若出现 `AudioVAE.__init__() takes 2 positional arguments but 3 were given`，需在云端更新 ComfyUI-KJNodes（建议 ≥1.3.9），或将工作流里 `VAELoaderKJ`（LTX 音频 VAE）换成新版 Comfy 内置 `VAELoader`。',
+      '节点预览黑屏但诊断里 blob 有效时，多为浏览器 blob 失效；请对「图-文字节点2」重新上传/保存画布后再跑。',
+      '预设模板可在前端「导入预设包」或项目标签右键「保存到我的预设」，无需 Auth 上架。',
+    ],
   },
   '19c28d3f-ff15-4b36-8c9d-31f485deeeca': {
     summary: '首帧图 + 尾帧图 + 音频（或其它约束）生成过渡视频。',

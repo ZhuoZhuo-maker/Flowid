@@ -1,5 +1,7 @@
 import type { Edge, Node } from '@xyflow/react'
 import type { ProjectSnapshot, StudioNodeData } from '../types'
+import { STUDIO_FLOW_SOURCE_HANDLE_ID, STUDIO_FLOW_TARGET_HANDLE_ID } from '../lib/studioFlowHandles'
+import { VIDEO_IN_UNIFIED } from '../lib/videoNodeInports'
 
 /**
  * 首次进入时的示例工程：展示从左到右的「剧本 → 提示 → 分镜图 → 成片 → 音频」链路。
@@ -78,24 +80,32 @@ export function createDefaultProject(): ProjectSnapshot {
       id: 'e-script-text',
       source: 'script-1',
       target: 'text-1',
+      sourceHandle: STUDIO_FLOW_SOURCE_HANDLE_ID,
+      targetHandle: STUDIO_FLOW_TARGET_HANDLE_ID,
       animated: true,
     },
     {
       id: 'e-text-image',
       source: 'text-1',
       target: 'image-1',
+      sourceHandle: STUDIO_FLOW_SOURCE_HANDLE_ID,
+      targetHandle: STUDIO_FLOW_TARGET_HANDLE_ID,
       animated: true,
     },
     {
       id: 'e-image-video',
       source: 'image-1',
       target: 'video-1',
+      sourceHandle: STUDIO_FLOW_SOURCE_HANDLE_ID,
+      targetHandle: VIDEO_IN_UNIFIED,
       animated: true,
     },
     {
       id: 'e-video-audio',
       source: 'video-1',
       target: 'audio-1',
+      sourceHandle: STUDIO_FLOW_SOURCE_HANDLE_ID,
+      targetHandle: STUDIO_FLOW_TARGET_HANDLE_ID,
       animated: true,
     },
   ]

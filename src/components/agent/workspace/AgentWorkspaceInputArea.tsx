@@ -9,7 +9,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
-import { ChevronDown, Coins, Keyboard, Monitor, Plus, Send } from 'lucide-react'
+import { ChevronDown, Keyboard, Monitor, Plus, Send } from 'lucide-react'
 import { fileToInputSnippet } from '../../../lib/agentDroppedFileSnippets'
 import {
   AGENT_PARSE_MODE_OPTIONS,
@@ -37,9 +37,6 @@ type Props = {
   modeBanner: string | null
   /** 设置里「AI 虚拟助手」的模型名，展示在模式按钮上 */
   assistantModelName?: string
-  /** 发送旁展示的预估积分（与 /api/points/quote 一致） */
-  sendPointsQuote?: number | null
-  sendPointsQuotePending?: boolean
 }
 
 /**
@@ -56,8 +53,6 @@ export function AgentWorkspaceInputArea({
   onParseModeChange,
   modeBanner,
   assistantModelName = '',
-  sendPointsQuote = null,
-  sendPointsQuotePending = false,
 }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [modeOpen, setModeOpen] = useState(false)
@@ -349,15 +344,6 @@ export function AgentWorkspaceInputArea({
             <div className="mr-2 font-mono text-[10px] tracking-tighter text-aw-text-sub/40">
               {value.length > 0 ? 'SHIFT+ENTER 换行' : ''}
             </div>
-            {sendPointsQuotePending || (sendPointsQuote != null && sendPointsQuote > 0) ? (
-              <div
-                className="flex items-center gap-0.5 rounded-full border border-aw-border/60 bg-aw-page/80 px-2 py-0.5 text-[11px] font-bold tabular-nums text-aw-text-main shadow-sm"
-                title="本条发送对应的预估预扣积分（与画布执行同一套单价规则；此处按「文本」节点与当前模式计价）"
-              >
-                <Coins className="h-3.5 w-3.5 shrink-0 text-amber-600/90" aria-hidden />
-                <span>{sendPointsQuotePending ? '…' : sendPointsQuote}</span>
-              </div>
-            ) : null}
             <button
               type="button"
               disabled={disabled || !value.trim()}

@@ -1,0 +1,21 @@
+{
+  "kinds": {
+    "text": [
+      {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "baseUrl": "https://your-openai-compatible-api.example/v1",
+        "models": ["your-text-model"]
+      }
+    ],
+    "image": [
+      {
+        "id": "00000000-0000-0000-0000-000000000002",
+        "baseUrl": "https://your-openai-compatible-api.example/v1",
+        "models": ["your-image-model"]
+      }
+    ],
+    "video": [],
+    "audio": [],
+    "music": []
+  }
+}

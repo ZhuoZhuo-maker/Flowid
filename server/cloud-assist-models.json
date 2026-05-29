@@ -1,23 +1,7 @@
 {
   "kinds": {
-    "text": [
-      {
-        "id": "3912a095-4d54-427b-b651-3795ead69101",
-        "baseUrl": "https://nowcoding.ai",
-        "models": [
-          "gpt-5.4-mini"
-        ]
-      }
-    ],
-    "image": [
-      {
-        "id": "bc7db451-57be-46bf-834f-e443781150b2",
-        "baseUrl": "https://nowcoding.ai",
-        "models": [
-          "gpt-image-2"
-        ]
-      }
-    ],
+    "text": [],
+    "image": [],
     "video": [],
     "audio": [],
     "music": []

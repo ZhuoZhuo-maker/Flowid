@@ -4,6 +4,7 @@ import type {
   AudioNodeData,
   CloudWorkflowOverrideEntry,
   ImageNodeData,
+  PanoramaNodeData,
   VideoNodeData,
   NodeRunProgress,
   NodeWorkflowConfig,
@@ -21,6 +22,10 @@ import {
   type WorkflowConfigSnapshot,
 } from '../lib/workflowConfigStorage'
 import {
+  collectInboundAudioResolvedEntries,
+  collectMentionAudioResolvedEntries,
+  collectMentionImageResolvedEntries,
+  collectMentionVideoResolvedEntries,
   collectUpstreamNodeIds,
   parseMentionRefs,
   resolveMentionRefToNode,
@@ -35,8 +40,6 @@ import {
   injectMusicWorkflowFineTune,
   musicFineTuneDraftFromAudioData,
 } from '../lib/musicWorkflowFineTune'
-import { computeAccessState, loadLicenseServerConfig, loadLicenseSnapshotV2, saveLicenseSnapshotV2 } from '../lib/licenseAccess'
-import { verifyLicenseRemote } from '../lib/licenseClient'
 import { matchStudioNodeWorkflow } from '../lib/matchStudioNodeWorkflow'
 import { persistWorkflowJsonToDisk } from '../lib/localAssetDiskMirror'
 import { normalizeOpenAICompatibleBaseUrl } from '../lib/openaiCompat'
@@ -46,20 +49,22 @@ import {
   resolveDashscopeQwenImageSize,
   resolveOpenAiImageGenerationOutputParams,
 } from '../lib/cloudImageGenerationParams'
-import { getActiveCloudSelfDefaultsForNodeKind } from '../lib/cloudSelfPresets'
+import {
+  cloudImageSubmitHeaders,
+  isModelScopeInferenceBase,
+  pollCloudImageTask,
+  readCloudImageTaskId,
+  readCloudImageUrlFromPayload,
+} from '../lib/cloudAsyncImageApi'
+import { loadLicenseServerConfig } from '../lib/licenseAccess'
+import { getActiveCloudSelfDefaultsForNodeKind, type CloudSelfApiMode } from '../lib/cloudSelfPresets'
 import {
   getAssistApiKey,
   studioNodeKindToAssistKind,
   tryDecodeCloudAssistModelPick,
 } from '../lib/cloudAssistModelCatalog'
-import {
-  apiPointsCancel,
-  apiPointsConfirm,
-  apiPointsConfirmFailure,
-  apiPointsReserve,
-} from '../lib/licensePointsApi'
-import { emitPointsTaskFailure } from '../lib/pointsService'
 import { buildPointsReserveParams } from '../lib/pointsReserveMetadata'
+import { fetchCloudWorkflowJson } from '../lib/cloudWorkflowsApi'
 import {
   clampMultiangleHV,
   clampMultiangleZoom,
@@ -73,6 +78,7 @@ import {
 } from '../lib/comfyVoiceTable8'
 import {
   applyComfyTdRefAudioRoleRowsToPrompt,
+  rebindTdMultiDialogSpeakersForRefRoleMap,
   resolveTdDefineSpeakerNodeIdsForRefSlots,
 } from '../lib/comfyTdRefAudioRoleMap'
 import {
@@ -82,8 +88,22 @@ import {
   tryStructuredVoiceListToMultiDialogLines,
   workflowJsonUsesTdMultiDialog,
 } from '../lib/comfyTdMultiDialogScript'
-import { resolveComfyWorkflowWidthHeight } from '../lib/comfyWorkflowOutputSize'
-import { readLocalImageAssetBlob, getLocalImageAssetObjectUrl } from '../lib/localImageAssetStore'
+import {
+  injectOutpaintPadsIntoComfyPrompt,
+  resolveOutpaintPadsFromNode,
+  workflowSupportsOutpaintPadControls,
+} from '../lib/comfyOutpaintPrompt'
+import {
+  resolveComfyWorkflowWidthHeight,
+  workflowJsonSupportsComfyGridPlaceholders,
+  workflowJsonSupportsVariableRefCount,
+  workflowJsonUsesQwenImageModel,
+} from '../lib/comfyWorkflowOutputSize'
+import {
+  getLocalImageAssetObjectUrl,
+  readLocalImageAssetBlob,
+  resolveExistingComfyInputFilenameFromDesktop,
+} from '../lib/localImageAssetStore'
 import {
   buildComfyPromptDigest,
   checkComfyHealth,
@@ -95,9 +115,13 @@ import {
   pickComfyResultAudioUrlAsync,
   pickComfyResultImageUrl,
   pickComfyResultImageViewUrls,
+  pickComfyResultVideoUrl,
+  pickComfyVideoNodeResultViewUrls,
+  isComfyViewUrlLikelyVideo,
   readFilenameFromComfyViewUrl,
   refetchHistoryEntryWithAudioOutput,
   refetchHistoryEntryWithRasterVisual,
+  refetchHistoryEntryWithVideoOutput,
   submitComfyPrompt,
   type ComfyUploadedInputImage,
   uploadComfyInputBinaryFile,
@@ -105,8 +129,36 @@ import {
   verifyComfyMediaUrl,
   waitComfyHistory,
 } from '../lib/comfyClient'
+import { normalizeComfyLoaderModelPathsInPrompt } from '../lib/comfyModelPathNormalize'
 
 type NodeInputRecord = Record<string, unknown>
+
+/**
+ * 宫格分割：收敛 Comfy history 中的多图列表，避免 temp 预览、重复文件名与中间节点刷屏。
+ * @param urls 原始 view URL 列表（已按 output 优先排序）
+ * @param options.filePrefix 工作流保存前缀（如 `宫格_`），有则优先只保留文件名含此前缀的图
+ * @param options.expectedCount 期望分格数（水平 × 垂直）
+ */
+function filterGridSplitResultViewUrls(
+  urls: string[],
+  options: { filePrefix: string; expectedCount: number },
+): string[] {
+  const prefix = String(options.filePrefix || '').trim()
+  const expected = Math.max(1, Math.min(25, options.expectedCount))
+  const byFilename = new Map<string, string>()
+  for (const url of urls) {
+    const fn = readFilenameFromComfyViewUrl(url)?.trim()
+    if (!fn) continue
+    if (!byFilename.has(fn)) byFilename.set(fn, url)
+  }
+  let pool = [...byFilename.entries()].map(([fn, url]) => ({ fn, url }))
+  if (prefix) {
+    const prefixed = pool.filter((x) => x.fn.includes(prefix))
+    if (prefixed.length) pool = prefixed
+  }
+  pool.sort((a, b) => a.fn.localeCompare(b.fn, undefined, { numeric: true }))
+  return pool.slice(0, expected).map((x) => x.url)
+}
 
 /**
  * 用户文案/文件名等插入到「已 JSON.stringify 过的工作流文本」中时，须按 JSON 字符串规则转义，
@@ -205,6 +257,10 @@ export type RunNodeWorkflowOptions = {
   onPreflightMessage?: (message: string) => void
   /** 执行入口传入的当前节点标题（以触发执行时的节点标题为准）。 */
   runNodeTitle?: string
+  /**
+   * 文本 Comfy：侧栏「系统提示词」当前内容（执行时优先于已保存项；无需先点「保存」）。
+   */
+  comfySystemPromptText?: string
 }
 
 type OfficialTemplateMeta = {
@@ -213,12 +269,6 @@ type OfficialTemplateMeta = {
   version: string
   description?: string
   paramsSchema?: Record<string, unknown>
-}
-
-function buildLicenseHeaders(): Record<string, string> | null {
-  const snap = loadLicenseSnapshotV2()
-  if (!snap?.licenseCode || !snap?.machineId) return null
-  return { 'x-license-code': snap.licenseCode, 'x-machine-id': snap.machineId }
 }
 
 /**
@@ -336,6 +386,40 @@ type ExtractNodeInputsOpts = {
   studioEdges?: Edge[]
 }
 
+/**
+ * 从参考图列表中剔除「与画布主图同源」的项时，只应以节点 `data.src` 为准。
+ * 若 `data.src` 为空却把 `mergedPairs[0]`（常为 @ 解析出的上游图）借作 `primarySrc`，
+ * 再按 primary 去重会把唯一参考图删掉 → gpt-image-2 等路径 `refCount: 0`。
+ */
+async function normalisedCanvasPrimaryUrlForRefDedupe(
+  rawDataSrc: unknown,
+  rawSrcAssetId: unknown,
+): Promise<string> {
+  let u = String(rawDataSrc ?? '').trim()
+  if (!u) return ''
+  const aid = String(rawSrcAssetId ?? '').trim()
+  if (u.startsWith('blob:') && aid) {
+    const restored = await getLocalImageAssetObjectUrl(aid)
+    if (restored) return String(restored).trim()
+  }
+  return u
+}
+
+/**
+ * 合并后的参考图对：有本地参考条或提示词 @ 时，不与画布主图 src 去重。
+ * 图生视频首尾帧常见「主预览=首帧 + @ 两张」；去重会把首张 @ 吃掉，只剩 1 张有效输入。
+ */
+function filterMergedRefPairsAgainstCanvasPrimary(
+  mergedPairs: Array<{ url: string; assetId?: string }>,
+  dedupeRefUrl: string,
+  hasExplicitRefInputs: boolean,
+): Array<{ url: string; assetId?: string }> {
+  if (hasExplicitRefInputs) {
+    return mergedPairs.filter((p) => Boolean(p.url))
+  }
+  return mergedPairs.filter((p) => p.url && (!dedupeRefUrl || p.url !== dedupeRefUrl))
+}
+
 async function extractNodeInputs(
   node: Node<StudioNodeData>,
   allNodes?: Array<Node<StudioNodeData>>,
@@ -356,7 +440,33 @@ async function extractNodeInputs(
     return common
   }
   if (node.data.kind === 'text' || node.data.kind === 'script') {
-    return { ...common, body: node.data.body, refImages: '' }
+    const mentionScanText =
+      String(extractOpts?.imageMentionRefPromptOverride || '').trim() || String(node.data.body || '')
+    let videoSrc = ''
+    let videoSrcAssetId = ''
+    if (allNodes?.length && mentionScanText.includes('@')) {
+      const videoRefs = collectMentionVideoResolvedEntries(
+        mentionScanText,
+        allNodes,
+        node.id,
+        extractOpts?.studioEdges,
+      )
+      if (videoRefs.length > 0) {
+        let u = String(videoRefs[0]!.url || '').trim()
+        const aid = String(videoRefs[0]!.assetId || '').trim()
+        if (!u && aid) {
+          const restored = await getLocalImageAssetObjectUrl(aid)
+          if (restored) u = restored
+        }
+        if (u.startsWith('blob:') && aid) {
+          const restored = await getLocalImageAssetObjectUrl(aid)
+          if (restored) u = restored
+        }
+        videoSrc = u
+        videoSrcAssetId = aid
+      }
+    }
+    return { ...common, body: node.data.body, refImages: '', videoSrc, videoSrcAssetId }
   }
   if (node.data.kind === 'image') {
     const promptText = String(node.data.prompt || '')
@@ -433,8 +543,18 @@ async function extractNodeInputs(
         primarySrc = restored
       }
     }
-    
-    const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
+
+    const dedupeRefUrl = await normalisedCanvasPrimaryUrlForRefDedupe(
+      (node.data as ImageNodeData).src,
+      (node.data as ImageNodeData).srcAssetId,
+    )
+    const hasExplicitRefInputs =
+      refs.length > 0 || (mentionScanText.includes('@') && mergedPairs.length > 0)
+    const purePairs = filterMergedRefPairsAgainstCanvasPrimary(
+      mergedPairs,
+      dedupeRefUrl,
+      hasExplicitRefInputs,
+    )
     const imgMatting = node.data as ImageNodeData
     const rawMp = imgMatting.mattingPoints
     const safeMp = (Array.isArray(rawMp) ? rawMp : []).map((p) => ({
@@ -486,6 +606,18 @@ async function extractNodeInputs(
       comfyWorkflowWidth,
       comfyWorkflowHeight,
       comfyWorkflowStyleTone: String((imgMatting as ImageNodeData).comfyWorkflowStyleTone ?? '').trim(),
+      comfyOutpaintLeft: imgMatting.comfyOutpaintLeft,
+      comfyOutpaintTop: imgMatting.comfyOutpaintTop,
+      comfyOutpaintRight: imgMatting.comfyOutpaintRight,
+      comfyOutpaintBottom: imgMatting.comfyOutpaintBottom,
+      gridImages: imgMatting.gridImages ?? [],
+      gridImageAssetIds: imgMatting.gridImageAssetIds ?? [],
+      gridHorizontal: imgMatting.gridHorizontal ?? 2,
+      gridVertical: imgMatting.gridVertical ?? 2,
+      gridRemoveEdge: imgMatting.gridRemoveEdge ?? true,
+      gridRemoveStroke: imgMatting.gridRemoveStroke ?? 0,
+      gridFilePrefix: imgMatting.gridFilePrefix ?? '宫格_',
+      gridFormat: imgMatting.gridFormat ?? 'PNG',
     }
   }
   if (node.data.kind === 'video') {
@@ -497,12 +629,14 @@ async function extractNodeInputs(
       ? (node.data as { extraPrompts?: string[] }).extraPrompts!.map((s) => String(s || ''))
       : []
     const promptText = [p1, p2, p3, p4, ...pExtra].filter(Boolean).join('\n')
+    const mentionScanText =
+      String(extractOpts?.imageMentionRefPromptOverride || '').trim() || promptText
     const refs = node.data.referenceImageSources?.filter(Boolean) ?? []
     const refIds = (node.data as any)?.referenceImageAssetIds as string[] | undefined
 
     const pairs: Array<{ url: string; assetId?: string }> = []
-    if (allNodes?.length && promptText.includes('@')) {
-      const mentionRefs = parseMentionRefs(promptText)
+    if (allNodes?.length && mentionScanText.includes('@')) {
+      const mentionRefs = parseMentionRefs(mentionScanText)
       for (const ref of mentionRefs) {
         const hit = resolveMentionRefToNode(ref, allNodes, node.id, undefined, mentionUpstreamScope)
         if (!hit) continue
@@ -563,7 +697,17 @@ async function extractNodeInputs(
       }
     }
 
-    const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
+    const dedupeRefUrl = await normalisedCanvasPrimaryUrlForRefDedupe(
+      (node.data as VideoNodeData).src,
+      (node.data as VideoNodeData).srcAssetId,
+    )
+    const hasExplicitRefInputs =
+      refs.length > 0 || (mentionScanText.includes('@') && mergedPairs.length > 0)
+    const purePairs = filterMergedRefPairsAgainstCanvasPrimary(
+      mergedPairs,
+      dedupeRefUrl,
+      hasExplicitRefInputs,
+    )
     /** 第二路提示词映射到工作流 `__BODY__`（常见于图音视频：__PROMPT__ + __BODY__ 双文本口）。 */
     const bodyForWorkflow = String(p2 || '').trim()
     const vd = node.data as VideoNodeData
@@ -574,6 +718,26 @@ async function extractNodeInputs(
       'video',
       vd,
     )
+    const audioMentionEntries =
+      allNodes?.length && mentionScanText.includes('@')
+        ? collectMentionAudioResolvedEntries(
+            mentionScanText,
+            allNodes,
+            node.id,
+            extractOpts?.studioEdges,
+          )
+        : []
+    const inboundAudioEntries =
+      allNodes?.length && extractOpts?.studioEdges?.length
+        ? collectInboundAudioResolvedEntries(node.id, extractOpts.studioEdges, allNodes)
+        : []
+    const audioOrderedMerged: Array<{ url: string; assetId?: string }> = []
+    const seenAudioUrl = new Set<string>()
+    for (const e of [...audioMentionEntries, ...inboundAudioEntries]) {
+      if (!e.url || seenAudioUrl.has(e.url)) continue
+      seenAudioUrl.add(e.url)
+      audioOrderedMerged.push(e)
+    }
     return {
       ...common,
       prompt: node.data.prompt,
@@ -592,6 +756,11 @@ async function extractNodeInputs(
       comfyWorkflowWidth,
       comfyWorkflowHeight,
       comfyWorkflowStyleTone: String((vd as VideoNodeData).comfyWorkflowStyleTone ?? '').trim(),
+      comfyOutpaintLeft: vd.comfyOutpaintLeft,
+      comfyOutpaintTop: vd.comfyOutpaintTop,
+      comfyOutpaintRight: vd.comfyOutpaintRight,
+      comfyOutpaintBottom: vd.comfyOutpaintBottom,
+      ...(audioOrderedMerged.length ? { audioOrderedRefEntries: audioOrderedMerged } : {}),
     }
   }
   if (node.data.kind === 'panorama') {
@@ -647,7 +816,17 @@ async function extractNodeInputs(
       const restored = await getLocalImageAssetObjectUrl(primaryAssetId)
       if (restored) primarySrc = restored
     }
-    const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
+    const dedupeRefUrl = await normalisedCanvasPrimaryUrlForRefDedupe(
+      (node.data as AudioNodeData).src,
+      (node.data as AudioNodeData).srcAssetId,
+    )
+    const hasExplicitRefInputsMusic =
+      refs.length > 0 || (noteText.includes('@') && mergedPairs.length > 0)
+    const purePairs = filterMergedRefPairsAgainstCanvasPrimary(
+      mergedPairs,
+      dedupeRefUrl,
+      hasExplicitRefInputsMusic,
+    )
     const noteResolved =
       allNodes?.length && noteText
         ? resolveNodeMentionsInText(noteText, allNodes, node.id, extractOpts?.studioEdges)
@@ -714,7 +893,17 @@ async function extractNodeInputs(
     const restored = await getLocalImageAssetObjectUrl(primaryAssetId)
     if (restored) primarySrc = restored
   }
-  const purePairs = mergedPairs.filter((p) => p.url && p.url !== primarySrc)
+  const dedupeRefUrlAudio = await normalisedCanvasPrimaryUrlForRefDedupe(
+    (node.data as AudioNodeData).src,
+    (node.data as AudioNodeData).srcAssetId,
+  )
+  const hasExplicitRefInputsAudio =
+    audioRefs.length > 0 || (noteText.includes('@') && mergedPairs.length > 0)
+  const purePairs = filterMergedRefPairsAgainstCanvasPrimary(
+    mergedPairs,
+    dedupeRefUrlAudio,
+    hasExplicitRefInputsAudio,
+  )
   const noteResolvedAudio =
     allNodes?.length && noteText
       ? resolveNodeMentionsInText(noteText, allNodes, node.id, extractOpts?.studioEdges)
@@ -731,6 +920,115 @@ async function extractNodeInputs(
       purePairs.map((p) => ({ url: p.url, assetId: p.assetId })),
     ),
   }
+}
+
+/**
+ * Comfy 图片/视频执行用的输入图 URL 序列。
+ * 有「本地参考图 / @ 引用」合并进 refImages 时，**仅以参考图列表为准**，不再把节点主图 `src` 额外拼进序列
+ *（避免「主图=第一张参考 + 参考区两张」被计成 3 张，首尾帧等工作流仅 2 槽时报错）。
+ * 无参考图时退回节点主图 `src`（单图工作流）。
+ */
+/** 画布 URL 是否像音频（避免误进 LoadImage；数字人 LoadAudio 勿传无声 mp4 主槽）。 */
+function isLikelyAudioMediaUrl(url: string): boolean {
+  const raw = String(url || '').trim()
+  if (!raw) return false
+  if (isComfyViewUrlLikelyVideo(raw)) return false
+  const path = raw.split(/[?#]/)[0].trim().toLowerCase()
+  if (/\.(mp4|mov|mkv|avi|m4v|ogv)(\?|#|$)/i.test(path)) return false
+  if (/\.(m4a|mp3|wav|flac|aac|ogg|opus|weba)(\?|#|$)/i.test(path)) return true
+  const fn = readFilenameFromComfyViewUrl(raw)
+  if (fn && /\.(mp4|mov|webm|mkv)/i.test(fn)) return false
+  if (fn && /\.(m4a|mp3|wav|flac|aac|ogg|opus)/i.test(fn)) return true
+  return false
+}
+
+/** Comfy 上传结果是否为图片文件（排除走 `/upload/image` 落盘的音频）。 */
+function isComfyUploadedImageFile(item: ComfyUploadedInputImage): boolean {
+  const f = String(item.filename || '').trim().toLowerCase()
+  if (/\.(m4a|mp3|wav|flac|aac|ogg|opus|webm|weba)$/i.test(f)) return false
+  return /\.(png|jpe?g|webp|gif|bmp)$/i.test(f)
+}
+
+type ComfyImageInputEntry = { url: string; assetId?: string }
+
+function buildOrderedComfyImageInputEntries(
+  rawSrc: string,
+  rawSrcAssetId: string,
+  rawRefImagesMultiline: string,
+  refAssetIds?: string[],
+): ComfyImageInputEntry[] {
+  const refs = String(rawRefImagesMultiline || '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const seen = new Set<string>()
+  const out: ComfyImageInputEntry[] = []
+  const push = (url: string, assetId?: string) => {
+    if (!url || seen.has(url) || isLikelyAudioMediaUrl(url)) return
+    seen.add(url)
+    out.push({ url, assetId: String(assetId || '').trim() || undefined })
+  }
+  if (refs.length > 0) {
+    refs.forEach((url, i) => {
+      const aid = Array.isArray(refAssetIds) && i < refAssetIds.length ? refAssetIds[i] : ''
+      push(url, aid)
+    })
+    return out
+  }
+  const src = String(rawSrc || '').trim()
+  if (src) push(src, rawSrcAssetId)
+  return out
+}
+
+/**
+ * 合并多路图片输入（本地参考图、@ 引用、上游连线），按 assetId 与 URL 去重保序。
+ * @param {ComfyImageInputEntry[][]} lists
+ */
+function mergeComfyImageInputEntriesDeduped(...lists: ComfyImageInputEntry[][]): ComfyImageInputEntry[] {
+  const seenUrl = new Set<string>()
+  const seenAid = new Set<string>()
+  const out: ComfyImageInputEntry[] = []
+  for (const list of lists) {
+    for (const e of list) {
+      const url = String(e.url || '').trim()
+      const aid = String(e.assetId || '').trim()
+      if (!url && !aid) continue
+      if (aid && seenAid.has(aid)) continue
+      if (url && seenUrl.has(url)) continue
+      if (aid) seenAid.add(aid)
+      if (url) seenUrl.add(url)
+      out.push({ url, assetId: aid || undefined })
+    }
+  }
+  return out
+}
+
+/** 工作流是否依赖 Comfy LoadImage / __SRC__ 等图片文件名占位（含数字人、图生视频）。 */
+function workflowJsonRequiresComfyImageUpload(workflowJsonText: string): boolean {
+  const raw = String(workflowJsonText || '')
+  return (
+    /__SRC__/i.test(raw) ||
+    /__REF_IMAGE/i.test(raw) ||
+    /"class_type"\s*:\s*"LoadImage"/i.test(raw) ||
+    /"class_type"\s*:\s*"ImageLoader"/i.test(raw)
+  )
+}
+
+/**
+ * 上传前尽量把失效的 blob/file 还原为可读 URL（IndexedDB / 桌面 input 镜像）。
+ */
+async function resolveCanvasUrlForComfyUpload(url: string, assetId?: string): Promise<string> {
+  let u = String(url || '').trim()
+  const aid = String(assetId || '').trim()
+  if (!u && aid) {
+    const restored = await getLocalImageAssetObjectUrl(aid)
+    if (restored) return restored
+  }
+  if ((/^(blob:|file:)/i.test(u) || /^[a-zA-Z]:[\\/]/.test(u)) && aid) {
+    const restored = await getLocalImageAssetObjectUrl(aid)
+    if (restored) return restored
+  }
+  return u
 }
 
 /** 与参考音频上传序列一致：主槽 + refImages 行（URL 去重保序）。 */
@@ -800,10 +1098,12 @@ function audioRefEntriesFromNodeInputs(ni: NodeInputRecord): AudioRefUploadEntry
       }))
       .filter((e) => e.url)
   }
+  const primaryUrl = String(ni.src ?? '').trim()
+  const primaryAssetId = String((ni as { srcAssetId?: string }).srcAssetId ?? '').trim() || undefined
   return dedupeOrderedAudioRefEntries(
     {
-      url: String(ni.src ?? '').trim(),
-      assetId: String((ni as { srcAssetId?: string }).srcAssetId ?? '').trim() || undefined,
+      url: isLikelyAudioMediaUrl(primaryUrl) ? primaryUrl : '',
+      assetId: isLikelyAudioMediaUrl(primaryUrl) ? primaryAssetId : undefined,
     },
     String((ni as { refImages?: string }).refImages ?? '')
       .split('\n')
@@ -811,6 +1111,239 @@ function audioRefEntriesFromNodeInputs(ni: NodeInputRecord): AudioRefUploadEntry
       .filter(Boolean)
       .map((url) => ({ url })),
   )
+}
+
+type VideoRefUploadEntry = { url: string; assetId: string }
+
+/** 恢复视频 URL（含 blob + assetId 从 IndexedDB 回读）。 */
+async function resolveVideoRefUploadEntry(entry: {
+  url: string
+  assetId?: string
+}): Promise<VideoRefUploadEntry | null> {
+  let u = String(entry.url || '').trim()
+  const aid = String(entry.assetId || '').trim()
+  if (!u && aid) {
+    const restored = await getLocalImageAssetObjectUrl(aid)
+    if (restored) u = restored
+  }
+  if (u.startsWith('blob:') && aid) {
+    const restored = await getLocalImageAssetObjectUrl(aid)
+    if (restored) u = restored
+  }
+  if (!u) return null
+  return { url: u, assetId: aid }
+}
+
+/**
+ * 文本/剧本节点执行 Comfy 时：从 @ 视频与上游连线视频节点收集待上传视频（去重保序）。
+ */
+async function collectTextNodeVideoRefEntries(
+  node: Node<StudioNodeData>,
+  nodeInputs: NodeInputRecord,
+  allNodes?: Array<Node<StudioNodeData>>,
+  edges?: Edge[],
+  rawPromptText?: string,
+): Promise<VideoRefUploadEntry[]> {
+  const rawCandidates: Array<{ url: string; assetId: string }> = []
+  const mentionText = String(rawPromptText ?? nodeInputs.body ?? '').trim()
+  if (allNodes?.length && mentionText.includes('@')) {
+    for (const e of collectMentionVideoResolvedEntries(mentionText, allNodes, node.id, edges)) {
+      rawCandidates.push({ url: e.url, assetId: e.assetId })
+    }
+  }
+  if (node.id && edges?.length && allNodes?.length) {
+    const upstream = collectUpstreamNodeIds(node.id, edges)
+    for (const nid of upstream) {
+      const n = allNodes.find((x) => x.id === nid)
+      if (n?.data.kind !== 'video') continue
+      const u = String((n.data as VideoNodeData).src || '').trim()
+      const aid = String((n.data as VideoNodeData).srcAssetId || '').trim()
+      if (!u && !aid) continue
+      if (rawCandidates.some((c) => (c.url && c.url === u) || (c.assetId && c.assetId === aid))) {
+        continue
+      }
+      rawCandidates.push({ url: u, assetId: aid })
+    }
+  }
+  const nodeVideoSrc = String((nodeInputs as { videoSrc?: string }).videoSrc ?? '').trim()
+  const nodeVideoAid = String((nodeInputs as { videoSrcAssetId?: string }).videoSrcAssetId ?? '').trim()
+  if (nodeVideoSrc || nodeVideoAid) {
+    if (!rawCandidates.some((c) => (c.url && c.url === nodeVideoSrc) || (c.assetId && c.assetId === nodeVideoAid))) {
+      rawCandidates.unshift({ url: nodeVideoSrc, assetId: nodeVideoAid })
+    }
+  }
+  const out: VideoRefUploadEntry[] = []
+  const seen = new Set<string>()
+  for (const c of rawCandidates) {
+    const resolved = await resolveVideoRefUploadEntry(c)
+    if (!resolved || seen.has(resolved.url)) continue
+    seen.add(resolved.url)
+    out.push(resolved)
+  }
+  return out
+}
+
+type ImageRefUploadEntry = { url: string; assetId: string }
+
+/** 恢复图片 URL（含 blob + assetId 从 IndexedDB 回读）。 */
+async function resolveImageRefUploadEntry(entry: {
+  url: string
+  assetId?: string
+}): Promise<ImageRefUploadEntry | null> {
+  let u = String(entry.url || '').trim()
+  const aid = String(entry.assetId || '').trim()
+  if (!u && aid) {
+    const restored = await getLocalImageAssetObjectUrl(aid)
+    if (restored) u = restored
+  }
+  if (u.startsWith('blob:') && aid) {
+    const restored = await getLocalImageAssetObjectUrl(aid)
+    if (restored) u = restored
+  }
+  if (!u) return null
+  return { url: u, assetId: aid }
+}
+
+/**
+ * 文本/剧本节点执行 Comfy 时：从 @ 图片/全景与上游连线图片节点收集待上传图片（去重保序）。
+ */
+async function collectTextNodeImageRefEntries(
+  node: Node<StudioNodeData>,
+  nodeInputs: NodeInputRecord,
+  allNodes?: Array<Node<StudioNodeData>>,
+  edges?: Edge[],
+  rawPromptText?: string,
+): Promise<ImageRefUploadEntry[]> {
+  const rawCandidates: Array<{ url: string; assetId: string }> = []
+  const mentionText = String(rawPromptText ?? nodeInputs.body ?? '').trim()
+  if (allNodes?.length && mentionText.includes('@')) {
+    for (const e of collectMentionImageResolvedEntries(mentionText, allNodes, node.id, edges)) {
+      rawCandidates.push({ url: e.url, assetId: e.assetId })
+    }
+  }
+  if (node.id && edges?.length && allNodes?.length) {
+    const upstream = collectUpstreamNodeIds(node.id, edges)
+    for (const nid of upstream) {
+      const n = allNodes.find((x) => x.id === nid)
+      if (!n) continue
+      const k = n.data.kind
+      if (k !== 'image' && k !== 'panorama') continue
+      const u =
+        k === 'panorama'
+          ? String((n.data as PanoramaNodeData).rectilinearSrc || (n.data as PanoramaNodeData).src || '').trim()
+          : String((n.data as ImageNodeData).src || '').trim()
+      const aid = String((n.data as ImageNodeData).srcAssetId || '').trim()
+      if (!u && !aid) continue
+      if (
+        rawCandidates.some(
+          (c) =>
+            (c.assetId && aid && c.assetId === aid) ||
+            (c.url && u && c.url === u),
+        )
+      ) {
+        continue
+      }
+      rawCandidates.push({ url: u, assetId: aid })
+    }
+  }
+  const refLines = String(nodeInputs.refImages ?? '')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const refAids = Array.isArray(nodeInputs.refImageAssetIds)
+    ? (nodeInputs.refImageAssetIds as string[])
+    : []
+  for (let i = 0; i < refLines.length; i += 1) {
+    const u = refLines[i]!
+    const aid = String(refAids[i] ?? '').trim()
+    if (
+      rawCandidates.some(
+        (c) =>
+          (c.assetId && aid && c.assetId === aid) ||
+          (c.url && u && c.url === u),
+      )
+    ) {
+      continue
+    }
+    rawCandidates.unshift({ url: u, assetId: aid })
+  }
+  const out: ImageRefUploadEntry[] = []
+  const seenUrl = new Set<string>()
+  const seenAid = new Set<string>()
+  for (const c of rawCandidates) {
+    const resolved = await resolveImageRefUploadEntry(c)
+    if (!resolved) continue
+    const aid = String(resolved.assetId || c.assetId || '').trim()
+    if (aid && seenAid.has(aid)) continue
+    if (seenUrl.has(resolved.url)) continue
+    if (aid) seenAid.add(aid)
+    seenUrl.add(resolved.url)
+    out.push(resolved)
+  }
+  return out
+}
+
+/** 文本/剧本 @ 图片反推等与 image/video 共用 Comfy 图片上传链 */
+function nodeKindUsesComfyImagePipeline(nodeKind: StudioNodeKind, imageEntryCount: number): boolean {
+  if (nodeKind === 'image' || nodeKind === 'video') return true
+  if ((nodeKind === 'text' || nodeKind === 'script') && imageEntryCount > 0) return true
+  return false
+}
+
+/**
+ * 在浏览器侧读取视频 metadata 时长（秒）；失败返回 null（如跨域或格式不支持）。
+ */
+function probeVideoDurationSeconds(mediaUrl: string): Promise<number | null> {
+  const url = String(mediaUrl || '').trim()
+  if (!url) return Promise.resolve(null)
+  return new Promise((resolve) => {
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    video.muted = true
+    const cleanup = () => {
+      video.removeAttribute('src')
+      video.load()
+    }
+    const finish = (value: number | null) => {
+      cleanup()
+      resolve(value)
+    }
+    video.onloadedmetadata = () => {
+      const d = Number(video.duration)
+      finish(Number.isFinite(d) && d > 0 ? d : null)
+    }
+    video.onerror = () => finish(null)
+    video.src = url
+  })
+}
+
+/** 将探测到的秒数规范为提示词用的小数（最多 1 位）。 */
+function normalizeVideoDurationSecForPrompt(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return 0
+  return Math.round(raw * 10) / 10
+}
+
+/**
+ * 视频反推：写入用户侧约束，要求分镜末段终点不超过源视频时长。
+ */
+function buildVideoReverseDurationConstraintLine(durationSec: number): string {
+  const d = normalizeVideoDurationSecForPrompt(durationSec)
+  if (d <= 0) return ''
+  const lastStart = Math.max(0, Math.floor((d - 2) / 2) * 2)
+  const lastEnd = d
+  const lastSeg =
+    lastStart >= lastEnd - 0.05
+      ? `0-${lastEnd}秒`
+      : `${lastStart}-${lastEnd}秒`
+  return `源视频总时长：${d}秒。【强制】全程震撼分镜须从0秒起、最后一段终点为${lastEnd}秒（禁止出现${lastEnd}秒之后的时段，如禁止${Math.ceil(lastEnd) + 2}-${Math.ceil(lastEnd) + 4}秒）；约每2秒一段，末段可为${lastSeg}。`
+}
+
+/** 将时长约束并入文本节点正文（供 __BODY__ / LLM 用户消息读取）。 */
+function augmentTextBodyForVideoReverse(body: string, durationSec: number): string {
+  const line = buildVideoReverseDurationConstraintLine(durationSec)
+  if (!line) return body
+  const trimmed = String(body || '').trim()
+  return trimmed ? `${line}\n\n${trimmed}` : line
 }
 
 /**
@@ -1257,26 +1790,176 @@ function injectTextBodyFallback(
 }
 
 /**
+ * 解析文本/剧本 Comfy 工作流的系统提示词：侧栏草稿优先，其次按工作流 id 读取已保存项。
+ */
+function resolveTextComfySystemPrompt(
+  nodeKind: StudioNodeKind,
+  wfEntryId: string,
+  cloudWorkflowEntryId: string,
+  savedByWorkflowId: Record<string, string> | undefined,
+  override?: string,
+): string {
+  const fromOverride = String(override ?? '').trim()
+  if (fromOverride) return fromOverride
+  const k = String(wfEntryId || cloudWorkflowEntryId || '').trim()
+  if (!(nodeKind === 'text' || nodeKind === 'script') || !k) return ''
+  return String(savedByWorkflowId?.[k] ?? '').trim()
+}
+
+/**
+ * 文本/剧本节点兜底：当工作流未使用 `__SYSTEM_PROMPT__` 占位符时，
+ * 将侧栏系统提示词写入 LLM/VLM 节点的 system 类字段（如 llama_cpp_instruct_adv.system_prompt）。
+ */
+function injectTextSystemPromptFallback(
+  prompt: Record<string, unknown>,
+  systemText: string,
+): Record<string, unknown> {
+  const trimmed = systemText.trim()
+  if (!trimmed) return prompt
+  const cloned = structuredClone(prompt) as Record<string, unknown>
+  const systemExactKeys = new Set([
+    'system_prompt',
+    'system',
+    'system_message',
+    'system_instruction',
+    'sys_prompt',
+  ])
+  let injectedCount = 0
+  for (const node of Object.values(cloned)) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) continue
+    const nodeRecord = node as Record<string, unknown>
+    const inputs = nodeRecord.inputs
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
+    const inputRecord = inputs as Record<string, unknown>
+    for (const [rawKey, rawValue] of Object.entries(inputRecord)) {
+      if (typeof rawValue !== 'string') continue
+      const lower = String(rawKey || '').toLowerCase()
+      if (!systemExactKeys.has(lower) && !lower.includes('system_prompt')) continue
+      inputRecord[rawKey] = trimmed
+      injectedCount += 1
+    }
+  }
+  if (shouldLogComfyDebug() && injectedCount > 0) {
+    console.info('[Flowid Comfy] 文本节点系统提示词兜底覆盖字段数', injectedCount)
+  }
+  return cloned
+}
+
+/**
+ * 解析 Comfy 节点 inputs 中的 `[nodeId, slot]` 连线引用。
+ */
+function parseComfyInputLink(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length < 1) return null
+  const id = String(value[0] ?? '').trim()
+  return id || null
+}
+
+/**
+ * 读取 Comfy 文本类节点当前可写的 prompt 字段值。
+ */
+function readComfyTextNodePromptValue(nodeRecord: Record<string, unknown>): string {
+  const classLower = String(nodeRecord.class_type || '').toLowerCase()
+  const inputs = nodeRecord.inputs as Record<string, unknown> | undefined
+  if (!inputs) return ''
+  if (classLower.includes('primitivestringmultiline') && typeof inputs.value === 'string') {
+    return String(inputs.value)
+  }
+  if (typeof inputs.text === 'string') return String(inputs.text)
+  return ''
+}
+
+/**
+ * 写入 Comfy 文本类节点的 prompt 字段（ShowText 等输出节点跳过）。
+ */
+function writeComfyTextNodePromptValue(nodeRecord: Record<string, unknown>, value: string): boolean {
+  const classLower = String(nodeRecord.class_type || '').toLowerCase()
+  if (classLower.includes('showtext')) return false
+  const inputs = nodeRecord.inputs as Record<string, unknown> | undefined
+  if (!inputs) return false
+  if (classLower.includes('primitivestringmultiline') && typeof inputs.value === 'string') {
+    inputs.value = value
+    return true
+  }
+  if (typeof inputs.text === 'string') {
+    inputs.text = value
+    return true
+  }
+  return false
+}
+
+/**
+ * 判断 CLIP 节点 `text` 是否为负向提示词（勿用用户正向文案覆盖）。
+ */
+function isClipNegativePromptText(oldValue: string): boolean {
+  const v = String(oldValue || '').trim()
+  if (!v) return false
+  return (
+    v.length > 64 &&
+    /最差质量|低质量|low quality|jpeg compression|static,|noisy, harsh|bad anatomy|ugly|泛黄，发绿/i.test(v)
+  )
+}
+
+/**
+ * 是否允许用画布提示词覆盖工作流里已有的 `text` 字符串。
+ * 保留负向 CLIP、Qwen 音效推断、showAnything 等内置长文案，避免首尾视频工作流整图校验失败。
+ */
+function shouldReplaceWorkflowPromptText(oldValue: string, classType: string): boolean {
+  const v = String(oldValue || '').trim()
+  if (!v) return true
+  if (/__PROMPT\d*__/i.test(v)) return true
+  const ct = String(classType || '').toLowerCase()
+  if (ct.includes('cliptextencode')) {
+    if (v.length > 64 && /最差质量|low quality|jpeg compression|static,|noisy, harsh/i.test(v)) {
+      return false
+    }
+    return v.length < 12
+  }
+  if (ct.includes('primitivestringmultiline')) return true
+  if (ct.includes('text multiline')) return true
+  if (ct.includes('cr text') || ct.includes('jjktext')) return true
+  return false
+}
+
+/**
+ * 将 Wan 首尾帧节点的 positive 条件接到哪个 CLIPTextEncode（工作流 API 图里常为 `52`）。
+ */
+function findWanPositiveClipTextEncodeNodeId(prompt: Record<string, unknown>): string | null {
+  let wanNodeId: string | null = null
+  for (const [nodeId, raw] of Object.entries(prompt)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const ct = String((raw as Record<string, unknown>).class_type || '')
+    if (/WanFirstLastFrameToVideo/i.test(ct)) {
+      wanNodeId = nodeId
+      break
+    }
+  }
+  if (!wanNodeId) return null
+  const wanInputs = (prompt[wanNodeId] as Record<string, unknown>).inputs as Record<string, unknown>
+  const pos = wanInputs?.positive
+  if (!Array.isArray(pos) || pos.length < 1) return null
+  const clipId = String(pos[0] ?? '').trim()
+  return clipId && prompt[clipId] ? clipId : null
+}
+
+/**
  * 图片/视频节点兜底：当工作流未使用 __PROMPT__ 占位符时，
  * 自动把提示词映射到常见字段，避免“面板有文案但实际未注入”的情况。
  */
 function injectVisualPromptFallback(
   prompt: Record<string, unknown>,
   visualPrompt: string,
+  options?: {
+    /**
+     * 工作流 JSON 无 `__PROMPT__` 时（如电商模板）：用面板/继承后的正文强制覆盖模板内 CLIP 正向长句。
+     */
+    forceOverwriteTemplateClip?: boolean
+  },
 ): Record<string, unknown> {
   const trimmed = visualPrompt.trim()
   if (!trimmed) return prompt
   const cloned = structuredClone(prompt) as Record<string, unknown>
-  const exactCandidateKeys = new Set([
-    'prompt',
-    'text',
-    'positive',
-    'positive_prompt',
-    'main_prompt',
-    'caption',
-    'description',
-  ])
-  const keywordCandidateKeys = ['prompt', 'text', 'caption', 'description', 'subject', 'query']
+  const wanPositiveClipId = findWanPositiveClipTextEncodeNodeId(cloned)
+  const forceClip = options?.forceOverwriteTemplateClip === true
   const isNegativeLikeKey = (key: string): boolean => {
     const lower = key.toLowerCase()
     return (
@@ -1287,34 +1970,301 @@ function injectVisualPromptFallback(
     )
   }
   let injectedCount = 0
-  for (const node of Object.values(cloned)) {
+  let forcedPositiveClipDone = false
+  for (const [nodeId, node] of Object.entries(cloned)) {
     if (!node || typeof node !== 'object' || Array.isArray(node)) continue
     const nodeRecord = node as Record<string, unknown>
-    const classType = String(nodeRecord.class_type || '').toLowerCase()
+    const classType = String(nodeRecord.class_type || '')
+    const classLower = classType.toLowerCase()
     const inputs = nodeRecord.inputs
     if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
     const inputRecord = inputs as Record<string, unknown>
-    /**
-     * 兼容 Comfy PrimitiveStringMultiline：图片/视频工作流里常用它承载主提示词。
-     */
-    if (classType.includes('primitivestringmultiline') && typeof inputRecord.value === 'string') {
-      inputRecord.value = trimmed
-      injectedCount += 1
+    if (classLower.includes('primitivestringmultiline') && typeof inputRecord.value === 'string') {
+      if (shouldReplaceWorkflowPromptText(String(inputRecord.value), classType)) {
+        inputRecord.value = trimmed
+        injectedCount += 1
+      }
+      continue
+    }
+    if (classLower.includes('text multiline') && typeof inputRecord.text === 'string') {
+      if (shouldReplaceWorkflowPromptText(String(inputRecord.text), classType)) {
+        inputRecord.text = trimmed
+        injectedCount += 1
+      }
+      continue
+    }
+    if (
+      (classLower.includes('cr text') || classLower.includes('jjktext')) &&
+      typeof inputRecord.text === 'string'
+    ) {
+      const oldValue = String(inputRecord.text)
+      const canForce = forceClip && !forcedPositiveClipDone && !isClipNegativePromptText(oldValue)
+      if (shouldReplaceWorkflowPromptText(oldValue, classType) || canForce) {
+        inputRecord.text = trimmed
+        injectedCount += 1
+        if (canForce) forcedPositiveClipDone = true
+      }
+      continue
+    }
+    if (!classLower.includes('cliptextencode')) continue
+    const clipTextInput = inputRecord.text
+    if (Array.isArray(clipTextInput)) {
+      const srcId = parseComfyInputLink(clipTextInput)
+      const srcNode = srcId ? (cloned[srcId] as Record<string, unknown> | undefined) : undefined
+      if (srcNode) {
+        const srcText = readComfyTextNodePromptValue(srcNode)
+        const srcClass = String(srcNode.class_type || '')
+        const canForce =
+          forceClip && !forcedPositiveClipDone && !isClipNegativePromptText(srcText)
+        if (
+          (shouldReplaceWorkflowPromptText(srcText, srcClass) || canForce) &&
+          !isClipNegativePromptText(srcText) &&
+          (wanPositiveClipId == null || nodeId === wanPositiveClipId || canForce)
+        ) {
+          if (writeComfyTextNodePromptValue(srcNode, trimmed)) {
+            injectedCount += 1
+            if (canForce) forcedPositiveClipDone = true
+          }
+        }
+      }
       continue
     }
     for (const [rawKey, rawValue] of Object.entries(inputRecord)) {
-      if (typeof rawValue !== 'string') continue
-      const key = String(rawKey)
-      const lower = key.toLowerCase()
-      const keyMatched =
-        exactCandidateKeys.has(lower) ||
-        keywordCandidateKeys.some((part) => lower.includes(part))
-      if (!keyMatched || isNegativeLikeKey(lower)) continue
-      inputRecord[key] = trimmed
+      if (rawKey !== 'text' || typeof rawValue !== 'string') continue
+      if (isNegativeLikeKey(rawKey)) continue
+      const oldValue = rawValue
+      const canForce =
+        forceClip && !forcedPositiveClipDone && !isClipNegativePromptText(oldValue)
+      if (!shouldReplaceWorkflowPromptText(oldValue, classType) && !canForce) continue
+      if (wanPositiveClipId && nodeId !== wanPositiveClipId && !canForce) continue
+      inputRecord[rawKey] = trimmed
       injectedCount += 1
+      if (canForce) forcedPositiveClipDone = true
     }
   }
   if (injectedCount > 0) return cloned
+  return cloned
+}
+
+/** 工作流 JSON 是否含 `LoadAudio`（数字人 LTX 等），用于视频节点 @ 音频上传。 */
+function workflowJsonHasLoadAudioNodes(workflowJsonText: string): boolean {
+  return /"class_type"\s*:\s*"LoadAudio"/i.test(String(workflowJsonText || ''))
+}
+
+/** 工作流 JSON 是否含 `VHS_LoadVideo`（视频反推等），用于文本节点 @ 视频上传。 */
+function workflowJsonHasVhsLoadVideoNodes(workflowJsonText: string): boolean {
+  return /"class_type"\s*:\s*"VHS_LoadVideo"/i.test(String(workflowJsonText || ''))
+}
+
+function isComfyWorkflowVideoPlaceholder(value: string): boolean {
+  const v = String(value || '').trim()
+  return /__VIDEO__/i.test(v) || /__SRC__/i.test(v)
+}
+
+/**
+ * 将 VHS_LoadVideo 里写死的模板文件名（如 `LTX2-pre_00001.mp4`）改为 `__VIDEO__`，
+ * 避免本地覆盖/旧 Auth JSON 导致 Comfy 找不到视频。
+ */
+function normalizeWorkflowVhsLoadVideoInputsToPlaceholders(workflowJsonText: string): string {
+  const raw = String(workflowJsonText || '').trim()
+  if (!raw || !workflowJsonHasVhsLoadVideoNodes(raw)) return raw
+  try {
+    const prompt = JSON.parse(raw) as Record<string, unknown>
+    let changed = false
+    for (const node of Object.values(prompt)) {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) continue
+      const rec = node as Record<string, unknown>
+      if (String(rec.class_type || '') !== 'VHS_LoadVideo') continue
+      const inputs = rec.inputs
+      if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
+      const inp = inputs as Record<string, unknown>
+      const val = inp.video
+      if (Array.isArray(val) && val.length >= 2) continue
+      if (typeof val !== 'string') continue
+      const v = val.trim()
+      if (!v || isComfyWorkflowVideoPlaceholder(v)) continue
+      inp.video = '__VIDEO__'
+      changed = true
+    }
+    return changed ? JSON.stringify(prompt) : raw
+  } catch {
+    return raw
+  }
+}
+
+function isComfyWorkflowImagePlaceholder(value: string): boolean {
+  const v = String(value || '').trim()
+  return /__SRC__/i.test(v) || /__REF_IMAGE/i.test(v)
+}
+
+/**
+ * 将 LoadImage 里写死的模板文件名（如 `图片节点1-2026-….png`）改为 `__SRC__`，避免本地覆盖/旧 Auth JSON 导致 Comfy 找不到图。
+ */
+function normalizeWorkflowLoadImageInputsToPlaceholders(workflowJsonText: string): string {
+  const raw = String(workflowJsonText || '').trim()
+  if (!raw || !/"class_type"\s*:\s*"LoadImage"/i.test(raw)) return raw
+  try {
+    const prompt = JSON.parse(raw) as Record<string, unknown>
+    let changed = false
+    for (const node of Object.values(prompt)) {
+      if (!node || typeof node !== 'object' || Array.isArray(node)) continue
+      const rec = node as Record<string, unknown>
+      if (!isComfyFileLoadImageNodeClass(String(rec.class_type || ''))) continue
+      const inputs = rec.inputs
+      if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
+      const inp = inputs as Record<string, unknown>
+      for (const key of Object.keys(inp)) {
+        if (!/^image\d*$/iu.test(key)) continue
+        const val = inp[key]
+        if (Array.isArray(val) && val.length >= 2) continue
+        if (typeof val !== 'string') continue
+        const v = val.trim()
+        if (!v || isComfyWorkflowImagePlaceholder(v)) continue
+        inp[key] = '__SRC__'
+        changed = true
+      }
+    }
+    return changed ? JSON.stringify(prompt) : raw
+  } catch {
+    return raw
+  }
+}
+
+/**
+ * 有实际上传图时，强制写入主链路 LoadImage（覆盖模板残留名）。
+ * 仅用于「单图」工作流；多图（首尾帧 @ 两张）须由 `injectVisualImageFallback` 按池序分发，不可全写主图。
+ */
+function forcePrimaryImageOnLinkedLoadImages(
+  prompt: Record<string, unknown>,
+  primaryFilename: string,
+): Record<string, unknown> {
+  const fn = String(primaryFilename || '').trim()
+  if (!fn || !isComfyUploadedImageFile({ filename: fn, subfolder: '', type: 'input' })) return prompt
+  const linked = collectLinkedLoadImageNodeIds(prompt)
+  const targetIds =
+    linked.size > 0
+      ? [...linked]
+      : Object.entries(prompt)
+          .filter(([, n]) => {
+            if (!n || typeof n !== 'object' || Array.isArray(n)) return false
+            return isComfyFileLoadImageNodeClass(String((n as Record<string, unknown>).class_type || ''))
+          })
+          .map(([id]) => id)
+  if (!targetIds.length) return prompt
+  const cloned = structuredClone(prompt) as Record<string, unknown>
+  for (const nodeId of targetIds) {
+    const node = cloned[nodeId]
+    if (!node || typeof node !== 'object' || Array.isArray(node)) continue
+    const inp = (node as Record<string, unknown>).inputs as Record<string, unknown>
+    if (!inp || typeof inp !== 'object') continue
+    for (const key of Object.keys(inp)) {
+      if (!/^image\d*$/iu.test(key)) continue
+      const val = inp[key]
+      if (Array.isArray(val) && val.length >= 2) continue
+      if (typeof val === 'string') inp[key] = fn
+    }
+  }
+  return cloned
+}
+
+/**
+ * 与 ComfyUI-PromptRelay 一致：local_prompts 以 ` | ` 分段。
+ */
+function countLtxLocalPromptSegments(localText: string): number {
+  const t = String(localText || '').trim()
+  if (!t) return 0
+  const parts = t.split(/\s*\|\s*/u).map((s) => s.trim()).filter(Boolean)
+  return parts.length > 0 ? parts.length : 1
+}
+
+/**
+ * 将 segment_lengths 数量对齐到 local 段数（模板常为 7 段，用户 @ 剧本可能只有 4 段）。
+ */
+function normalizeLtxSegmentLengthsString(rawLengths: string, segmentCount: number): string {
+  const n = Math.max(0, Math.floor(segmentCount))
+  if (n <= 0) return String(rawLengths || '').trim()
+  const nums = String(rawLengths || '')
+    .split(',')
+    .map((s) => Number.parseInt(s.trim(), 10))
+    .filter((v) => Number.isFinite(v) && v > 0)
+  if (nums.length === n) return nums.join(',')
+  if (nums.length > n) return nums.slice(0, n).join(',')
+  const out = [...nums]
+  const fallback = nums[nums.length - 1] ?? 150
+  while (out.length < n) out.push(fallback)
+  return out.join(',')
+}
+
+/**
+ * 多段 local 文案统一为 ` | ` 分隔（PromptRelay 要求；避免仅用空行导致段数与 segment_lengths 不一致）。
+ */
+function normalizeLtxLocalPromptText(text: string): string {
+  const t = String(text || '').trim()
+  if (!t) return t
+  if (/\|/u.test(t)) return t
+  const blocks = t.split(/\n{2,}/u).map((s) => s.trim()).filter(Boolean)
+  if (blocks.length > 1) return blocks.join(' | ')
+  return t
+}
+
+/**
+ * LTX 数字人：`PromptRelayEncode` 的 global/local 多行文本写入节点 81/61（`__PROMPT2__`→画面，`__PROMPT3__`→分段）。
+ */
+function injectLtxPromptRelayMultilineTexts(
+  prompt: Record<string, unknown>,
+  nodeInputs: NodeInputRecord,
+): Record<string, unknown> {
+  let relayId: string | null = null
+  for (const [id, raw] of Object.entries(prompt)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    if (String((raw as Record<string, unknown>).class_type || '') === 'PromptRelayEncode') {
+      relayId = id
+      break
+    }
+  }
+  if (!relayId) return prompt
+
+  const relayInputs = (prompt[relayId] as Record<string, unknown>).inputs as Record<string, unknown>
+  const readLinkId = (link: unknown): string => {
+    if (!Array.isArray(link) || link.length < 1) return ''
+    return String(link[0] ?? '').trim()
+  }
+  const globalNodeId = readLinkId(relayInputs.global_prompt)
+  const localNodeId = readLinkId(relayInputs.local_prompts)
+
+  const globalText = String((nodeInputs as { prompt2?: string }).prompt2 ?? '').trim()
+  const localText = String((nodeInputs as { prompt3?: string }).prompt3 ?? '').trim()
+  const fallbackPrompt = String(nodeInputs.prompt ?? '').trim()
+  const resolvedGlobal = globalText || fallbackPrompt
+  let resolvedLocal = localText
+  if (!resolvedLocal && fallbackPrompt.includes('|')) {
+    resolvedLocal = fallbackPrompt
+  }
+  resolvedLocal = normalizeLtxLocalPromptText(resolvedLocal)
+
+  const cloned = structuredClone(prompt) as Record<string, unknown>
+  const writeMultiline = (nodeId: string, text: string) => {
+    if (!nodeId || !text) return
+    const node = cloned[nodeId]
+    if (!node || typeof node !== 'object' || Array.isArray(node)) return
+    const rec = node as Record<string, unknown>
+    if (String(rec.class_type || '') !== 'Text Multiline') return
+    const inputs = rec.inputs
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) return
+    ;(inputs as Record<string, unknown>).text = text
+  }
+  writeMultiline(globalNodeId, resolvedGlobal)
+  writeMultiline(localNodeId, resolvedLocal)
+
+  const segCount = countLtxLocalPromptSegments(resolvedLocal)
+  if (segCount > 0) {
+    const relayNode = cloned[relayId] as Record<string, unknown>
+    const relayInp = relayNode.inputs as Record<string, unknown>
+    const rawLen = String(relayInp.segment_lengths ?? '').trim()
+    if (rawLen) {
+      relayInp.segment_lengths = normalizeLtxSegmentLengthsString(rawLen, segCount)
+    }
+  }
   return cloned
 }
 
@@ -1509,8 +2459,10 @@ function injectVisualImageFallback(
     .filter((u) => u.filename)
   if (!normalized.length) return prompt
   const cloned = structuredClone(prompt) as Record<string, unknown>
-  const imagePool = normalized
-  const primaryFilename = String(options?.primaryFilename || normalized[0]?.filename || '').trim()
+  const imagePool = normalized.filter((u) => isComfyUploadedImageFile(u))
+  if (!imagePool.length) return prompt
+  const uploadedNameSet = new Set(imagePool.map((u) => u.filename.trim()).filter(Boolean))
+  const primaryFilename = String(options?.primaryFilename || imagePool[0]?.filename || '').trim()
   const refFilenames = (options?.refFilenames ?? [])
     .map((v) => String(v || '').trim())
     .filter(Boolean)
@@ -1648,10 +2600,36 @@ function injectVisualImageFallback(
           (preferred ? poolItemFromFilename(preferred) : null) ||
           consumeImage()
         if (!picked) {
-          // 无可用输入图时清空槽位，避免继续沿用模板中的历史文件名。
-          inputRecord[slotKey] = ''
-          touchedKeys.add(slotKey)
-          assignedInThisNode[slotKey] = '（已清空）'
+          const existing =
+            typeof inputRecord[slotKey] === 'string' ? String(inputRecord[slotKey]).trim() : ''
+          // 有本次上传图时：模板里历史 png 名（未实际上传）必须覆盖，不能「保留」导致 Comfy 找不到文件。
+          const keepExisting =
+            existing &&
+            isLikelyImageFilename(existing) &&
+            !(
+              imagePool.length > 0 &&
+              (existing.includes('__SRC__') ||
+                existing.includes('__REF_IMAGE__') ||
+                !uploadedNameSet.has(existing))
+            )
+          if (keepExisting) {
+            assignedInThisNode[slotKey] = `（保留 ${existing}）`
+            continue
+          }
+          const fallbackPick =
+            consumeImage() ||
+            (primaryFilename ? poolItemFromFilename(primaryFilename) : null)
+          if (fallbackPick) {
+            inputRecord[slotKey] = fallbackPick.filename
+            touchedKeys.add(slotKey)
+            assignedInThisNode[slotKey] = fallbackPick.filename
+            if (!firstAssigned) firstAssigned = fallbackPick
+          } else {
+            // 无可用输入图时清空槽位，避免继续沿用模板中的历史文件名。
+            inputRecord[slotKey] = ''
+            touchedKeys.add(slotKey)
+            assignedInThisNode[slotKey] = '（已清空）'
+          }
         } else {
           inputRecord[slotKey] = picked.filename
           touchedKeys.add(slotKey)
@@ -1914,6 +2892,92 @@ function isComfyTensorLinkValue(value: unknown): value is [unknown, unknown] {
   return idOk && slotOk
 }
 
+/** 查找 `WanFirstLastFrameToVideo` 节点 id。 */
+function findWanFirstLastFrameNodeId(prompt: Record<string, unknown>): string | null {
+  for (const [nodeId, raw] of Object.entries(prompt)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    if (/WanFirstLastFrameToVideo/i.test(String((raw as Record<string, unknown>).class_type || ''))) {
+      return nodeId
+    }
+  }
+  return null
+}
+
+/** 沿 tensor 上游 BFS，找到首个读图类节点（LoadImage / ImageLoader 等）。 */
+function findUpstreamComfyImageLoaderNodeId(
+  prompt: Record<string, unknown>,
+  startNodeId: string,
+): string | null {
+  const visited = new Set<string>()
+  const queue = [String(startNodeId || '').trim()].filter(Boolean)
+  while (queue.length) {
+    const curr = queue.shift()!
+    if (visited.has(curr)) continue
+    visited.add(curr)
+    const node = prompt[curr]
+    if (!node || typeof node !== 'object' || Array.isArray(node)) continue
+    const classType = String((node as Record<string, unknown>).class_type || '')
+    if (isComfyFileLoadImageNodeClass(classType)) return curr
+    const inputs = (node as Record<string, unknown>).inputs
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
+    for (const value of Object.values(inputs as Record<string, unknown>)) {
+      if (!isComfyTensorLinkValue(value)) continue
+      const up = readTensorUpstreamIdFromLink(value)
+      if (up && !visited.has(up)) queue.push(up)
+    }
+  }
+  return null
+}
+
+/** 向指定读图节点写入 Comfy input 目录中的文件名（跳过仍为 tensor 连线的槽位）。 */
+function writeComfyImageLoaderNodeFilename(
+  prompt: Record<string, unknown>,
+  loaderNodeId: string,
+  filename: string,
+): void {
+  const fn = String(filename || '').trim()
+  if (!fn) return
+  const node = prompt[loaderNodeId]
+  if (!node || typeof node !== 'object' || Array.isArray(node)) return
+  const inputRecord = (node as Record<string, unknown>).inputs as Record<string, unknown>
+  if (!inputRecord || typeof inputRecord !== 'object') return
+  for (const key of Object.keys(inputRecord)) {
+    if (!/^image\d*$/iu.test(key) && key !== 'filename') continue
+    const slotVal = inputRecord[key]
+    if (isComfyTensorLinkValue(slotVal)) continue
+    if (typeof slotVal === 'string') inputRecord[key] = fn
+  }
+}
+
+/**
+ * Wan 首尾帧：按 `start_image` / `end_image` 链路分别写入首帧、尾帧文件名。
+ * 上传顺序与面板 @ 顺序一致：第 1 张 → 首帧，第 2 张 → 尾帧。
+ */
+function injectWanFirstLastFrameImageLoaderFilenames(
+  prompt: Record<string, unknown>,
+  uploads: ComfyUploadedInputImage[],
+): Record<string, unknown> {
+  const pool = uploads.filter((u) => isComfyUploadedImageFile(u) && String(u.filename || '').trim())
+  if (pool.length < 2) return prompt
+  const wanId = findWanFirstLastFrameNodeId(prompt)
+  if (!wanId) return prompt
+  const wanNode = prompt[wanId] as Record<string, unknown>
+  const wanInputs = wanNode.inputs as Record<string, unknown> | undefined
+  if (!wanInputs) return prompt
+  const cloned = structuredClone(prompt) as Record<string, unknown>
+  const assign = (linkKey: 'start_image' | 'end_image', upload: ComfyUploadedInputImage) => {
+    const link = wanInputs[linkKey]
+    const root = readTensorUpstreamIdFromLink(link)
+    if (!root) return
+    const loaderId = findUpstreamComfyImageLoaderNodeId(cloned, root)
+    if (!loaderId) return
+    writeComfyImageLoaderNodeFilename(cloned, loaderId, upload.filename)
+  }
+  assign('start_image', pool[0]!)
+  assign('end_image', pool[1]!)
+  return cloned
+}
+
 /**
  * 将已上传到 Comfy input 的图片文件名，沿 tensor 连线向上游同步到 `LoadImage` 节点。
  *
@@ -2029,6 +3093,52 @@ function propagateComfyFilenameToLinkedLoadImages(
     }
   }
 
+  return cloned
+}
+
+/** 将已上传的音频文件名写入工作流内所有 `LoadAudio` 节点（无 `__REF_AUDIO_n__` 占位时兜底）。 */
+function propagateComfyFilenameToLoadAudioNodes(
+  prompt: Record<string, unknown>,
+  uploaded: ComfyUploadedInputImage | null,
+): Record<string, unknown> {
+  if (!uploaded?.filename?.trim()) return prompt
+  const trimmed = uploaded.filename.trim()
+  const cloned = structuredClone(prompt) as Record<string, unknown>
+  for (const node of Object.values(cloned)) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) continue
+    const rec = node as Record<string, unknown>
+    if (String(rec.class_type || '') !== 'LoadAudio') continue
+    const inputs = rec.inputs
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
+    const inp = inputs as Record<string, unknown>
+    if (typeof inp.audio === 'string' && !/^__REF_AUDIO_\d+__$/i.test(inp.audio.trim())) {
+      inp.audio = trimmed
+    } else if (typeof inp.audio === 'string') {
+      inp.audio = trimmed
+    }
+  }
+  return cloned
+}
+
+/** 将已上传的视频文件名写入工作流内所有 `VHS_LoadVideo` 节点（无 `__VIDEO__` 占位时兜底）。 */
+function propagateComfyFilenameToVhsLoadVideoNodes(
+  prompt: Record<string, unknown>,
+  uploaded: ComfyUploadedInputImage | null,
+): Record<string, unknown> {
+  if (!uploaded?.filename?.trim()) return prompt
+  const trimmed = uploaded.filename.trim()
+  const cloned = structuredClone(prompt) as Record<string, unknown>
+  for (const node of Object.values(cloned)) {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) continue
+    const rec = node as Record<string, unknown>
+    if (String(rec.class_type || '') !== 'VHS_LoadVideo') continue
+    const inputs = rec.inputs
+    if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) continue
+    const inp = inputs as Record<string, unknown>
+    if (typeof inp.video === 'string') {
+      inp.video = trimmed
+    }
+  }
   return cloned
 }
 
@@ -2589,8 +3699,7 @@ export function useWorkflowIntegration() {
       setOfficialTemplates([])
       return []
     }
-    const licHeaders = buildLicenseHeaders()
-    const fetchOpts: RequestInit = licHeaders ? { headers: { ...licHeaders } } : {}
+    const fetchOpts: RequestInit = {}
 
     const parseTemplatesPayload = (raw: unknown): OfficialTemplateMeta[] => {
       const j = raw as {
@@ -2651,31 +3760,6 @@ export function useWorkflowIntegration() {
 
   const runNodeWorkflow = useCallback(
     async (node: Node<StudioNodeData>, options?: RunNodeWorkflowOptions) => {
-      // 轻量：执行前尝试刷新授权（失败不阻断）
-      try {
-        const snap = loadLicenseSnapshotV2()
-        if (snap) {
-          const res = await verifyLicenseRemote(snap)
-          if (res.ok) {
-            const now = Date.now()
-            saveLicenseSnapshotV2({
-              ...snap,
-              licenseCode: res.licenseCode,
-              machineId: res.machineId,
-              expiresAtMs: res.expiresAtMs,
-              entitlements: res.entitlements,
-              lastVerifiedAtMs: now,
-              serverAnchor: { serverTimeMs: res.serverTimeMs, localTimeMs: now, updatedAtMs: now },
-            })
-          }
-        }
-      } catch {
-        // ignore
-      }
-      const access = computeAccessState(loadLicenseSnapshotV2())
-      if (access === 'expired') {
-        throw new Error('您的授权已到期：请在「授权」里续费或刷新。')
-      }
       if (node.data.kind === 'group') {
         throw new Error('分组节点不可执行')
       }
@@ -2705,109 +3789,20 @@ export function useWorkflowIntegration() {
         }
       }
 
-      const runWithPointsGuard = async (run: () => Promise<any>): Promise<any> => {
-        const snapPoints = loadLicenseSnapshotV2()
-        const lc = String(snapPoints?.licenseCode || '').trim()
-        const mc = String(snapPoints?.machineId || '').trim()
-        /**
-         * 授权码 / 积分：仅绑定「云端 ComfyUI 工作流」。
-         * OpenAI 兼容「云端模型」不校验授权、不预扣积分（用户自备 Key / 线路）。
-         */
-        const requiresLicenseForCloudComfy =
-          executionTarget === 'workflow' && snapshot.executionProvider === 'cloud'
-        const needsPointsReserve = requiresLicenseForCloudComfy
-        if (requiresLicenseForCloudComfy && (!lc || !mc)) {
-          throw new Error(
-            '使用云端 Comfy 工作流前，请先在「设置 → 授权码」中完成激活（需有效授权码与机器码，且积分服务可访问）。',
-          )
-        }
-        if (!needsPointsReserve || !lc || !mc) {
-          return await run()
-        }
-        const dedupeKey = `${lc}_${node.id}_${Date.now()}`
-        const rv = await apiPointsReserve({
-          licenseCode: lc,
-          machineCode: mc,
-          dedupeKey,
-          nodeKind,
-          executionTarget,
-          metadata: reserveMetadata,
-        })
-        if (!rv.success) {
-          const code = String((rv as { error?: string }).error || '')
-          if (code === 'need_pro_membership') {
-            throw new Error(
-              String(
-                (rv as { message?: string }).message ||
-                  '需要 Auth 会员（proTemplates）：请在环境变量 POINTS_PRO_MEMBERSHIP_NODE_KINDS 启用时，为预扣请求附带 JWT 会员码。',
-              ),
-            )
-          }
-          throw new Error(
-            String(rv.message || '积分不足：请检查授权或启动 Auth 服务（npm run auth:dev / npm run dev，积分 API 在 /pts）'),
-          )
-        }
-        const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
-        const confirmWithRetries = async () => {
-          const max = 5
-          let lastMsg = 'confirm_failed'
-          for (let i = 0; i < max; i += 1) {
-            try {
-              const c = await apiPointsConfirm({ licenseCode: lc, machineCode: mc, dedupeKey })
-              if (c.success) return
-              lastMsg = String(c.message || 'confirm_failed')
-            } catch (e) {
-              lastMsg = String((e as Error)?.message || e || 'confirm_failed')
-            }
-            await sleep(350 * (i + 1) * (i + 1))
-          }
-          await apiPointsConfirmFailure({
-            licenseCode: lc,
-            machineCode: mc,
-            dedupeKey,
-            errorText: lastMsg,
-            metadata: { ...reserveMetadata, attempts: max },
-          }).catch(() => {})
-        }
-        let out: any
-        try {
-          out = await run()
-        } catch (err) {
-          const msg = String((err as Error)?.message || err || '未知错误')
-          await apiPointsCancel({
-            licenseCode: lc,
-            machineCode: mc,
-            dedupeKey,
-            cancelReason: 'failure',
-            error: msg,
-            metadata: { ...reserveMetadata, nodeId: node.id },
-          }).catch(() => {})
-          const reasonMax = 120
-          const errRaw = msg.trim()
-          const truncated = errRaw.length > reasonMax
-          const errShort = truncated ? `${errRaw.slice(0, reasonMax)}…` : errRaw
-          const toastShort = `任务失败：${errShort}，积分已自动退还`
-          setLastExecutionMessage(`任务失败：${msg}，积分已自动退还`)
-          emitPointsTaskFailure({
-            message: toastShort,
-            errorFull: truncated ? errRaw : undefined,
-          })
-          throw err
-        }
-        await confirmWithRetries()
-        return out
-      }
-
-      return await runWithPointsGuard(async () => {
+      return await (async () => {
       if (executionTarget === 'model') {
         const nodeModel = String((node.data as any)?.cloudModelName || nodeConfig.cloudModelName || '').trim()
         const nodeBaseUrlRaw = String((node.data as any)?.cloudModelUrl || nodeConfig.cloudModelUrl || '')
         const nodeApiKey = String((node.data as any)?.cloudApiKey || nodeConfig.cloudApiKey || '').trim()
 
         const self = getActiveCloudSelfDefaultsForNodeKind(nodeKind)
+        const cloudApiMode: CloudSelfApiMode = self.apiMode || 'auto'
         const model = nodeModel || self.model
         const baseUrl = normalizeOpenAICompatibleBaseUrl(nodeBaseUrlRaw || self.baseUrl || '')
         let apiKey = nodeApiKey || self.apiKey
+        const preferAsyncImage =
+          cloudApiMode !== 'openai' &&
+          (cloudApiMode === 'async' || (cloudApiMode === 'auto' && isModelScopeInferenceBase(baseUrl)))
         const assistPickRaw = String((node.data as any)?.cloudAssistModelPick || '').trim()
         if (tryDecodeCloudAssistModelPick(assistPickRaw)) {
           const ak = studioNodeKindToAssistKind(String(nodeKind))
@@ -3176,21 +4171,24 @@ export function useWorkflowIntegration() {
                       : '无参考图，走文生图端点。',
                 })
               }
+              const submitHeaders = preferAsyncImage
+                ? cloudImageSubmitHeaders(apiKey, baseUrl)
+                : {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${apiKey}`,
+                  }
               const call = await requestWithBackoff(
                 endpoint,
                 {
                   method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${apiKey}`,
-                  },
+                  headers: submitHeaders,
                   json: {
                     model,
                     prompt: promptForImage,
                     n: 1,
                     size: openAiImgOut.size,
                     ...(openAiImgOut.quality ? { quality: openAiImgOut.quality } : {}),
-                    response_format: 'url',
+                    ...(preferAsyncImage ? {} : { response_format: 'url' }),
                   },
                 },
                 { maxAttempts: 3 },
@@ -3201,9 +4199,20 @@ export function useWorkflowIntegration() {
                 const msg = String(json?.error?.message || json?.message || `HTTP ${res.status}`)
                 throw new Error(`云端生图调用失败：${endpoint} -> ${msg}`)
               }
-              imageUrl = readImageUrl(json)
+              imageUrl = readImageUrl(json) || readCloudImageUrlFromPayload(json)
               if (!imageUrl) {
-                throw new Error('云端生图调用成功但未返回图片 URL')
+                const taskId = readCloudImageTaskId(json) || readTaskId(json)
+                if (taskId) {
+                  imageUrl = await pollCloudImageTask({
+                    baseUrl,
+                    apiKey,
+                    taskId,
+                    onProgress: (label) => options?.onProgress?.({ percent: 48, label }),
+                  })
+                }
+              }
+              if (!imageUrl) {
+                throw new Error('云端生图调用成功但未返回图片 URL / taskId')
               }
             }
           }
@@ -3219,6 +4228,7 @@ export function useWorkflowIntegration() {
         if (nodeKind === 'video') {
           options?.onProgress?.({ percent: 8, label: '正在调用云端视频模型…' })
           const generationCandidates = [
+            `${baseUrl}/v2/videos/generations`,
             `${baseUrl}/v1/videos/generations`,
             `${baseUrl}/v1/video/generations`,
           ]
@@ -3296,6 +4306,7 @@ export function useWorkflowIntegration() {
               throw new Error('云端视频调用成功但未返回视频 URL / taskId')
             }
             const pollCandidates = [
+              `${baseUrl}/v2/videos/generations/${encodeURIComponent(taskId)}`,
               `${baseUrl}/v1/videos/generations/${encodeURIComponent(taskId)}`,
               `${baseUrl}/v1/video/generations/${encodeURIComponent(taskId)}`,
             ]
@@ -3450,9 +4461,8 @@ export function useWorkflowIntegration() {
           throw new Error('当前节点未选择官方模板，请到设置中为该节点类型选择模板')
         }
         const authBaseUrl = String(loadLicenseServerConfig().baseUrl || '').trim().replace(/\/+$/, '')
-        const licenseHeaders = buildLicenseHeaders()
-        if (!authBaseUrl || !licenseHeaders) {
-          throw new Error('未配置授权服务地址或尚未激活授权，无法提交官方模板任务')
+        if (!authBaseUrl) {
+          throw new Error('未配置 Auth 服务地址，无法提交官方模板任务（开发环境请运行 npm run auth:dev）')
         }
         const officialInputNode =
           nodeKind === 'image' && options?.studioEdges?.length && options?.allNodes?.length
@@ -3476,7 +4486,6 @@ export function useWorkflowIntegration() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...licenseHeaders,
           },
           body: JSON.stringify({
             templateId,
@@ -3508,11 +4517,7 @@ export function useWorkflowIntegration() {
         while (Date.now() < deadline) {
           const statusRes = await fetch(
             `${authBaseUrl}/tasks/${encodeURIComponent(taskId)}/status`,
-            {
-              headers: {
-                ...licenseHeaders,
-              },
-            },
+            {},
           )
           const statusJson = (await statusRes.json().catch(() => ({}))) as {
             status?: string
@@ -3581,31 +4586,24 @@ export function useWorkflowIntegration() {
       let remoteCloudPick: RemoteCloudPick | null = null
       let workflowSource = ''
       if (isCloudCustom && cloudWorkflowEntryId) {
-        const authBaseUrl = String(loadLicenseServerConfig().baseUrl || '')
-          .trim()
-          .replace(/\/+$/, '')
-        if (!authBaseUrl) {
-          throw new Error('未配置授权服务地址，无法拉取云端工作流')
-        }
-        const wfRes = await fetch(
-          `${authBaseUrl}/cloud-workflows/${encodeURIComponent(cloudWorkflowEntryId)}/workflow`,
-        )
-        const wfJson = (await wfRes.json().catch(() => ({}))) as {
-          workflowJson?: string
-          name?: string
-          id?: string
-          message?: string
-        }
-        const remoteJson = String(wfJson.workflowJson || '').trim()
-        if (!wfRes.ok || !remoteJson) {
+        const wfResult = await fetchCloudWorkflowJson(cloudWorkflowEntryId)
+        const remoteJson = String(wfResult.workflowJson || '').trim()
+        if (!wfResult.ok || !remoteJson) {
           throw new Error(
-            String(wfJson.message || `无法拉取云端工作流 JSON（HTTP ${wfRes.status}）`),
+            String(
+              wfResult.message ||
+                (wfResult.status != null
+                  ? `无法拉取云端工作流 JSON（HTTP ${wfResult.status}）`
+                  : '无法拉取云端工作流 JSON'),
+            ),
           )
         }
         workflowSource = remoteJson
         remoteCloudPick = {
-          id: String(wfJson.id || cloudWorkflowEntryId).trim(),
-          name: String(wfJson.name || (node.data as { model?: string }).model || cloudWorkflowEntryId).trim(),
+          id: String(wfResult.id || cloudWorkflowEntryId).trim(),
+          name: String(
+            wfResult.name || (node.data as { model?: string }).model || cloudWorkflowEntryId,
+          ).trim(),
         }
         const ovId = String(remoteCloudPick.id || cloudWorkflowEntryId).trim()
         const rawOv = ovId ? nodeConfig.cloudWorkflowOverrides?.[ovId] : undefined
@@ -3617,6 +4615,12 @@ export function useWorkflowIntegration() {
               : null
         if (ov?.jsonText) {
           workflowSource = ov.jsonText
+          if (import.meta.env.DEV && (nodeKind === 'image' || nodeKind === 'video')) {
+            console.warn(
+              '[Flowid Comfy] 当前使用「设置 → 云端工作流」里保存的本地 JSON 覆盖；若仍出现模板旧图名，请清除该条覆盖或重新从服务器拉取后再保存',
+              { 工作流id: ovId, 名称: remoteCloudPick?.name || cloudWorkflowEntryId },
+            )
+          }
         }
       } else if (isCloudCustom && rootWorkflowJson) {
         workflowSource = rootWorkflowJson
@@ -3639,6 +4643,18 @@ export function useWorkflowIntegration() {
       if (!workflowSource) {
         throw new Error(
           `当前选中的工作流「${pickedWorkflow?.name || '（未命名）'}」JSON 为空，请到设置中打开该条目并重新保存`,
+        )
+      }
+      const workflowSourceBeforeNormalize = workflowSource
+      workflowSource = normalizeWorkflowLoadImageInputsToPlaceholders(workflowSource)
+      workflowSource = normalizeWorkflowVhsLoadVideoInputsToPlaceholders(workflowSource)
+      if (
+        import.meta.env.DEV &&
+        workflowSource !== workflowSourceBeforeNormalize &&
+        (nodeKind === 'image' || nodeKind === 'video')
+      ) {
+        console.info(
+          '[Flowid Comfy] 已将工作流 LoadImage 中的模板历史文件名改为 __SRC__（常见于设置里保存了旧版云端 JSON 覆盖）',
         )
       }
       const wfLabel =
@@ -3719,6 +4735,7 @@ export function useWorkflowIntegration() {
             : node
       const nodeInputs = await extractNodeInputs(comfyInputNode, options?.allNodes, {
         studioEdges: options?.studioEdges,
+        imageMentionRefPromptOverride: options?.rawPromptText,
       })
       if (
         shouldLogComfyDebug() &&
@@ -3749,40 +4766,91 @@ export function useWorkflowIntegration() {
        * 使用 extractNodeInputs 返回的已恢复 URL，避免使用失效的 blob URL。
        */
       const nodeInputsRefImages = String((nodeInputs as any)?.refImages || '').trim()
-      const orderedInputImageUrls =
+      const refImagesMultiline = nodeInputsRefImages || rawRefImages
+      const refImageAssetIds = Array.isArray((nodeInputs as NodeInputRecord).refImageAssetIds)
+        ? ((nodeInputs as NodeInputRecord).refImageAssetIds as string[])
+        : []
+      const srcAssetId = String((nodeInputs as NodeInputRecord).srcAssetId || '').trim()
+      const workflowHasComfyLoadImage = workflowJsonRequiresComfyImageUpload(workflowSource)
+      let textComfyImageEntries: ImageRefUploadEntry[] = []
+      if ((nodeKind === 'text' || nodeKind === 'script') && workflowHasComfyLoadImage) {
+        textComfyImageEntries = await collectTextNodeImageRefEntries(
+          comfyInputNode,
+          nodeInputs as NodeInputRecord,
+          options?.allNodes,
+          options?.studioEdges,
+          options?.rawPromptText,
+        )
+      }
+      let orderedImageInputEntries: ComfyImageInputEntry[] =
         nodeKind === 'image' || nodeKind === 'video'
-          ? (
-              nodeInputsRefImages
-                ? [String((nodeInputs as any)?.src || ''), ...nodeInputsRefImages.split('\n')]
-                : [rawSrc, ...refImageUrls]
+          ? buildOrderedComfyImageInputEntries(
+              rawSrc,
+              srcAssetId,
+              refImagesMultiline,
+              refImageAssetIds,
             )
-              .map((url) => String(url || '').trim())
-              .filter(Boolean)
-          : []
+          : mergeComfyImageInputEntriesDeduped(
+              buildOrderedComfyImageInputEntries(
+                rawSrc,
+                srcAssetId,
+                refImagesMultiline,
+                refImageAssetIds,
+              ),
+              textComfyImageEntries.map((e) => ({
+                url: e.url,
+                assetId: e.assetId || undefined,
+              })),
+            )
+      let orderedInputImageUrls = orderedImageInputEntries.map((e) => e.url)
+      const videoAudioEntries =
+        nodeKind === 'video' ? audioRefEntriesFromNodeInputs(nodeInputs as NodeInputRecord) : []
       const orderedInputAudioUrls =
         (nodeKind === 'audio' || nodeKind === 'music') && audioRefSlotCount > 0
           ? dedupeOrderedAudioInputUrls(rawSrc, refImageUrls)
-          : []
+          : nodeKind === 'video' &&
+              videoAudioEntries.length > 0 &&
+              (audioRefSlotCount > 0 || workflowJsonHasLoadAudioNodes(workflowSource))
+            ? videoAudioEntries.map((e) => e.url)
+            : []
       /** 实际上传参考音频所用的 URL 序列（上传前可能再 refresh，与 debug 一致） */
       let audioUploadSourceUrls = orderedInputAudioUrls
       const missingMentionRefs: string[] = []
-      if (import.meta.env.DEV && (nodeKind === 'image' || nodeKind === 'video')) {
+      if (import.meta.env.DEV && nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length)) {
         console.info('[Flowid Diagnose] 输入图判定详情', {
           节点标题: node.data.title || node.id,
           节点id: node.id,
           rawPromptText: String(options?.rawPromptText ?? ''),
           当前src: rawSrc || '（空）',
           nodeInputs_refImages原始文本: rawRefImages || '（空）',
+          统计策略: refImagesMultiline.trim() ? '仅参考图（不计主图 src）' : '无参考图，使用主图 src',
           最终输入序列URL: orderedInputImageUrls,
           缺失参考图URL: missingMentionRefs,
         })
       }
-      if ((nodeKind === 'image' || nodeKind === 'video') && orderedInputImageUrls.length === 0 && nodeInputsRefImages) {
+      if (
+        (nodeKind === 'text' || nodeKind === 'script') &&
+        workflowHasComfyLoadImage &&
+        orderedInputImageUrls.length === 0
+      ) {
+        const hadMention = String(options?.rawPromptText || '').includes('@')
         throw new Error(
-          `检测到提示词里有 @ 图片引用，但最终输入图为 0。请检查 @ 引用是否指向有效图片节点，或参考图是否已保存。`,
+          hadMention
+            ? '当前工作流需要图片输入，但未能从 @ 引用解析到有效图片。请确认图片节点有图且 @ 指向正确，或将图片节点连到本节点上游后再执行。'
+            : '当前工作流需要图片输入，但未检测到可上传的图片。请在提示词中用 @ 引用「图片节点」，或将图片节点连到本节点上游后再执行。',
         )
       }
-      if (nodeKind === 'image' || nodeKind === 'video') {
+      if ((nodeKind === 'image' || nodeKind === 'video') && orderedInputImageUrls.length === 0 && nodeInputsRefImages) {
+        const hadImageMention = /@[^\s@]+?\([^)]+\)/.test(
+          String(options?.rawPromptText || (nodeInputs as { prompt?: string }).prompt || ''),
+        )
+        throw new Error(
+          hadImageMention
+            ? '检测到 @ 图片引用，但图片节点主槽为空或参考图 blob 已失效。请打开「图片节点2」确认有图并重新上传/保存画布，侧栏 @1 参考图也需有效。'
+            : '检测到参考图配置，但无法解析为可上传图片。请重新上传侧栏本地参考图或 @ 有效图片节点。',
+        )
+      }
+      if (nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length)) {
         const summary = `执行输入判定：输入图总数=${orderedInputImageUrls.length}`
         setLastExecutionMessage(summary)
       }
@@ -3819,9 +4887,24 @@ export function useWorkflowIntegration() {
               : '将把参考音频上传到 Comfy 再替换 __REF_AUDIO_*；请保证主槽或参考区有有效音频 URL。',
         })
       }
-      if (nodeKind === 'image' || nodeKind === 'video') {
-        const requiredInputImages = orderedInputImageUrls.length
+      if (nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length)) {
         const loadImageSlotCount = countComfyFileLoadImageSlots(prompt)
+        /**
+         * 图生文等单槽工作流：同一图经「本地参考 + @ 引用 + 上游连线」可能被计为 2 张，合并后只上传首张。
+         */
+        if (
+          loadImageSlotCount === 1 &&
+          orderedImageInputEntries.length > 1 &&
+          (nodeKind === 'text' || nodeKind === 'script')
+        ) {
+          const mergedFromCount = orderedImageInputEntries.length
+          orderedImageInputEntries = orderedImageInputEntries.slice(0, 1)
+          orderedInputImageUrls = orderedImageInputEntries.map((e) => e.url)
+          setLastExecutionMessage(
+            `图生文单图工作流：合并了 ${mergedFromCount} 路图片来源（本地参考、@、连线可能重复），已自动使用首张上传。`,
+          )
+        }
+        const requiredInputImages = orderedInputImageUrls.length
         if (import.meta.env.DEV) {
           console.info('[Flowid Diagnose] 工作流图片槽位容量', {
             工作流名称: wfLabel,
@@ -3865,10 +4948,11 @@ export function useWorkflowIntegration() {
       const uploadFailures: Array<{ index: number; url: string; reason: string }> = []
       const allUploads: ComfyUploadedInputImage[] = []
       const audioUploadList: ComfyUploadedInputImage[] = []
-      if (orderedInputImageUrls.length > 0 && (nodeKind === 'image' || nodeKind === 'video')) {
-        for (let i = 0; i < orderedInputImageUrls.length; i += 1) {
-          const url = orderedInputImageUrls[i]!
-          const sourceLabel = mentionLabelByUrl.get(url) || `图${i + 1}`
+      if (orderedImageInputEntries.length > 0 && nodeKindUsesComfyImagePipeline(nodeKind, orderedImageInputEntries.length)) {
+        for (let i = 0; i < orderedImageInputEntries.length; i += 1) {
+          const { url: rawUrl, assetId: entryAssetId } = orderedImageInputEntries[i]!
+          const url = await resolveCanvasUrlForComfyUpload(rawUrl, entryAssetId)
+          const sourceLabel = mentionLabelByUrl.get(rawUrl) || mentionLabelByUrl.get(url) || `图${i + 1}`
           const currentLabel =
             String(options?.runNodeTitle || node.data.title || node.id).trim() || '当前节点'
           /** 上传命名采用“当前节点_来源节点_序号”，便于一一对应核对。 */
@@ -3877,23 +4961,65 @@ export function useWorkflowIntegration() {
             const uploaded = await uploadToComfyInput(url, prefix)
             allUploads.push(uploaded)
           } catch (error) {
-            uploadFailures.push({
-              index: i + 1,
-              url,
-              reason: String((error as Error)?.message || error || '未知错误'),
+            const reused = await resolveExistingComfyInputFilenameFromDesktop({
+              assetId: entryAssetId,
+              uploadPrefix: prefix,
+              allowNewestSingleImage: orderedImageInputEntries.length === 1,
             })
+            if (reused) {
+              const fallback: ComfyUploadedInputImage = {
+                filename: reused,
+                subfolder: '',
+                type: 'input',
+              }
+              allUploads.push(fallback)
+              uploadCache.set(rawUrl, fallback)
+              if (url !== rawUrl) uploadCache.set(url, fallback)
+              if (import.meta.env.DEV) {
+                console.info('[Flowid Diagnose] HTTP 上传失败，复用 input 目录已有文件', {
+                  序号: i + 1,
+                  Comfy文件名: reused,
+                  原因: String((error as Error)?.message || error || '未知错误'),
+                })
+              }
+            } else {
+              uploadFailures.push({
+                index: i + 1,
+                url: rawUrl,
+                reason: String((error as Error)?.message || error || '未知错误'),
+              })
+            }
           }
         }
       }
       if (
-        (nodeKind === 'audio' || nodeKind === 'music') &&
-        audioRefSlotCount > 0 &&
-        orderedInputAudioUrls.length > 0
+        nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length) &&
+        orderedInputImageUrls.length > 0 &&
+        allUploads.length === 0 &&
+        workflowJsonRequiresComfyImageUpload(workflowSource)
       ) {
-        let audioEntries = audioRefEntriesFromNodeInputs(nodeInputs as NodeInputRecord)
+        const detail =
+          uploadFailures.length > 0
+            ? uploadFailures.map((f) => `图${f.index}：${f.reason}`).join('；')
+            : '请确认 Comfy 已启动、地址正确，且 /upload/image 可访问'
+        throw new Error(
+          `参考图上传到 Comfy 失败，已中止提交（避免 LoadImage 收到空文件名后 Comfy 误把 input 目录当图片打开）。${detail}`,
+        )
+      }
+      if (
+        orderedInputAudioUrls.length > 0 &&
+        (((nodeKind === 'audio' || nodeKind === 'music') && audioRefSlotCount > 0) ||
+          (nodeKind === 'video' &&
+            (audioRefSlotCount > 0 || workflowJsonHasLoadAudioNodes(workflowSource))))
+      ) {
+        let audioEntries =
+          nodeKind === 'video'
+            ? videoAudioEntries
+            : audioRefEntriesFromNodeInputs(nodeInputs as NodeInputRecord)
         try {
           const refreshedInputs = await extractNodeInputs(comfyInputNode, options?.allNodes, {
             studioEdges: options?.studioEdges,
+            imageMentionRefPromptOverride: options?.rawPromptText,
           })
           const next = audioRefEntriesFromNodeInputs(refreshedInputs as NodeInputRecord)
           if (next.length > 0) {
@@ -3903,6 +5029,17 @@ export function useWorkflowIntegration() {
           // 保持首次 extract；有 assetId 时仍可从 IndexedDB 直读
         }
         audioUploadSourceUrls = audioEntries.map((e) => e.url)
+        if (shouldLogComfyDebug() && workflowJsonHasLoadAudioNodes(workflowSource)) {
+          console.info('[Flowid Comfy][数字人] 将上传至 LoadAudio 的驱动音频', {
+            路数: audioEntries.length,
+            来源URL预览: audioEntries.map((e) => ({
+              url: devTruncateUrl(e.url),
+              有本地assetId: Boolean(e.assetId),
+            })),
+            说明:
+              '须为 wav/mp3 等真音频；若误传视频节点主槽无声 mp4，云端会报 No audio stream found in the file。',
+          })
+        }
         const audioRefUploadCache = new Map<string, ComfyUploadedInputImage>()
         for (let i = 0; i < audioEntries.length; i += 1) {
           const { url, assetId } = audioEntries[i]!
@@ -3920,9 +5057,11 @@ export function useWorkflowIntegration() {
             audioUploadList.push(hit)
             continue
           }
-          const currentLabel =
-            String(options?.runNodeTitle || node.data.title || node.id).trim() || '当前节点'
-          const prefix = `${currentLabel}_ref_audio_${i + 1}`
+          const hostLabel =
+            String(node.data.title || node.id).trim() ||
+            String(options?.runNodeTitle || '').trim() ||
+            'video'
+          const prefix = `${hostLabel}_ref_audio_${i + 1}`
           let mediaUrl = url
           let revokeAfter: string | null = null
           if (aid && /^(blob:|file:)/i.test(url)) {
@@ -3945,12 +5084,84 @@ export function useWorkflowIntegration() {
           }
         }
       }
+      let videoUpload: ComfyUploadedInputImage | null = null
+      let sourceVideoDurationSec = 0
+      const workflowHasVhsLoadVideo = workflowJsonHasVhsLoadVideoNodes(workflowSource)
+      if ((nodeKind === 'text' || nodeKind === 'script') && workflowHasVhsLoadVideo) {
+        const videoEntries = await collectTextNodeVideoRefEntries(
+          comfyInputNode,
+          nodeInputs as NodeInputRecord,
+          options?.allNodes,
+          options?.studioEdges,
+          options?.rawPromptText,
+        )
+        if (videoEntries.length === 0) {
+          throw new Error(
+            '当前工作流需要视频输入，但未检测到有效视频。请在提示词中用 @ 引用「视频节点」，或将视频节点连到本节点上游后再执行。',
+          )
+        }
+        const { url, assetId } = videoEntries[0]!
+        options?.onProgress?.({ percent: 2, label: '正在上传视频到 Comfy…' })
+        let mediaUrl = url
+        let revokeAfter: string | null = null
+        const aid = String(assetId || '').trim()
+        if (aid && /^(blob:|file:)/i.test(url)) {
+          const fromDb = await readLocalImageAssetBlob(aid)
+          if (fromDb && fromDb.size > 0) {
+            revokeAfter = URL.createObjectURL(fromDb)
+            mediaUrl = revokeAfter
+          }
+        }
+        const probedDuration = await probeVideoDurationSeconds(mediaUrl)
+        if (probedDuration != null && probedDuration > 0) {
+          sourceVideoDurationSec = probedDuration
+        }
+        const hostLabel =
+          String(node.data.title || node.id).trim() ||
+          String(options?.runNodeTitle || '').trim() ||
+          'text'
+        try {
+          videoUpload = await uploadComfyInputBinaryFile({
+            providerConfig: effectiveProviderConfig,
+            mediaUrl,
+            filenamePrefix: `${hostLabel}_ref_video`,
+            preferredExtension: '.mp4',
+          })
+        } catch (error) {
+          throw new Error(
+            `视频上传到 Comfy 失败：${String((error as Error)?.message || error || '未知错误')}。请确认 Comfy 已启动且 /upload/image 可访问。`,
+          )
+        } finally {
+          if (revokeAfter) URL.revokeObjectURL(revokeAfter)
+        }
+        if (import.meta.env.DEV) {
+          console.info('[Flowid Diagnose] 视频反推：已上传参考视频', {
+            节点标题: node.data.title || node.id,
+            Comfy文件名: videoUpload.filename,
+            探测时长秒: sourceVideoDurationSec > 0 ? normalizeVideoDurationSecForPrompt(sourceVideoDurationSec) : '（未探测到）',
+          })
+        }
+      }
+      if (
+        import.meta.env.DEV &&
+        (nodeKind === 'text' || nodeKind === 'script') &&
+        workflowHasComfyLoadImage &&
+        textComfyImageEntries.length > 0
+      ) {
+        console.info('[Flowid Diagnose] 图片反推：已收集 @ 图片', {
+          节点标题: node.data.title || node.id,
+          图片数: textComfyImageEntries.length,
+        })
+      }
       if (import.meta.env.DEV && uploadFailures.length > 0) {
         console.warn('[Flowid Diagnose] 上传失败明细（已跳过）', uploadFailures)
       }
-      const primaryUpload = allUploads[0] ?? null
-      const refUploads = allUploads.slice(1)
-      if (import.meta.env.DEV && (nodeKind === 'image' || nodeKind === 'video')) {
+      /** 仅 @ / 参考图条、无独立主图 src 时：全部上传结果都视为参考图池，避免 slice(1) 少计一张。 */
+      const refsOnlyImageInputs =
+        refImagesMultiline.trim().length > 0 && !String(rawSrc || '').trim()
+      const primaryUpload = refsOnlyImageInputs ? null : (allUploads[0] ?? null)
+      const refUploads = refsOnlyImageInputs ? allUploads : allUploads.slice(1)
+      if (import.meta.env.DEV && nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length)) {
         console.info('[Flowid Diagnose] 实际上传结果详情', {
           节点标题: node.data.title || node.id,
           节点id: node.id,
@@ -3959,23 +5170,96 @@ export function useWorkflowIntegration() {
           参考图上传数量: refUploads.length,
         })
       }
-      const comfySrc = primaryUpload?.filename ?? ''
+      const comfySrc = primaryUpload?.filename ?? refUploads[0]?.filename ?? ''
+      const comfyVideoSrc = videoUpload?.filename ?? ''
       const comfyRefImages = refUploads.map((item) => item.filename).join('\n')
       const comfyFirstRefImage = refUploads[0]?.filename ?? ''
-      /** 参考图计数占位符：用于 forLoop 等总数输入（当前按 1~5 夹取，满足常见批处理上限）。 */
-      const comfyRefCount = Math.max(1, Math.min(5, refUploads.length))
-      /** 主图优先，其次多参考图，供兜底注入 LoadImage / 三元组字段。 */
-      const comfyInjectUploads: ComfyUploadedInputImage[] = [
+      /** 参考图计数占位符：用于 forLoop 等；张数=用户实际上传/引用的图，不再误用 slice 后的 ref 数。 */
+      const comfyRefCount = Math.max(1, Math.min(5, orderedInputImageUrls.length))
+      const isGridSplitWorkflow = workflowJsonSupportsComfyGridPlaceholders(workflowSource)
+      /** 首尾帧须严格 2 张；多图编辑类（含云端无 __REF_COUNT__ 的 ImageReel 工作流）允许少于槽位数。 */
+      const variableRefCountWorkflow =
+        !findWanFirstLastFrameNodeId(prompt) &&
+        workflowJsonSupportsVariableRefCount(workflowSource, wfLabel)
+      // 宫格分割：按槽位 1~5 上传 gridImages（与 __GRID_IMAGE_n__ 下标对齐）
+      const gridImageUploads: ComfyUploadedInputImage[] = []
+      const rawGridImages = (nodeInputs as NodeInputRecord).gridImages
+      const gridImages: string[] = Array.isArray(rawGridImages) ? rawGridImages.map((u) => String(u ?? '')) : []
+      const rawGridAssetIds = (nodeInputs as NodeInputRecord).gridImageAssetIds
+      const gridImageAssetIds: string[] = Array.isArray(rawGridAssetIds)
+        ? rawGridAssetIds.map((u) => String(u ?? ''))
+        : []
+      const gridImageFilenames: string[] = Array.from({ length: 5 }, () => '')
+      const gridUploadFailures: string[] = []
+      for (let i = 0; i < 5; i += 1) {
+        let url = String(gridImages[i] ?? '').trim()
+        const aid = String(gridImageAssetIds[i] ?? '').trim()
+        if ((!url || url.startsWith('blob:')) && aid) {
+          try {
+            const restored = await getLocalImageAssetObjectUrl(aid)
+            if (restored) url = restored
+          } catch {
+            /* 本地资源读取失败时沿用原 URL */
+          }
+        }
+        if (!url) continue
+        const cached = uploadCache.get(url)
+        if (cached) {
+          gridImageUploads.push(cached)
+          gridImageFilenames[i] = cached.filename
+          continue
+        }
+        try {
+          const uploaded = await uploadToComfyInput(url, `宫格_${i + 1}`)
+          uploadCache.set(url, uploaded)
+          gridImageUploads.push(uploaded)
+          gridImageFilenames[i] = uploaded.filename
+        } catch (error) {
+          gridUploadFailures.push(
+            `槽位${i + 1}：${String((error as Error)?.message || error || '上传失败')}`,
+          )
+        }
+      }
+      /** 仅图片进 LoadImage 注入池；音频只写 LoadAudio，避免 .m4a 被当成图片报 cannot identify image file。 */
+      const comfyImageInjectUploads: ComfyUploadedInputImage[] = [
+        ...(isGridSplitWorkflow ? gridImageUploads : []),
         ...(primaryUpload ? [primaryUpload] : []),
         ...refUploads,
+      ].filter((u) => isComfyUploadedImageFile(u))
+      const comfyInjectUploads: ComfyUploadedInputImage[] = [
+        ...comfyImageInjectUploads,
         ...audioUploadList,
       ]
-      // 仅对“接入主链路”的多 LoadImage 做参考图缺失拦截；未连线占位节点不参与判断。
-      if (nodeKind === 'image' || nodeKind === 'video') {
+      const gridSourceUrls = gridImages.filter((u) => String(u || '').trim())
+      // 仅对“接入主链路”的多 LoadImage 做参考图缺失拦截；宫格分割只需弹窗里的大图，不要求参考图张数=LoadImage 数。
+      if (nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length)) {
         const linkedLoadImageCount = collectLinkedLoadImageNodeIds(prompt).size
-        if (linkedLoadImageCount > 1 && refUploads.length === 0) {
+        if (isGridSplitWorkflow) {
+          if (gridSourceUrls.length < 1) {
+            throw new Error(
+              `当前为宫格分割工作流：请在底部点「宫格分割」上传分镜联系表（至少 1 张），弹窗内点「保存」后再执行。无需在「本地参考图」重复上传。`,
+            )
+          }
+          if (gridImageUploads.length < 1 || !gridImageFilenames[0]?.trim()) {
+            const detail =
+              gridUploadFailures.length > 0
+                ? ` 详情：${gridUploadFailures.join('；')}`
+                : ' 请重新在宫格弹窗上传大图并点「保存」。'
+            throw new Error(
+              `宫格分割图上传 Comfy 失败，请检查 Comfy 是否在线、代理是否关闭，以及图片是否有效（勿用已失效的 blob 链接）。${detail}`,
+            )
+          }
+        } else if (
+          !variableRefCountWorkflow &&
+          linkedLoadImageCount > 1 &&
+          orderedInputImageUrls.length < linkedLoadImageCount
+        ) {
           throw new Error(
-            `检测到当前工作流有 ${linkedLoadImageCount} 个已接入主链路的 LoadImage，但本次参考图上传数为 0。请先在「本地参考图」添加至少 1 张，或在提示词中使用 @图节点 引用后再执行（避免静默沿用旧值）。`,
+            `检测到当前工作流有 ${linkedLoadImageCount} 个已接入主链路的 LoadImage，但本次有效输入图为 ${orderedInputImageUrls.length} 张。请在「本地参考图」按顺序添加 ${linkedLoadImageCount} 张（首尾帧：先首帧后尾帧），或在提示词中用 @ 引用对应图片节点。`,
+          )
+        } else if (variableRefCountWorkflow && orderedInputImageUrls.length < 1) {
+          throw new Error(
+            '当前为多图编辑类工作流：请至少在提示词中用 @ 引用图片节点，或在「本地参考图」上传 1 张及以上参考图后再执行。',
           )
         }
       }
@@ -4083,6 +5367,43 @@ export function useWorkflowIntegration() {
             '「实际替换__NOTE__」应只有对白行（约十几行），不应再含 JSON；「CR_Text」在含说话人列表时应为整段 [...] JSON。',
         })
       }
+      const videoDurationSecForPrompt =
+        workflowHasVhsLoadVideo && sourceVideoDurationSec > 0
+          ? normalizeVideoDurationSecForPrompt(sourceVideoDurationSec)
+          : 0
+      const textBodyForWorkflow =
+        (nodeKind === 'text' || nodeKind === 'script') && videoDurationSecForPrompt > 0
+          ? augmentTextBodyForVideoReverse(String(nodeInputs.body ?? ''), sourceVideoDurationSec)
+          : String(nodeInputs.body ?? '')
+      const resolvedTextSystemPromptForWorkflow = (() => {
+        const base = resolveTextComfySystemPrompt(
+          nodeKind,
+          wfEntryId,
+          cloudWorkflowEntryId,
+          snapshot.nodeConfigs.text.cloudWorkflowSystemPrompts,
+          options?.comfySystemPromptText,
+        )
+        if (!(nodeKind === 'text' || nodeKind === 'script') || videoDurationSecForPrompt <= 0) {
+          return base
+        }
+        const line = buildVideoReverseDurationConstraintLine(sourceVideoDurationSec)
+        return base ? `${base}\n\n${line}` : line
+      })()
+      const comfyVisualPrompt = String(nodeInputs.prompt ?? '')
+      const outpaintPadsForWorkflow =
+        (nodeKind === 'image' || nodeKind === 'video') &&
+        workflowSupportsOutpaintPadControls(workflowSource, wfLabel)
+          ? resolveOutpaintPadsFromNode(nodeInputs as NodeInputRecord)
+          : null
+      if (outpaintPadsForWorkflow) {
+        const p = outpaintPadsForWorkflow
+        options?.onPreflightMessage?.(
+          `扩图边距：左 ${p.left} · 上 ${p.top} · 右 ${p.right} · 下 ${p.bottom}`,
+        )
+        if (import.meta.env.DEV) {
+          console.info('[Flowid Comfy][扩图] 使用面板四向边距', p)
+        }
+      }
       let text = replaceIndexedPromptPlaceholders(serializedBefore, nodeInputs)
         .replaceAll(
           '__MATTING_POINTS_JSON__',
@@ -4111,21 +5432,33 @@ export function useWorkflowIntegration() {
             ),
           ),
         )
-        .replaceAll('__BODY__', escapeForJsonStringLiteralFragment(String(nodeInputs.body ?? '')))
+        .replaceAll('__BODY__', escapeForJsonStringLiteralFragment(textBodyForWorkflow))
         .replaceAll(
           '__SYSTEM_PROMPT__',
-          escapeForJsonStringLiteralFragment(
-            (() => {
-              const k = String(wfEntryId || cloudWorkflowEntryId || '').trim()
-              if (!(nodeKind === 'text' || nodeKind === 'script') || !k) return ''
-              return String(snapshot.nodeConfigs.text.cloudWorkflowSystemPrompts?.[k] ?? '')
-            })(),
-          ),
+          escapeForJsonStringLiteralFragment(resolvedTextSystemPromptForWorkflow),
+        )
+        .replaceAll(
+          '__VIDEO_DURATION_SEC__',
+          videoDurationSecForPrompt > 0 ? String(videoDurationSecForPrompt) : '',
         )
         .replaceAll('__SRC__', escapeForJsonStringLiteralFragment(comfySrc))
+        .replaceAll('__VIDEO__', escapeForJsonStringLiteralFragment(comfyVideoSrc))
         .replaceAll('__NOTE__', escapeForJsonStringLiteralFragment(noteForWorkflow))
         .replaceAll('__REF_IMAGE__', escapeForJsonStringLiteralFragment(comfyFirstRefImage))
         .replaceAll('__REF_IMAGES__', escapeForJsonStringLiteralFragment(comfyRefImages))
+        // 宫格分割占位符替换
+        .replaceAll('__GRID_HORIZONTAL__', String((nodeInputs as NodeInputRecord).gridHorizontal ?? 2))
+        .replaceAll('__GRID_VERTICAL__', String((nodeInputs as NodeInputRecord).gridVertical ?? 2))
+        .replaceAll('__GRID_REMOVE_EDGE__', String((nodeInputs as NodeInputRecord).gridRemoveEdge ?? true))
+        .replaceAll('__GRID_REMOVE_STROKE__', String((nodeInputs as NodeInputRecord).gridRemoveStroke ?? 0))
+        .replaceAll('__GRID_FILE_PREFIX__', escapeForJsonStringLiteralFragment(String((nodeInputs as NodeInputRecord).gridFilePrefix ?? '宫格_')))
+        .replaceAll('__GRID_FORMAT__', String((nodeInputs as NodeInputRecord).gridFormat ?? 'PNG'))
+        // __GRID_IMAGE_1__ ~ __GRID_IMAGE_5__ 动态替换
+        .replaceAll('__GRID_IMAGE_1__', gridImageFilenames[0] ?? '')
+        .replaceAll('__GRID_IMAGE_2__', gridImageFilenames[1] ?? '')
+        .replaceAll('__GRID_IMAGE_3__', gridImageFilenames[2] ?? '')
+        .replaceAll('__GRID_IMAGE_4__', gridImageFilenames[3] ?? '')
+        .replaceAll('__GRID_IMAGE_5__', gridImageFilenames[4] ?? '')
         .replaceAll(
           '__STYLE_TONE__',
           escapeForJsonStringLiteralFragment(String((nodeInputs as NodeInputRecord).comfyWorkflowStyleTone ?? '')),
@@ -4147,6 +5480,9 @@ export function useWorkflowIntegration() {
         }
       }
       prompt = JSON.parse(text) as Record<string, unknown>
+      if (outpaintPadsForWorkflow) {
+        prompt = injectOutpaintPadsIntoComfyPrompt(prompt, outpaintPadsForWorkflow)
+      }
       if (nodeKind === 'audio') {
         applyNoteToTdMultiSpeakerTemplatePrompt(prompt, {
           dialogueText: noteForWorkflow,
@@ -4190,6 +5526,33 @@ export function useWorkflowIntegration() {
             /** 匹配表不含主预览（__REF_AUDIO_1__），行从第 2 路参考音起写 DefineSpeaker */
             skipLeadingSlots: 1,
           })
+          rebindTdMultiDialogSpeakersForRefRoleMap(prompt, tdSpeakerIds, tdRefRows, {
+            skipLeadingSlots: 1,
+          })
+          if (shouldLogComfyDebug()) {
+            const multiEntry = Object.entries(prompt).find(
+              ([, v]) =>
+                v &&
+                typeof v === 'object' &&
+                !Array.isArray(v) &&
+                (v as { class_type?: string }).class_type === 'TDQwen3TTSMultiDialog',
+            )
+            if (multiEntry) {
+              const [, multiNode] = multiEntry
+              const ins = (multiNode as { inputs?: Record<string, unknown> }).inputs ?? {}
+              const wiring: Record<string, string> = {}
+              for (const [k, v] of Object.entries(ins)) {
+                if (!/^speaker_\d+$/.test(k) || !Array.isArray(v) || typeof v[0] !== 'string') continue
+                const sp = prompt[v[0]] as { inputs?: { name?: unknown } } | undefined
+                wiring[k] = String(sp?.inputs?.name ?? v[0]).trim()
+              }
+              console.info('[Flowid Comfy][台本] TD MultiDialog 说话人重绑（避免按 10 路模板轮询）', {
+                说明:
+                  'speaker_1 起仅接匹配表角色，不再接主预览「旁白」；多余 speaker_N 接到最后一角色。',
+                最终speaker接线: wiring,
+              })
+            }
+          }
         }
         if (shouldLogComfyDebug() && serializedBefore.includes('__NOTE__')) {
           const rbNode = prompt['18'] as
@@ -4269,35 +5632,58 @@ export function useWorkflowIntegration() {
         clampMultiangleZoom((nodeInputs as NodeInputRecord).comfyMultiangleZoom, FLOWID_MULTIANGLE_DEFAULT_ZOOM),
       ) as Record<string, unknown>
       if (nodeKind === 'image' || nodeKind === 'video') {
+        const dataWH = node.data as ImageNodeData | VideoNodeData
+        const resolvedWH = resolveComfyWorkflowWidthHeight(nodeKind, dataWH, serializedBefore)
         const w = Number((nodeInputs as NodeInputRecord).comfyWorkflowWidth)
         const h = Number((nodeInputs as NodeInputRecord).comfyWorkflowHeight)
-        const dataWH = node.data as ImageNodeData | VideoNodeData
-        const fallback = resolveComfyWorkflowWidthHeight(nodeKind, dataWH)
-        const safeW = Number.isFinite(w) ? w : fallback.width
-        const safeH = Number.isFinite(h) ? h : fallback.height
-        prompt = replacePlaceholderStringWithNumber(prompt, '__WIDTH__', safeW) as Record<string, unknown>
-        prompt = replacePlaceholderStringWithNumber(prompt, '__HEIGHT__', safeH) as Record<string, unknown>
+        const safeW = Number.isFinite(w) ? w : resolvedWH.width
+        const safeH = Number.isFinite(h) ? h : resolvedWH.height
+        /** Qwen Image：必须用官方固定分辨率，忽略节点里残留的 GPT 表或 3072 等自定义宽高。 */
+        const qwenWH = workflowJsonUsesQwenImageModel(serializedBefore)
+          ? resolveComfyWorkflowWidthHeight(nodeKind, dataWH, serializedBefore)
+          : null
+        const finalW = qwenWH?.width ?? safeW
+        const finalH = qwenWH?.height ?? safeH
+        if (import.meta.env.DEV && qwenWH && (finalW !== safeW || finalH !== safeH)) {
+          console.info('[Flowid Comfy] Qwen Image 工作流：已改用官方分辨率', {
+            原提取宽高: { width: safeW, height: safeH },
+            实际注入: { width: finalW, height: finalH },
+          })
+        }
+        prompt = replacePlaceholderStringWithNumber(prompt, '__WIDTH__', finalW) as Record<string, unknown>
+        prompt = replacePlaceholderStringWithNumber(prompt, '__HEIGHT__', finalH) as Record<string, unknown>
       }
-      // 图片/视频节点兜底：若工作流未写 __SRC__/__REF_IMAGES__，自动注入常见图片输入字段。
+      // 图片/视频/文本@图：有上传图时必注入 LoadImage；无占位符的工作流也走兜底。
       if (
-        (nodeKind === 'image' || nodeKind === 'video') &&
-        (!serializedBefore.includes('__SRC__') || !serializedBefore.includes('__REF_IMAGES__'))
+        nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length) &&
+        (comfyImageInjectUploads.length > 0 ||
+          !serializedBefore.includes('__SRC__') ||
+          !serializedBefore.includes('__REF_IMAGES__'))
       ) {
         const linkedLoadImageNodeIds = collectLinkedLoadImageNodeIds(prompt)
-        prompt = injectVisualImageFallback(prompt, comfyInjectUploads, {
-          primaryFilename: primaryUpload?.filename,
+        prompt = injectVisualImageFallback(prompt, comfyImageInjectUploads, {
+          primaryFilename: primaryUpload?.filename || gridImageFilenames[0]?.trim() || undefined,
           refFilenames: refUploads.map((item) => item.filename),
           linkedLoadImageNodeIds,
         })
       }
-      if (import.meta.env.DEV && (nodeKind === 'image' || nodeKind === 'video')) {
+      if (isGridSplitWorkflow && nodeKind === 'image') {
+        const assigned = collectLoadImageAssignedFilenames(prompt)
+        const gridMain = gridImageFilenames[0]?.trim()
+        if (!gridMain || !assigned.includes(gridMain)) {
+          throw new Error(
+            `宫格图文件名未写入 Comfy LoadImage（期望「${gridMain || '（空）'}」，槽位实际：${assigned.join('、') || '（无）'}）。请保存宫格后重试；若仍失败请重启 Flowid 再执行。`,
+          )
+        }
+      }
+      if (import.meta.env.DEV && nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length)) {
         console.info('[Flowid Diagnose] 注入候选文件名池', {
           主图: primaryUpload?.filename || '（无）',
           参考图: refUploads.map((item) => item.filename),
           注入池顺序: comfyInjectUploads.map((item) => item.filename),
         })
       }
-      if (nodeKind === 'image' || nodeKind === 'video') {
+      if (nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length)) {
         const slotRows = summarizeLoadImageSlotsForUi(prompt)
         if (slotRows.length > 0) {
           const uiMessage = `执行前 LoadImage 槽位：${slotRows.join(' | ')}`
@@ -4320,10 +5706,18 @@ export function useWorkflowIntegration() {
       // 文本/剧本兜底：未使用 __BODY__ 时，有输入就覆盖工作流默认文本输入。
       if (
         (nodeKind === 'text' || nodeKind === 'script') &&
-        typeof nodeInputs.body === 'string' &&
+        textBodyForWorkflow.trim() &&
         !serializedBefore.includes('__BODY__')
       ) {
-        prompt = injectTextBodyFallback(prompt, nodeInputs.body)
+        prompt = injectTextBodyFallback(prompt, textBodyForWorkflow)
+      }
+      const resolvedTextSystemPrompt = resolvedTextSystemPromptForWorkflow
+      if (
+        (nodeKind === 'text' || nodeKind === 'script') &&
+        resolvedTextSystemPrompt &&
+        !serializedBefore.includes('__SYSTEM_PROMPT__')
+      ) {
+        prompt = injectTextSystemPromptFallback(prompt, resolvedTextSystemPrompt)
       }
       const selectedWorkflowName = wfLabel
       const workflowNeedsImageInput = requiresImageInputByWorkflowName(selectedWorkflowName)
@@ -4338,11 +5732,34 @@ export function useWorkflowIntegration() {
         }
       }
       // 图片/视频兜底：将节点提示词覆盖到正向候选字段，避免仍吃到工作流默认文案。
-      if (
-        (nodeKind === 'image' || nodeKind === 'video') &&
-        typeof nodeInputs.prompt === 'string'
-      ) {
-        prompt = injectVisualPromptFallback(prompt, nodeInputs.prompt)
+      if (nodeKind === 'image' || nodeKind === 'video') {
+        const workflowHasPromptPlaceholder = serializedBefore.includes('__PROMPT__')
+        if (typeof comfyVisualPrompt === 'string') {
+          prompt = injectVisualPromptFallback(prompt, comfyVisualPrompt, {
+            forceOverwriteTemplateClip:
+              !workflowHasPromptPlaceholder && Boolean(String(comfyVisualPrompt || '').trim()),
+          })
+        }
+        if (nodeKind === 'video') {
+          prompt = injectLtxPromptRelayMultilineTexts(prompt, nodeInputs as NodeInputRecord)
+        }
+        if (import.meta.env.DEV && nodeKind === 'image' && !workflowHasPromptPlaceholder) {
+          console.info('[Flowid Comfy][文生图] 无 __PROMPT__ 模板：已用面板/继承提示词覆盖 CLIP 正向', {
+            工作流: wfLabel,
+            提示词字数: String(comfyVisualPrompt || '').length,
+            提示词预览: String(comfyVisualPrompt || '').slice(0, 120),
+          })
+        }
+      }
+      const wanPositiveClipId = findWanPositiveClipTextEncodeNodeId(prompt)
+      if (nodeKind === 'video' && wanPositiveClipId) {
+        const clipNode = prompt[wanPositiveClipId] as { inputs?: { text?: unknown } } | undefined
+        const injectedPositive = String(clipNode?.inputs?.text ?? '').trim()
+        if (!injectedPositive) {
+          throw new Error(
+            '首尾帧视频工作流：正向提示词未写入 CLIP 节点（面板提示词为空或未注入）。请填写英文/中文动作描述后再执行。',
+          )
+        }
       }
       // tensor 链路场景：把上传后的文件名同步到上游读图节点（通常在 `LoadImage`）。
       // 仅在“本次只有一张上传图”时启用，避免多图（主图+参考图）场景把参考图槽位被主图反向覆盖。
@@ -4351,11 +5768,42 @@ export function useWorkflowIntegration() {
         totalUploads === 1
           ? (primaryUpload ?? refUploads[0] ?? null)
           : null
-      if ((nodeKind === 'image' || nodeKind === 'video') && propagateUpload) {
+      if (
+        nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length) &&
+        propagateUpload &&
+        isComfyUploadedImageFile(propagateUpload)
+      ) {
         prompt = propagateComfyFilenameToLinkedLoadImages(prompt, propagateUpload)
       }
-      if (nodeKind === 'image' || nodeKind === 'video') {
-        const expectedNames = comfyInjectUploads.map((item) => String(item.filename || '').trim()).filter(Boolean)
+      if (nodeKind === 'video' && audioUploadList[0]) {
+        prompt = propagateComfyFilenameToLoadAudioNodes(prompt, audioUploadList[0]!)
+      }
+      if ((nodeKind === 'text' || nodeKind === 'script') && videoUpload) {
+        prompt = propagateComfyFilenameToVhsLoadVideoNodes(prompt, videoUpload)
+      }
+      const multiImageForComfyLoaders =
+        orderedInputImageUrls.length > 1 || refUploads.length > 0 || totalUploads > 1
+      if (
+        nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length) &&
+        primaryUpload?.filename &&
+        isComfyUploadedImageFile(primaryUpload) &&
+        !multiImageForComfyLoaders
+      ) {
+        prompt = forcePrimaryImageOnLinkedLoadImages(prompt, primaryUpload.filename)
+      }
+      if (nodeKind === 'video' && wanPositiveClipId) {
+        prompt = injectWanFirstLastFrameImageLoaderFilenames(prompt, allUploads)
+        const loaderNames = collectLoadImageAssignedFilenames(prompt)
+        if (loaderNames.length >= 2 && loaderNames[0] === loaderNames[1]) {
+          throw new Error(
+            '首尾帧视频工作流：首帧与尾帧 Comfy 文件名相同。请确认提示词 @ 顺序为「先首帧、后尾帧」，或本地参考图按该顺序放 2 张不同图片。',
+          )
+        }
+      }
+      if (nodeKindUsesComfyImagePipeline(nodeKind, orderedInputImageUrls.length)) {
+        const expectedNames = comfyImageInjectUploads
+          .map((item) => String(item.filename || '').trim())
+          .filter(Boolean)
         const assignedNames = collectLoadImageAssignedFilenames(prompt)
         const missingAssigned = expectedNames.filter((name) => !assignedNames.includes(name))
         if (import.meta.env.DEV) {
@@ -4364,6 +5812,33 @@ export function useWorkflowIntegration() {
             槽位实际文件名: assignedNames,
             缺失文件名: missingAssigned,
           })
+        }
+        const needsComfyImage =
+          workflowNeedsImageInput ||
+          workflowJsonRequiresComfyImageUpload(workflowSource) ||
+          collectLinkedLoadImageNodeIds(prompt).size > 0
+        if (needsComfyImage && expectedNames.length === 0 && orderedInputImageUrls.length > 0) {
+          throw new Error(
+            `参考图已准备 ${orderedInputImageUrls.length} 张，但上传到 Comfy 失败或未生成文件名。请确认 Comfy 已启动、图片节点 @ 引用有效，并查看控制台「上传失败明细」。`,
+          )
+        }
+        if (needsComfyImage && expectedNames.length === 0) {
+          const hadMentionInPanel = String(options?.rawPromptText || '').includes('@')
+          throw new Error(
+            hadMentionInPanel
+              ? '当前工作流需要图片输入，但未能从 @ 引用解析到有效图片（常见原因：图片节点仅有本地资产 id、预览正常但 src 为空，或 @ 的节点不在上游连线内）。请重新打开图片节点确认有图，或把图片节点连到视频节点上游后再执行。'
+              : '当前工作流需要图片输入，但未检测到可上传的图片。请在视频/图片节点上传主图，或在提示词中用 @ 引用「图片节点」后再执行。',
+          )
+        }
+        const assignedBeforeSubmit = collectLoadImageAssignedFilenames(prompt)
+        if (
+          needsComfyImage &&
+          workflowSource.includes('__SRC__') &&
+          assignedBeforeSubmit.some((n) => !String(n || '').trim())
+        ) {
+          throw new Error(
+            'LoadImage 主图文件名为空（多为上传失败）。请重新执行；桌面端可确认设置里「输入目录」与 Comfy input 一致，且目录内已有镜像 png。',
+          )
         }
         if (
           workflowNeedsImageInput &&
@@ -4428,6 +5903,7 @@ export function useWorkflowIntegration() {
             '请在云端 Comfy 打开 History，用本次 promptId 找条目，展开 outputs；若 script 字数与侧栏台本接近，则正文已在服务端。',
         })
       }
+      prompt = await normalizeComfyLoaderModelPathsInPrompt(prompt, effectiveProviderConfig)
       const promptId = await submitComfyPrompt({
         providerConfig: effectiveProviderConfig,
         prompt,
@@ -4444,11 +5920,13 @@ export function useWorkflowIntegration() {
       options?.onProgress?.({ percent: 9, label: '任务已提交，等待执行…' })
       /** 与 `isHistoryEntryReady` 对齐：图/视频必须等 SaveImage 等真正写入，避免仅节点 14 的 `text: ["1371x765"]` + completed 误判 */
       const historyResultExpectation: ComfyHistoryResultExpectation =
-        nodeKind === 'image' || nodeKind === 'video'
-          ? 'visual'
-          : nodeKind === 'audio' || nodeKind === 'music'
-            ? 'audio'
-            : 'general'
+        nodeKind === 'video'
+          ? 'video'
+          : nodeKind === 'image'
+            ? 'visual'
+            : nodeKind === 'audio' || nodeKind === 'music'
+              ? 'audio'
+              : 'general'
       let historyEntry = await waitComfyHistory({
         providerConfig: effectiveProviderConfig,
         promptId,
@@ -4458,10 +5936,19 @@ export function useWorkflowIntegration() {
         resultExpectation: historyResultExpectation,
       })
       options?.onProgress?.({ percent: 92, label: '任务已完成，正在解析输出…' })
-      let previewUrl = pickComfyResultImageUrl({
-        providerConfig: effectiveProviderConfig,
-        historyEntry,
-      })
+      let previewUrl =
+        nodeKind === 'video'
+          ? pickComfyResultVideoUrl({
+              providerConfig: effectiveProviderConfig,
+              historyEntry,
+              excludeFilenames: comfyInjectUploads.map((item) => String(item.filename || '').trim()).filter(Boolean),
+              workflowPrompt: prompt,
+            })
+          : pickComfyResultImageUrl({
+              providerConfig: effectiveProviderConfig,
+              historyEntry,
+              preferVideoOutput: false,
+            })
       const uploadedInputFilenameSet = new Set(
         comfyInjectUploads.map((item) => String(item.filename || '').trim()).filter(Boolean),
       )
@@ -4480,11 +5967,7 @@ export function useWorkflowIntegration() {
         }
         previewUrl = null
       }
-      /**
-       * 图/视频：部分云端/反代会先返回「可轮询结束」的条目但 `outputs` 尚未含 SaveImage，
-       * 或 `/history/{id}` 形态与全量 `/history` 不一致；再拉一次全量并取含栅格图的匹配条目。
-       */
-      if ((nodeKind === 'image' || nodeKind === 'video') && !previewUrl) {
+      if (nodeKind === 'image' && !previewUrl) {
         const recovered = await refetchHistoryEntryWithRasterVisual({
           providerConfig: effectiveProviderConfig,
           promptId,
@@ -4494,6 +5977,7 @@ export function useWorkflowIntegration() {
           previewUrl = pickComfyResultImageUrl({
             providerConfig: effectiveProviderConfig,
             historyEntry,
+            preferVideoOutput: false,
           })
           if (isInputEchoPreview(previewUrl)) {
             if (import.meta.env.DEV) {
@@ -4506,11 +5990,34 @@ export function useWorkflowIntegration() {
           }
         }
       }
-      let audioUrl = await pickComfyResultAudioUrlAsync({
-        providerConfig: effectiveProviderConfig,
-        historyEntry,
-        excludeFilenames: uploadedInputFilenameSet,
-      })
+      /** 视频：等 VHS mp4 写入 history 后再解析（避免 PreviewImage png 导致黑屏） */
+      if (nodeKind === 'video' && !previewUrl) {
+        const recovered = await refetchHistoryEntryWithVideoOutput({
+          providerConfig: effectiveProviderConfig,
+          promptId,
+        })
+        if (recovered) {
+          historyEntry = recovered
+          previewUrl = pickComfyResultVideoUrl({
+            providerConfig: effectiveProviderConfig,
+            historyEntry,
+            excludeFilenames: uploadedInputFilenameSet,
+            workflowPrompt: prompt,
+          })
+          if (isInputEchoPreview(previewUrl)) {
+            previewUrl = null
+          }
+        }
+      }
+      /** 图生视频_音：成片在 VHS；仅配音节点才依赖 PreviewAudio 作主结果 */
+      let audioUrl =
+        nodeKind === 'audio' || nodeKind === 'music'
+          ? await pickComfyResultAudioUrlAsync({
+              providerConfig: effectiveProviderConfig,
+              historyEntry,
+              excludeFilenames: uploadedInputFilenameSet,
+            })
+          : null
       if (!audioUrl && (nodeKind === 'audio' || nodeKind === 'music')) {
         const recovered = await refetchHistoryEntryWithAudioOutput({
           providerConfig: effectiveProviderConfig,
@@ -4561,6 +6068,7 @@ export function useWorkflowIntegration() {
       const verifiedMediaUrl = await verifyComfyMediaUrl({
         providerConfig: effectiveProviderConfig,
         mediaUrl: fallbackMediaUrl,
+        timeoutMs: nodeKind === 'video' ? 90_000 : 10_000,
       })
       /**
        * 图片/视频：跨域直连 Comfy 时 `fetch(view)` 常因 CORS 失败，但 `<img>/<video src>` 仍可显示。
@@ -4573,7 +6081,23 @@ export function useWorkflowIntegration() {
       const effectiveAudioUrl =
         verifiedAudioUrl ||
         ((nodeKind === 'audio' || nodeKind === 'music') && fallbackAudioUrl ? fallbackAudioUrl : null)
-      const finalResultUrl = effectiveAudioUrl || effectiveMediaUrl
+      /** 图生视频（含 Foley 音效）：主预览必须是 mp4/webm，不能把 PreviewAudio 当成 resultUrl */
+      const finalResultUrl =
+        nodeKind === 'video'
+          ? effectiveMediaUrl || effectiveAudioUrl
+          : effectiveAudioUrl || effectiveMediaUrl
+      if (
+        shouldLogComfyDebug() &&
+        nodeKind === 'video' &&
+        effectiveAudioUrl &&
+        !effectiveMediaUrl
+      ) {
+        console.warn('[Flowid Comfy][视频] 已解析到 PreviewAudio 但未解析到 VHS mp4，节点可能黑屏', {
+          音频URL: effectiveAudioUrl,
+          说明:
+            '请确认 history 中 VHS_VideoCombine 含 gifs/videos；绝对路径 output/Video/… 已支持解析。',
+        })
+      }
       if (!finalResultUrl) {
         const issue = extractComfyValidationIssue(historyEntry)
         if (issue) {
@@ -4596,14 +6120,58 @@ export function useWorkflowIntegration() {
           : null
       let resultViewUrls: string[] | undefined
       if (nodeKind === 'image' || nodeKind === 'video') {
-        let multi = pickComfyResultImageViewUrls({
-          providerConfig: effectiveProviderConfig,
-          historyEntry,
-          allowFullEntryFallback: true,
-          excludeFilenames: uploadedInputFilenameSet,
-          omitStaticRasterFilenamesForVideoStrip: nodeKind === 'video',
-        })
+        /**
+         * 视频：只收 VHS/Wan 成片与可播放 mp4，跳过中间 PreviewImage png（在 `<video>` 条里会显示黑块）。
+         * 图片：仍收 history 内全部视觉输出。
+         */
+        let multi =
+          nodeKind === 'video'
+            ? pickComfyVideoNodeResultViewUrls({
+                providerConfig: effectiveProviderConfig,
+                historyEntry,
+                excludeFilenames: uploadedInputFilenameSet,
+                workflowPrompt: prompt,
+              })
+            : pickComfyResultImageViewUrls({
+                providerConfig: effectiveProviderConfig,
+                historyEntry,
+                allowFullEntryFallback: true,
+                excludeFilenames: uploadedInputFilenameSet,
+                omitStaticRasterFilenamesForVideoStrip: false,
+                dedupeByFilenameBasename: false,
+              })
         multi = multi.filter((u) => !isInputEchoPreview(u))
+        if (shouldLogComfyDebug() && nodeKind === 'video') {
+          console.info('[Flowid Comfy][视频输出条] URL 数量与文件名', {
+            条数: multi.length,
+            文件名: multi.map((u) => readFilenameFromComfyViewUrl(u) || u),
+            主预览URL: effectiveMediaUrl || '（无）',
+            附带音频URL: effectiveAudioUrl || '（无）',
+            说明:
+              '图生视频_音：主预览须为 mp4；若仅有 PreviewAudio 而无 VHS 成片，请查 history 中 VHS_VideoCombine 节点。',
+          })
+        }
+        if (isGridSplitWorkflow && nodeKind === 'image') {
+          const gridPrefix = String((nodeInputs as NodeInputRecord).gridFilePrefix ?? '宫格_').trim()
+          const gh = Number((nodeInputs as NodeInputRecord).gridHorizontal ?? 2)
+          const gv = Number((nodeInputs as NodeInputRecord).gridVertical ?? 2)
+          const expectedGrid = Math.max(1, Math.min(25, Math.round(gh) * Math.round(gv)))
+          const before = multi.length
+          multi = filterGridSplitResultViewUrls(multi, {
+            filePrefix: gridPrefix,
+            expectedCount: expectedGrid,
+          })
+          if (shouldLogComfyDebug()) {
+            console.info('[Flowid Comfy][宫格] 输出条已按分格数过滤', {
+              过滤前: before,
+              过滤后: multi.length,
+              期望张数: expectedGrid,
+              水平: gh,
+              垂直: gv,
+              文件名前缀: gridPrefix || '（未设）',
+            })
+          }
+        }
         if (!multi.length && effectiveMediaUrl) {
           multi = [effectiveMediaUrl]
         }
@@ -4617,7 +6185,7 @@ export function useWorkflowIntegration() {
         historyEntry,
         resultViewUrls,
       }
-      })
+      })()
     },
     [snapshot, officialTemplates],
   )

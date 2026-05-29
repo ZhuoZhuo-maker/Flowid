@@ -1,4 +1,5 @@
 ﻿import { Handle, Position, type NodeProps } from '@xyflow/react'
+import { STUDIO_FLOW_SOURCE_HANDLE_ID, STUDIO_FLOW_TARGET_HANDLE_ID } from '../../lib/studioFlowHandles'
 import type { Node } from '@xyflow/react'
 import { useCallback, useMemo, useRef, type DragEvent } from 'react'
 import type { AudioNodeData, NodeResultThumbnail } from '../../types'
@@ -168,7 +169,12 @@ export function AudioNode({
 
   return (
     <>
-      <Handle type="target" position={Position.Left} className="studio-handle" />
+      <Handle
+        type="target"
+        position={Position.Left}
+        id={STUDIO_FLOW_TARGET_HANDLE_ID}
+        className="studio-handle"
+      />
       <NodeChrome
         icon={<span className="glyph">{glyph}</span>}
         title={data.title}
@@ -305,7 +311,12 @@ export function AudioNode({
           />
         </div>
       </NodeChrome>
-      <Handle type="source" position={Position.Right} className="studio-handle" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id={STUDIO_FLOW_SOURCE_HANDLE_ID}
+        className="studio-handle"
+      />
     </>
   )
 }

@@ -1,4 +1,5 @@
 import { SENSITIVE_CORE } from '../../data/sensitiveCore'
+import { isSensitiveFilterEnabled } from '../sensitiveFilterConfig'
 import { AhoCorasick } from './acEngine'
 import {
   fetchLexiconJson,
@@ -108,6 +109,7 @@ function startBackgroundLoad(): void {
 }
 
 export function ensureLexiconLoading(): void {
+  if (!isSensitiveFilterEnabled()) return
   if (engineReady || loadPromise) return
   startBackgroundLoad()
 }
@@ -121,6 +123,7 @@ export function isLexiconReady(): boolean {
  * 在「发送/执行」等异步入口先 await 再 `canSend`，可避免首屏仅用 fallback 时漏拦主词库词条。
  */
 export async function awaitSensitiveLexiconSettled(): Promise<void> {
+  if (!isSensitiveFilterEnabled()) return
   ensureLexiconLoading()
   if (loadPromise) await loadPromise
 }

@@ -1,0 +1,2096 @@
+{
+  "version": 1,
+  "name": "云端comfyui示例",
+  "nodes": [
+    {
+      "id": "325d11db-b407-4fbb-9aff-45001d474297",
+      "position": {
+        "x": 409.9905176990176,
+        "y": 254.18604479697953
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "1一分钟感人剧本（古风）-文本模型",
+        "runStatus": "success",
+        "body": "### 第一幕：雨夜送别\n大雨倾盆，破旧驿站外的灯火被风吹得摇摇欲坠。少年书生沈砚背着一卷旧书，匆匆赶来与将要出征的将军顾长辞道别。两人自幼相识，情同手足，却因战乱与命运被迫分离。沈砚将亲手抄录的兵书塞进顾长辞怀中，低声说：“此去山高路远，愿你平安归来。”顾长辞沉默片刻，只回以一句：“若我能活着回来，定与你再饮一壶春酒。”\n\n### 第二幕：烽火与书信\n战事连绵，边关消息断绝。沈砚留在城中替人抄书谋生，每夜都在昏黄油灯下等一封迟来的家书。终于有一天，一封带血的信送到他手中。信中只有寥寥数字：“城破在即，不必等我。”沈砚读罢，怔在原地，随即披上外袍，执意北上寻人。沿途皆是流民与焦土，他却始终不肯回头，只因那封信后，还藏着顾长辞未写完的半句：“若我不能归来，替我看一看……”\n\n### 第三幕：雪地重逢\n寒冬雪夜，沈砚终于在一座废弃关隘中找到奄奄一息的顾长辞。将军甲胄尽裂，满身伤痕，手中仍紧攥着那卷旧兵书。沈砚跪在雪地里替他止血，泪水落在冰冷的甲片上。顾长辞虚弱地笑了笑，说自己一路守着城门，守到最后一刻，终于明白战场上最难守住的不是城池，而是“等一个人回来的念头”。沈砚哽咽道：“你若不回来，我便来找你。”\n\n### 第四幕：最后的春酒\n数月后，边关安定，桃花初开。沈砚在城外小亭摆下一壶春酒，与顾长辞并肩而坐。顾长辞伤势沉重，已知时日无多，却仍像从前那样替他添酒。两人望着远处炊烟，仿佛又回到少年时光。顾长辞轻声说：“这一生，我护过城，也护过你。”沈砚含泪举杯，答：“这一生，我等过你，也终于送你一程。”酒杯相碰，桃花纷落，风起之时，像是有人轻轻说了一句——此生无憾。",
+        "promptPickerMode": "model",
+        "cloudAssistModelPick": "",
+        "cloudModelName": "",
+        "cloudModelUrl": "",
+        "cloudApiKey": "",
+        "lastRunAt": 1778232311911
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "16571ddb-fac5-4226-bf55-1353c71292e5",
+      "position": {
+        "x": 1013.2590631277151,
+        "y": 592.9924373383428
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图-补水喷雾的电商详情页",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/745e8043-fe5f-416a-b33f-f3a2646adeda",
+        "prompt": "补水喷雾的电商详情页",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "9:16",
+        "cloudImageResolutionTier": "2k",
+        "promptPickerMode": "model",
+        "cloudAssistModelPick": "",
+        "cloudModelName": "",
+        "cloudModelUrl": "",
+        "cloudApiKey": "",
+        "mattingRefWidth": 1440,
+        "mattingRefHeight": 2560,
+        "srcAssetId": "57340221-7029-4819-8dac-0c988798c5e3",
+        "srcFileName": "图-补水喷雾的电商详情页.png",
+        "resultThumbnails": [
+          {
+            "id": "eed93f7b-c2fc-4f70-9fed-056a2bc8767d",
+            "url": "blob:http://127.0.0.1:5173/448b68b3-bd82-4bac-a388-3363007a99b7",
+            "assetId": "57340221-7029-4819-8dac-0c988798c5e3",
+            "fileName": "图-补水喷雾的电商详情页.png",
+            "diskPath": "D:/flowid-zy/output/图-补水喷雾的电商详情页_16571ddbfac54226bf551353c71292e5-2026-05-28T02-27-59-822Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "13a8b524-5a36-4bb4-a16a-c999f84cc3dd",
+            "url": "blob:http://127.0.0.1:5173/f9624546-f788-4826-bb64-c2e310548bf7",
+            "assetId": "a2435f28-5c8a-41e4-b8d7-e160270a697f",
+            "fileName": "图-__ghost__.png",
+            "diskPath": "F:/flowid-zy/output/图-__ghost__-2026-05-08T10-44-34-777Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "lastRunAt": 1779935279852,
+        "srcDiskPath": "D:/flowid-zy/output/图-补水喷雾的电商详情页_16571ddbfac54226bf551353c71292e5-2026-05-28T02-27-59-822Z.png"
+      },
+      "measured": {
+        "width": 395,
+        "height": 343
+      },
+      "selected": false,
+      "width": 395,
+      "height": 343,
+      "resizing": false,
+      "dragging": false
+    },
+    {
+      "id": "e8290916-d5f3-4b31-9bd4-90d265448b8e",
+      "type": "image",
+      "position": {
+        "x": 1006.677531116238,
+        "y": 999.5692511375946
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "data": {
+        "kind": "image",
+        "title": "参考图1",
+        "src": "blob:http://127.0.0.1:5173/b7f4ee20-b094-4f82-91df-428d82f5bc5a",
+        "srcAssetId": "98494b46-e4f2-4272-bda0-ad8607ad505f",
+        "srcFileName": "参考图1.png",
+        "prompt": "蓝裙子，白底图",
+        "referenceImageSources": [],
+        "referenceImageAssetIds": [],
+        "runStatus": "success",
+        "mattingRefWidth": 928,
+        "mattingRefHeight": 1664,
+        "promptPickerMode": "workflow",
+        "comfyWorkflowAspect": "9:16",
+        "comfyWorkflowUseCustomPixels": false,
+        "resultThumbnails": [
+          {
+            "id": "3bf896b4-2d2d-4213-b8a4-3b2fc1557cc9",
+            "url": "blob:http://127.0.0.1:5173/a83ce5fc-5bf3-4b97-b336-d0b0faa3e361",
+            "assetId": "98494b46-e4f2-4272-bda0-ad8607ad505f",
+            "fileName": "参考图1.png",
+            "diskPath": "D:/flowid-zy/output/参考图1_e8290916d5f34b319bd490d265448b8e-2026-05-28T02-38-16-593Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/参考图1_e8290916d5f34b319bd490d265448b8e-2026-05-28T02-38-16-593Z.png",
+        "lastRunAt": 1779935896602
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "ce502380-33d5-4dd8-ad25-40f1e730ee27",
+      "type": "image",
+      "position": {
+        "x": 999.0370262724364,
+        "y": 1846.097011822379
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "data": {
+        "kind": "image",
+        "title": "参考图3",
+        "src": "blob:http://127.0.0.1:5173/fe3ba163-e314-4f7f-ae67-880b34144451",
+        "srcAssetId": "33da4f47-33ea-4273-96b6-78f8051c9ad3",
+        "srcFileName": "参考图3.png",
+        "prompt": "城堡",
+        "referenceImageSources": [],
+        "referenceImageAssetIds": [],
+        "runStatus": "success",
+        "mattingRefWidth": 1024,
+        "mattingRefHeight": 1280,
+        "promptPickerMode": "workflow",
+        "cloudAssistModelPick": "",
+        "cloudModelName": "",
+        "cloudModelUrl": "",
+        "cloudApiKey": "",
+        "comfyWorkflowAspect": "4:5",
+        "comfyWorkflowUseCustomPixels": false,
+        "resultThumbnails": [
+          {
+            "id": "a5d29d13-34cd-4f39-97fa-4c06958c182f",
+            "url": "blob:http://127.0.0.1:5173/f01c30ed-8691-4966-8253-87bbcc1d9b2e",
+            "assetId": "33da4f47-33ea-4273-96b6-78f8051c9ad3",
+            "fileName": "参考图3.png",
+            "diskPath": "D:/flowid-zy/output/参考图3_ce50238033d54dd8ad2540f1e730ee27-2026-05-28T02-39-17-061Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/参考图3_ce50238033d54dd8ad2540f1e730ee27-2026-05-28T02-39-17-061Z.png",
+        "lastRunAt": 1779935957077
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "f7f906ab-9740-459b-9f89-762510bffa06",
+      "type": "image",
+      "position": {
+        "x": 1000.5433572316128,
+        "y": 1421.2524099776483
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "data": {
+        "kind": "image",
+        "title": "参考图2",
+        "src": "blob:http://127.0.0.1:5173/eccb03ca-cefb-4bdb-ae37-0ac68df6cba9",
+        "srcAssetId": "c5c9c360-c19a-487d-8e79-365ff739b447",
+        "srcFileName": "参考图2.png",
+        "prompt": "女模特",
+        "referenceImageSources": [],
+        "referenceImageAssetIds": [],
+        "runStatus": "success",
+        "mattingPoints": [],
+        "mattingRefWidth": 928,
+        "mattingRefHeight": 1664,
+        "promptPickerMode": "workflow",
+        "comfyWorkflowAspect": "9:16",
+        "comfyWorkflowUseCustomPixels": false,
+        "resultThumbnails": [
+          {
+            "id": "c22037f6-ef21-468f-8451-abb39b5c95ff",
+            "url": "blob:http://127.0.0.1:5173/18ceeae6-3add-4862-829f-829ab7253da5",
+            "assetId": "c5c9c360-c19a-487d-8e79-365ff739b447",
+            "fileName": "参考图2.png",
+            "diskPath": "D:/flowid-zy/output/参考图2_f7f906ab9740459b9f89762510bffa06-2026-05-28T02-39-40-119Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/参考图2_f7f906ab9740459b9f89762510bffa06-2026-05-28T02-39-40-119Z.png",
+        "lastRunAt": 1779935980132,
+        "resultThumbnailsExpanded": false
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "de3bdc15-77b9-4beb-b347-ac4af64feac1",
+      "type": "image",
+      "position": {
+        "x": 1002.8590520806737,
+        "y": 2265.098557008588
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "data": {
+        "kind": "image",
+        "title": "参考图4",
+        "src": "blob:http://127.0.0.1:5173/456bb07f-b3e8-44e4-b6dc-64941c4794da",
+        "srcAssetId": "9df49799-bd0c-44b7-a6ac-1ad9903bf52b",
+        "srcFileName": "参考图4.png",
+        "prompt": "白色的包包",
+        "referenceImageSources": [],
+        "referenceImageAssetIds": [],
+        "runStatus": "success",
+        "mattingRefWidth": 928,
+        "mattingRefHeight": 1664,
+        "promptPickerMode": "workflow",
+        "comfyWorkflowAspect": "9:16",
+        "comfyWorkflowUseCustomPixels": false,
+        "resultThumbnails": [
+          {
+            "id": "c82e5be5-0323-4d17-8efb-22a83cc08f1c",
+            "url": "blob:http://127.0.0.1:5173/db8e4582-b926-40ac-ba13-21d30db904d4",
+            "assetId": "9df49799-bd0c-44b7-a6ac-1ad9903bf52b",
+            "fileName": "参考图4.png",
+            "diskPath": "D:/flowid-zy/output/参考图4_de3bdc1577b94bebb347ac4af64feac1-2026-05-28T02-39-31-730Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/参考图4_de3bdc1577b94bebb347ac4af64feac1-2026-05-28T02-39-31-730Z.png",
+        "lastRunAt": 1779935971761
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "70b69436-aee1-4fd0-b5fa-8c465bcf21d7",
+      "position": {
+        "x": 1599.2508868032417,
+        "y": 1443.105060511295
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "图片节点1",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/432049df-eff4-4c73-9d30-6a93a31d8a37",
+        "prompt": "@[参考图2](f7f906ab-9740-459b-9f89-762510bffa06)\n@[参考图1](e8290916-d5f3-4b31-9bd4-90d265448b8e)\n@[参考图4](de3bdc15-77b9-4beb-b347-ac4af64feac1)\n@[参考图3](ce502380-33d5-4dd8-ad25-40f1e730ee27)\n图一的模特穿着图二的蓝裙子挎着图三的包包在图四的城堡旁拍照",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "referenceImageAssetIds": [],
+        "srcAssetId": "5d7f64f6-afac-4b38-a827-22b5626950b2",
+        "srcFileName": "图片节点1-1.png",
+        "resultThumbnails": [
+          {
+            "id": "07f6eb0f-7185-4e1f-994d-b7dea980efe2",
+            "url": "blob:http://127.0.0.1:5173/5df4a640-1879-4f3d-ae47-9aa33edbdadc",
+            "assetId": "5d7f64f6-afac-4b38-a827-22b5626950b2",
+            "fileName": "图片节点1-1.png",
+            "diskPath": "D:/flowid-zy/output/图片节点1_70b69436aee14fd0b5fa8c465bcf21d7-2026-05-28T03-24-30-007Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "e6562ea1-a764-4eb9-93b6-cef6869029a3",
+            "url": "blob:http://127.0.0.1:5173/9e1c060d-dd81-4729-ba03-0490026d02f6",
+            "assetId": "4ba4ca5b-8084-46a4-af7f-1f6f829f43a6",
+            "fileName": "图片节点1-2.png",
+            "diskPath": "D:/flowid-zy/output/图片节点1_70b69436aee14fd0b5fa8c465bcf21d7-2026-05-28T03-24-30-332Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "b5cb7d24-bec3-4fbb-a523-3dd992805452",
+            "url": "blob:http://127.0.0.1:5173/e5624dfe-807a-4339-b3e0-cb6e88bc70ba",
+            "assetId": "f64e9f5c-1db4-458c-bebf-7aa578ad8766",
+            "fileName": "图片节点1-3.png",
+            "diskPath": "D:/flowid-zy/output/图片节点1_70b69436aee14fd0b5fa8c465bcf21d7-2026-05-28T03-24-30-647Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "414152c7-7af0-4661-9f3e-655fbfd57830",
+            "url": "blob:http://127.0.0.1:5173/91f16d81-ab2a-4ead-9090-0d8b287644ae",
+            "assetId": "1e84b279-fcb5-4a2c-99c0-71eba8635408",
+            "fileName": "图片节点1-4.png",
+            "diskPath": "D:/flowid-zy/output/图片节点1_70b69436aee14fd0b5fa8c465bcf21d7-2026-05-28T03-24-30-957Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/图片节点1_70b69436aee14fd0b5fa8c465bcf21d7-2026-05-28T03-24-30-007Z.png",
+        "lastRunAt": 1779938670969,
+        "mattingRefWidth": 856,
+        "mattingRefHeight": 1536,
+        "promptPickerMode": "workflow",
+        "comfyWorkflowAspect": "16:9",
+        "comfyWorkflowUseCustomPixels": false,
+        "resultThumbnailsExpanded": false
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "9cbb5ebc-11bb-45ca-a039-13bb7d6d6614",
+      "type": "image",
+      "position": {
+        "x": 387.296743825985,
+        "y": 2794.289942211108
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "data": {
+        "kind": "image",
+        "title": "有字幕，杂的东西",
+        "src": "blob:http://127.0.0.1:5173/dbdd45da-42b7-4ae0-af89-31abe04dcdfc",
+        "srcAssetId": "fbb05100-fa38-4349-a6d4-be711ad1de1a",
+        "srcFileName": "image.png",
+        "prompt": "",
+        "referenceImageSources": [],
+        "referenceImageAssetIds": [],
+        "runStatus": "idle",
+        "mattingRefWidth": 2732,
+        "mattingRefHeight": 1534,
+        "promptPickerMode": "workflow",
+        "mattingPoints": []
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "cbb9c1d5-4745-475e-8d6f-30ab63be6b92",
+      "position": {
+        "x": 1018.4601642493781,
+        "y": 2790.9571031286378
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "去除字幕，杂的东西",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/a1584357-c6f1-4a2c-9a37-8e2365039af8",
+        "prompt": "@[有字幕，杂的东西](9cbb5ebc-11bb-45ca-a039-13bb7d6d6614)",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "srcAssetId": "1b2581bf-b09d-4546-8229-e15f59fb8ba2",
+        "srcFileName": "去除字幕，杂的东西-1.png",
+        "resultThumbnails": [
+          {
+            "id": "ead9233c-1166-480e-ab65-45879414651d",
+            "url": "blob:http://127.0.0.1:5173/c0b7f13a-bcd6-4033-b7c8-75062f0ebfa3",
+            "assetId": "1b2581bf-b09d-4546-8229-e15f59fb8ba2",
+            "fileName": "去除字幕，杂的东西-1.png",
+            "diskPath": "D:/flowid-zy/output/去除字幕，杂的东西_cbb9c1d54745475e8d6f30ab63be6b92-2026-05-28T03-51-04-552Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "dd5a60a1-7c7f-4eb7-8651-92da9ebfc107",
+            "url": "blob:http://127.0.0.1:5173/df593125-b694-4ed1-86b8-3bbb91cbb854",
+            "assetId": "f90f5262-7be1-4ff8-b74e-8d87f6742829",
+            "fileName": "去除字幕，杂的东西-2.png",
+            "diskPath": "D:/flowid-zy/output/去除字幕，杂的东西_cbb9c1d54745475e8d6f30ab63be6b92-2026-05-28T03-51-04-840Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "f2aa38df-ae38-4b98-b63b-219a0b5f865b",
+            "url": "blob:http://127.0.0.1:5173/1d0a1e53-1b7f-40d0-b3aa-11118e8fdcfd",
+            "assetId": "c92565b4-e9fc-4a10-8195-bca77d0cf8b5",
+            "fileName": "去除字幕，杂的东西-3.png",
+            "diskPath": "D:/flowid-zy/output/去除字幕，杂的东西_cbb9c1d54745475e8d6f30ab63be6b92-2026-05-28T03-51-05-145Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "6772ae8e-3292-4829-93fd-b51ee2bf0449",
+            "url": "blob:http://127.0.0.1:5173/be4afc17-cbe4-49bb-b20a-23433a3f187c",
+            "assetId": "648115aa-3a11-49a9-b312-a9a3b0cc36ce",
+            "fileName": "去除字幕，杂的东西-4.png",
+            "diskPath": "D:/flowid-zy/output/去除字幕，杂的东西_cbb9c1d54745475e8d6f30ab63be6b92-2026-05-28T03-51-05-429Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/去除字幕，杂的东西_cbb9c1d54745475e8d6f30ab63be6b92-2026-05-28T03-51-04-552Z.png",
+        "lastRunAt": 1779940265439,
+        "mattingRefWidth": 1360,
+        "mattingRefHeight": 752,
+        "resultThumbnailsExpanded": false,
+        "promptPickerMode": "workflow"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "62030897-db16-4f38-9167-60b581ee0233",
+      "position": {
+        "x": 376.0172665143183,
+        "y": 2290.5461369350387
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "参考图4（角度控制）",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/f5588549-eb4f-413b-8361-0a4c23da3bd8",
+        "prompt": "@[参考图4](de3bdc15-77b9-4beb-b347-ac4af64feac1)",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "lastRunAt": 1779939112239,
+        "comfyMultiangleZoom": 5,
+        "comfyMultiangleH": 22,
+        "comfyMultiangleV": 16,
+        "srcAssetId": "a34d65b3-a71f-4604-b191-f3b378ce9241",
+        "srcFileName": "参考图4（角度控制）-1.png",
+        "resultThumbnails": [
+          {
+            "id": "929e38e1-df81-4ada-b63c-f6d8502dc335",
+            "url": "blob:http://127.0.0.1:5173/f27394fd-fcfb-48ab-8659-0be2cb5da168",
+            "assetId": "a34d65b3-a71f-4604-b191-f3b378ce9241",
+            "fileName": "参考图4（角度控制）-1.png",
+            "diskPath": "D:/flowid-zy/output/参考图4（角度控制）_62030897db164f38916760b581ee0233-2026-05-28T03-31-50-514Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "65439c23-261d-4ea3-98db-d61014fb67fa",
+            "url": "blob:http://127.0.0.1:5173/c6799126-ea7c-46de-8371-95b3b795beef",
+            "assetId": "4465dd23-262b-45dc-9993-d48f02663fc2",
+            "fileName": "参考图4（角度控制）-2.png",
+            "diskPath": "D:/flowid-zy/output/参考图4（角度控制）_62030897db164f38916760b581ee0233-2026-05-28T03-31-51-508Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "62faa42a-cfab-4263-aeba-70e1531046cd",
+            "url": "blob:http://127.0.0.1:5173/807f86c0-076c-4da9-aafe-a879439568b0",
+            "assetId": "f57645e7-c8ba-40a2-b617-659d701fc06c",
+            "fileName": "参考图4（角度控制）-3.png",
+            "diskPath": "D:/flowid-zy/output/参考图4（角度控制）_62030897db164f38916760b581ee0233-2026-05-28T03-31-51-924Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "416e7d7a-86c6-4763-a252-7601bc352ce9",
+            "url": "blob:http://127.0.0.1:5173/83d5e83c-f6d9-4b26-854a-e80ef060e05a",
+            "assetId": "cf686bc4-d086-46aa-a128-915b539f52ac",
+            "fileName": "参考图4（角度控制）-4.png",
+            "diskPath": "D:/flowid-zy/output/参考图4（角度控制）_62030897db164f38916760b581ee0233-2026-05-28T03-31-52-219Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/参考图4（角度控制）_62030897db164f38916760b581ee0233-2026-05-28T03-31-50-514Z.png",
+        "mattingRefWidth": 928,
+        "mattingRefHeight": 1664,
+        "promptPickerMode": "workflow",
+        "resultThumbnailsExpanded": false
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "2b93efe7-c471-45d8-a511-2672e9a95fc3",
+      "position": {
+        "x": 379.8015991204069,
+        "y": 1868.6287516199907
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "参考图3-扩图",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/507e23d4-456d-4a55-93ea-50381cb1bd66",
+        "prompt": "@[参考图3](ce502380-33d5-4dd8-ad25-40f1e730ee27)",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "srcAssetId": "373c7cd0-aa0a-442d-bcb4-6cf36422b13b",
+        "srcFileName": "参考图3-扩图-1.png",
+        "resultThumbnails": [
+          {
+            "id": "93c1c2e2-41ec-4325-9023-2846a8492658",
+            "url": "blob:http://127.0.0.1:5173/d55ceff9-4a58-4595-bf98-b65d2faa4ced",
+            "assetId": "373c7cd0-aa0a-442d-bcb4-6cf36422b13b",
+            "fileName": "参考图3-扩图-1.png",
+            "diskPath": "D:/flowid-zy/output/参考图3-扩图_2b93efe7c47145d8a5112672e9a95fc3-2026-05-28T03-49-56-140Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "e95ffc1b-090b-482b-8d47-4fc8939cd944",
+            "url": "blob:http://127.0.0.1:5173/fa89b597-0e6a-4536-9b78-f3b7298efe42",
+            "assetId": "2615b935-065e-40ea-ae25-b3b0f13854c3",
+            "fileName": "参考图3-扩图-2.png",
+            "diskPath": "D:/flowid-zy/output/参考图3-扩图_2b93efe7c47145d8a5112672e9a95fc3-2026-05-28T03-49-56-593Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "eb9ff8f6-d8ad-48f1-9b69-aaedb07fdbb6",
+            "url": "blob:http://127.0.0.1:5173/c4104ffb-58d5-4ec9-881d-1a79cdadbbf1",
+            "assetId": "33880ab6-cb8b-4f98-9861-8823f66f95d1",
+            "fileName": "参考图3-扩图-1.png",
+            "diskPath": "D:/flowid-zy/output/参考图3-扩图_2b93efe7c47145d8a5112672e9a95fc3-2026-05-28T03-28-48-018Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/参考图3-扩图_2b93efe7c47145d8a5112672e9a95fc3-2026-05-28T03-49-56-140Z.png",
+        "lastRunAt": 1779940196613,
+        "mattingRefWidth": 1104,
+        "mattingRefHeight": 944,
+        "promptPickerMode": "workflow",
+        "comfyOutpaintLeft": 200,
+        "comfyOutpaintRight": 300,
+        "comfyOutpaintTop": 50,
+        "comfyOutpaintBottom": 50,
+        "resultThumbnailsExpanded": false
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "8eb60fad-29f1-4304-b36c-673628664a8c",
+      "position": {
+        "x": 383.63395310760666,
+        "y": 1427.6540487753018
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "image",
+      "data": {
+        "kind": "image",
+        "title": "参考图2-语义英文抠图",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/e649420f-29a9-4a4f-90b4-ec7dea253557",
+        "prompt": "@[参考图2](f7f906ab-9740-459b-9f89-762510bffa06)\nperson",
+        "referenceImageSources": [],
+        "mattingPoints": [],
+        "cloudImageAspect": "auto",
+        "cloudImageResolutionTier": "1k",
+        "srcAssetId": "a2469539-e820-4e72-bdc3-fb72e4d57dbc",
+        "srcFileName": "参考图2-语义英文抠图-2.png",
+        "resultThumbnails": [
+          {
+            "id": "ec33d9a2-1c58-4309-92f1-ec4b395dbfb3",
+            "url": "blob:http://127.0.0.1:5173/136d96d5-4b9d-4b91-ad9a-03d83c185bac",
+            "assetId": "397c7007-435a-4608-bf8d-01e891d5878d",
+            "fileName": "参考图2-语义英文抠图-1.png",
+            "diskPath": "D:/flowid-zy/output/参考图2-语义英文抠图_8eb60fad29f14304b36c673628664a8c-2026-05-28T03-26-01-204Z.png",
+            "mediaKind": "image"
+          },
+          {
+            "id": "7bb6a5c0-7804-40ee-ab0a-c65e4654a2fb",
+            "url": "blob:http://127.0.0.1:5173/3a48b7f9-a319-40bd-90dd-7b10e3a8f790",
+            "assetId": "a2469539-e820-4e72-bdc3-fb72e4d57dbc",
+            "fileName": "参考图2-语义英文抠图-2.png",
+            "diskPath": "D:/flowid-zy/output/参考图2-语义英文抠图_8eb60fad29f14304b36c673628664a8c-2026-05-28T03-26-01-794Z.png",
+            "mediaKind": "image"
+          }
+        ],
+        "lastRunAt": 1779938761809,
+        "resultThumbnailsExpanded": true,
+        "promptPickerMode": "workflow",
+        "mattingRefWidth": 928,
+        "mattingRefHeight": 1664,
+        "srcDiskPath": "D:/flowid-zy/output/参考图2-语义英文抠图_8eb60fad29f14304b36c673628664a8c-2026-05-28T03-26-01-794Z.png"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "d7e5dfb8-43d1-48ba-b238-6f54659c5043",
+      "type": "image",
+      "position": {
+        "x": 2247.732426920199,
+        "y": 2085.7086740882382
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "data": {
+        "kind": "image",
+        "title": "首帧图片",
+        "src": "blob:http://127.0.0.1:5173/9caf7347-9d89-4b9c-bfbc-01e6814e3b59",
+        "srcAssetId": "813117f4-e498-49bf-bf04-6a4a4ad7af42",
+        "srcFileName": "bb3628b8-2454-4a71-be27-357cee974ee4.png",
+        "prompt": "",
+        "referenceImageSources": [],
+        "referenceImageAssetIds": [],
+        "runStatus": "idle",
+        "mattingRefWidth": 1280,
+        "mattingRefHeight": 720,
+        "model": "(文生图)-全类型生图",
+        "workflowEntryId": "12c6b358-d5c2-4b9c-9eaf-4c7154f48a2e",
+        "mattingPoints": []
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "cc9b0118-77b5-44a4-9c4c-c5fd2d363a24",
+      "type": "image",
+      "position": {
+        "x": 2250.3714427417444,
+        "y": 2515.921033316631
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "data": {
+        "kind": "image",
+        "title": "尾帧图",
+        "src": "blob:http://127.0.0.1:5173/7dcce76e-7d35-4d22-8812-4e56240dc06a",
+        "srcAssetId": "7d91d42f-66eb-4689-81d2-39e64377cb04",
+        "srcFileName": "98c885f8-afca-4c59-966d-be2680106141.png",
+        "prompt": "",
+        "referenceImageSources": [],
+        "referenceImageAssetIds": [],
+        "runStatus": "idle",
+        "mattingRefWidth": 1280,
+        "mattingRefHeight": 720,
+        "model": "(文生图)-全类型生图",
+        "workflowEntryId": "12c6b358-d5c2-4b9c-9eaf-4c7154f48a2e",
+        "mattingPoints": []
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "427306b1-7dc5-461f-83fb-8778487512a6",
+      "position": {
+        "x": 2740.3714427417444,
+        "y": 2085.7086740882382
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "video",
+      "data": {
+        "kind": "video",
+        "title": "首尾视频-首尾音视频",
+        "runStatus": "success",
+        "prompt": "@[首帧图片](d7e5dfb8-43d1-48ba-b238-6f54659c5043)\n@[尾帧图](cc9b0118-77b5-44a4-9c4c-c5fd2d363a24)\n光标在武器定制网格点选，悬停高亮，装甲逐段更换， 光标悬停并点击确认配置，面板收缩，棒棒糖送至嘴边",
+        "prompt2": "",
+        "prompt3": "",
+        "prompt4": "",
+        "referenceImageSources": [],
+        "promptPickerMode": "workflow",
+        "model": "(图生视频_音)-首尾视频",
+        "workflowEntryId": "19c28d3f-ff15-4b36-8c9d-31f485deeeca",
+        "lastRunAt": 1779951239410,
+        "resultThumbnails": [
+          {
+            "id": "17d6ccce-fca9-4ee2-9779-1934c91cff5f",
+            "url": "blob:http://127.0.0.1:5173/c60cf450-4f65-49a2-ab50-86cc2d4b6f82",
+            "diskPath": "D:/flowid-zy/output/首尾视频-首尾音视频_427306b17dc5461f83fb8778487512a6-2026-05-28T06-53-58-499Z.mp4",
+            "mediaKind": "video"
+          },
+          {
+            "id": "f46e9a14-efbd-4ad1-a6f6-a57dca05cabf",
+            "url": "blob:http://127.0.0.1:5173/7a8e52a2-d697-4ef9-a634-346d8526dc41",
+            "diskPath": "D:/flowid-zy/output/首尾视频-首尾音视频_427306b17dc5461f83fb8778487512a6-2026-05-28T06-53-59-397Z.mp4",
+            "mediaKind": "video"
+          }
+        ],
+        "src": "blob:http://127.0.0.1:5173/7a8e52a2-d697-4ef9-a634-346d8526dc41",
+        "srcDiskPath": "D:/flowid-zy/output/首尾视频-首尾音视频_427306b17dc5461f83fb8778487512a6-2026-05-28T06-53-59-397Z.mp4",
+        "resultThumbnailsExpanded": true
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "0f4c4410-211a-40e0-a2bf-59144ff32807",
+      "position": {
+        "x": 3297.243986577857,
+        "y": 714.741832055264
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "需要说的话（需按照下面的格式）",
+        "runStatus": "idle",
+        "body": "李追远:你好，今天天气真不错。",
+        "model": "(文生文)-模特提示词",
+        "workflowEntryId": "4e750db8-5879-4ff6-bebc-4b61931f02e3"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "ebc5d705-cf9d-4193-97e4-e97a9d94b79c",
+      "position": {
+        "x": 3307.254598959029,
+        "y": 1195.1206087208188
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "角色音色设计（需按照下面的格式）",
+        "runStatus": "idle",
+        "body": "[\n  {\n    \"name\": \"旁白\",\n    \"instruct\": \"一个30岁左右的男性声音，音色沉稳客观，带有明显的讲述感，语速中等偏慢，字正腔圆。\",\n    \"text\": \"白白系着围裙。\"\n  },\n  {\n    \"name\": \"白白\",\n    \"instruct\": \"一个50岁左右的女性声音，音色略显粗犷，带着农村妇女特有的泼辣和直爽，说话语速较快，语气中带着一丝不耐烦。\",\n    \"text\": \"细那康子们，吃饭了！\"\n  },\n  {\n    \"name\": \"酝酿\",\n    \"instruct\": \"一个50岁左右的男性声音，音色低沉，带着些许烟嗓，语气粗暴不耐烦，说话节奏稍快，带点地方口音的质朴感。\",\n    \"text\": \"脑子进水了你？\"\n  },\n  {\n    \"name\": \"百合\",\n    \"instruct\": \"一个10岁左右的小男孩声音，音色清澈，略带腼腆和礼貌，说话声音不大，语速适中。\",\n    \"text\": \"谢谢白白。\"\n  },\n  {\n    \"name\": \"茉莉\",\n    \"instruct\": \"一个30岁左右的女性声音，音色温柔细腻，语速偏慢，语气温和有耐心。\",\n    \"text\": \"酝酿，别总对孩子凶。\"\n  }\n]"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "42d64503-4320-4aa0-ab54-7b1f60ee3348",
+      "position": {
+        "x": 3329.8704501787456,
+        "y": 3795.743217588859
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "对话文本（需按照下面的格式）(1)",
+        "runStatus": "idle",
+        "body": "白白：今天超市打折，你们谁跟我去？\n百合：我去我去！我想买那个草莓味儿的酸奶。\n酝酿：不去。超市人多，挤得跟下饺子似的。\n白白：你不去谁拎东西？我跟百合俩女的拎得动吗？\n百合：酝酿哥哥，你就去嘛……回来我给你洗草莓。\n酝酿：行吧行吧，就这一回啊。\n白白：少废话，换鞋走了。\n酝酿：……超市几点关门来着？\n百合：九点！来得及来得及，快走快走！",
+        "model": "(文生文)-模特提示词",
+        "workflowEntryId": "4e750db8-5879-4ff6-bebc-4b61931f02e3"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "6821557a-4465-4215-a864-261d6d17b9d8",
+      "position": {
+        "x": 3876.6098943228462,
+        "y": 1428.9305001181228
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "最终合成音频-(文_语音转语音)-单_多人语音(无参)",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/91fb1036-d050-4875-b045-f3adecc6e75f",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/91fb1036-d050-4875-b045-f3adecc6e75f"
+        ],
+        "note": "@[对话文本（需按照下面的格式）](fbd30856-f6c3-4369-9f71-2fb947778034)\n@[角色音色设计（需按照下面的格式）](ebc5d705-cf9d-4193-97e4-e97a9d94b79c)",
+        "referenceImageSources": [],
+        "resultThumbnails": [
+          {
+            "id": "e6ef5b98-942b-444e-93bd-9d6048ef2790",
+            "url": "blob:http://127.0.0.1:5173/2cfb52e3-a9eb-4e26-976b-678fed94ac37",
+            "mediaKind": "audio"
+          },
+          {
+            "id": "3a786385-2bcd-4f07-a83f-6b68c6c3e953",
+            "url": "blob:http://127.0.0.1:5173/d00a441f-929b-4600-9698-7729f8457b4d",
+            "mediaKind": "audio"
+          }
+        ],
+        "lastRunAt": 1779945075142,
+        "resultThumbnailsExpanded": false,
+        "comfyTdRefAudioRoleRows": [
+          {
+            "roleName": ""
+          }
+        ],
+        "comfyVoiceTableRows": [
+          {
+            "roleName": "",
+            "sampleLine": "",
+            "voiceInstruct": "",
+            "language": "Auto"
+          },
+          {
+            "roleName": "",
+            "sampleLine": "",
+            "voiceInstruct": "",
+            "language": "Auto"
+          },
+          {
+            "roleName": "",
+            "sampleLine": "",
+            "voiceInstruct": "",
+            "language": "Auto"
+          }
+        ],
+        "promptPickerMode": "workflow",
+        "srcAssetId": "",
+        "model": "(文_语音转语音)-单_多人语音（无参）",
+        "workflowEntryId": "2196ad66-7596-4eb7-94e2-38b73494cff3",
+        "srcDiskPath": "D:/flowid-zy/output/最终合成音频-(文_语音转语音)-单_多人语音(无参)_6821557a44654215a864261d6d17b9d8-2026-05-28T05-11-15-134Z.flac"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "da115b80-6939-4e15-ad73-9cf4acc26ba7",
+      "position": {
+        "x": 3928.828368058351,
+        "y": 2144.6740568996074
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "需要填台本信息-(文转语音)-多人语音(无参)",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/509e615f-32a9-49f0-ae0c-07a8d324f094",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/509e615f-32a9-49f0-ae0c-07a8d324f094"
+        ],
+        "note": "@[台本（需按照下面的格式）](2484ea80-a58a-4aae-8f70-066b817f8625)",
+        "referenceImageSources": [],
+        "comfyVoiceTableRows": [
+          {
+            "roleName": "喵喵",
+            "sampleLine": "紧张什么？你连坐姿都在发抖……要不要靠过来一点？这里太吵了",
+            "voiceInstruct": "模拟成熟性感的御姐音色，声音略带磁性且沉稳，语速不快不慢，语调充满自信和一丝挑逗，尾音可以稍微拖长并上扬，给人一种游刃有余的掌控感。",
+            "language": "Auto"
+          },
+          {
+            "roleName": "拜拜",
+            "sampleLine": "靠过去？可、可我们才第一次见面……你都不认识我……",
+            "voiceInstruct": "25岁男性上班族，声音清亮但时常犹豫，语速时快时慢，紧张时会轻微结巴。情绪波动明显，从低声呢喃到突然激动再到自我怀疑的叹气。肢体语言丰富，经常无意识的小动作",
+            "language": "Auto"
+          },
+          {
+            "roleName": "旁白",
+            "sampleLine": "小林今天第三次走神了。酒吧昏黄的灯光晃得他心跳加速，而吧台对面那个红唇微扬的女人，正用指尖轻轻摩挲着酒杯边缘",
+            "voiceInstruct": "声音特征沉稳、客观、略带叙事感的女播音腔，普通话标准，语速适中，带有轻微的环境氛围渲染，语调平缓但富有感染力，在关键情节时稍作停顿，增强画面感。情感冷静旁观，偶尔带一丝微妙的反讽",
+            "language": "Auto"
+          },
+          {
+            "roleName": "",
+            "sampleLine": "",
+            "voiceInstruct": "",
+            "language": "Auto"
+          }
+        ],
+        "srcAssetId": "",
+        "resultThumbnails": [
+          {
+            "id": "890a7d7e-5d72-4f32-b44a-b944ea8b5990",
+            "url": "blob:http://127.0.0.1:5173/aeebeec0-61d3-42bb-bf35-354be3246891",
+            "mediaKind": "audio"
+          },
+          {
+            "id": "731c0b31-7945-4229-8f3d-2cf2942586c7",
+            "url": "blob:http://127.0.0.1:5173/008c03e3-b6fe-41aa-a4ce-0280fe80ef4d",
+            "mediaKind": "audio"
+          }
+        ],
+        "lastRunAt": 1779945825539,
+        "resultThumbnailsExpanded": false,
+        "promptPickerMode": "workflow",
+        "model": "(文转语音)-多人语音 (无参)",
+        "workflowEntryId": "ac275434-b077-4906-befe-149ac77040df"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "2484ea80-a58a-4aae-8f70-066b817f8625",
+      "position": {
+        "x": 3310.1425511592415,
+        "y": 2132.940481859077
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "台本（需按照下面的格式）",
+        "runStatus": "idle",
+        "body": "旁白: 拜拜今天第三次走神了。酒吧昏黄的灯光晃得他心跳加速，而吧台对面那个红唇微扬的女人，正用指尖轻轻摩挲着酒杯边缘。\n喵喵: 小弟弟，有兴趣陪姐姐喝一杯吗？\n拜拜: 啊？我、我……我其实不太会喝酒……\n旁白: 他的手指无意识地抠着杯沿，喉结上下滚动，像被什么无形的东西掐住了呼吸。\n喵喵: 不会喝？那正好——姐姐教你。这杯莫吉托，甜得刚好，就像你刚才偷看我的眼神。\n拜拜: 我、我没偷看！……好吧，看了一眼。就一眼！\n旁白: 他猛地坐直，又立刻缩回肩膀，仿佛那句话烫伤了自己的嘴。\n喵喵: 紧张什么？你连坐姿都在发抖……要不要靠过来一点？这里太吵了。\n拜拜: 靠过去？可、可我们才第一次见面……你都不认识我……\n喵喵: 名字不重要，感觉才重要。而我感觉……你有点可爱。\n旁白: 小林的耳朵瞬间红透，连耳后那颗小痣都像在发烫。他想逃，脚却像钉在了高脚凳上。\n拜拜: 可爱？没人这么说过我……他们都说我太闷，连朋友圈都发不出手……\n喵喵: 那现在呢？敢不敢发一条——'今晚，和一个危险又迷人的姐姐喝了一杯'？\n拜拜: ……我连配图都不敢选。你笑起来太……太有杀伤力了。\n喵喵: 那就别发了。有些故事，只适合藏在两个人的记忆里——比如，接下来你打算请我跳支舞吗？\n旁白: 他张了张嘴，没发出声音。但这一次，他没有低头，而是轻轻推开了那杯没动过的苏打水，朝她伸出了手。",
+        "promptPickerMode": "workflow",
+        "model": "(文生文)-模特提示词",
+        "workflowEntryId": "4e750db8-5879-4ff6-bebc-4b61931f02e3"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "fbd30856-f6c3-4369-9f71-2fb947778034",
+      "position": {
+        "x": 3303.950017032572,
+        "y": 1639.001646598725
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "对话文本（需按照下面的格式）",
+        "runStatus": "idle",
+        "body": "旁白：白白系着围裙。\n白白：细那康子们，吃饭了！\n酝酿：脑子进水了你？大中午喊这么大声，街坊都听见了。\n百合：谢谢白白。酝酿叔叔又凶人了……\n茉莉：就你嗓门大。要吃自己盛，不吃拉倒。\n酝酿：我吃不吃关你啥事……\n百合：嘴硬手软。\n白白：多吃点，别学酝酿叔叔挑食。\n酝酿：谁挑食了……你这菜咸了。\n茉莉：咸了别吃。百合，给酝酿倒碗水去。\n百合：哎！酝酿叔叔，给。\n酝酿：……还行，不算太咸。\n白白：那再来一碗？\n酝酿：少盛点……饭快凉了，都吃吧。\n茉莉：就你话多。\n旁白：一家人终于安静下来，筷子碰着碗沿，叮叮当当响个不停。"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "0440b7ee-174c-481b-b7dc-1bdf91e70874",
+      "position": {
+        "x": 3809.243986577855,
+        "y": 354.7418320552642
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "单_多语音自定义(有参)",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/0caf699a-b387-4da2-afe1-6353d98902c5",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/0caf699a-b387-4da2-afe1-6353d98902c5"
+        ],
+        "note": "@[配音 · 波波（参考音频）](8453600d-4ddf-431a-8304-c12f2df62e34)\n@[需要说的话（需按照下面的格式）](0f4c4410-211a-40e0-a2bf-59144ff32807)\n",
+        "referenceImageSources": [],
+        "comfyTdRefAudioRoleRows": [
+          {
+            "roleName": "李追远"
+          }
+        ],
+        "resultThumbnails": [
+          {
+            "id": "772f4a28-20d9-4ccc-93e0-2a168ddbb81f",
+            "url": "blob:http://127.0.0.1:5173/eda78a40-0c41-415c-8e13-5861fb10bfff",
+            "mediaKind": "audio"
+          },
+          {
+            "id": "804bb408-8bbb-4e9b-9ecb-bae07cab454b",
+            "url": "blob:http://127.0.0.1:5173/f7bc171d-71f4-4d4f-bc60-da1ff2277958",
+            "mediaKind": "audio"
+          }
+        ],
+        "lastRunAt": 1779944951013,
+        "resultThumbnailsExpanded": false,
+        "promptPickerMode": "workflow",
+        "model": "(文_语音转语音)-单_多语音自定义(有参)",
+        "workflowEntryId": "aba0f3e6-246d-44f5-b717-501b64249062",
+        "srcAssetId": "",
+        "srcDiskPath": "D:/flowid-zy/output/单_多语音自定义(有参)_0440b7ee174c481bb7dc1bdf91e70874-2026-05-28T05-09-11-010Z.flac"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "8453600d-4ddf-431a-8304-c12f2df62e34",
+      "position": {
+        "x": 3300.3618545867503,
+        "y": 339.4786985595905
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "配音 · 波波（参考音频）",
+        "runStatus": "idle",
+        "src": "blob:http://127.0.0.1:5173/3943ee2c-adab-46b5-9d93-b80c3fefd6cf",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/3943ee2c-adab-46b5-9d93-b80c3fefd6cf"
+        ],
+        "note": "",
+        "referenceImageSources": [],
+        "srcAssetId": "1d77d2e8-400e-4601-8e59-1a9e52754f64",
+        "srcFileName": "indextts单人愤怒语音.mp3",
+        "resultThumbnailsExpanded": false,
+        "model": "(文_语音转语音)-单_多语音自定义(有参)",
+        "workflowEntryId": "aba0f3e6-246d-44f5-b717-501b64249062"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "2ebcafbd-33d5-48b3-a11d-e3133608e59b",
+      "position": {
+        "x": 3327.198106042801,
+        "y": 2689.8240366208133
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "配音 · 卡卡",
+        "runStatus": "idle",
+        "src": "blob:http://127.0.0.1:5173/2e49a1d9-dd84-4a4e-91cb-f0f3a6a17f01",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/2e49a1d9-dd84-4a4e-91cb-f0f3a6a17f01"
+        ],
+        "note": "",
+        "referenceImageSources": [],
+        "srcAssetId": "6459465e-a352-4830-88f0-f99b5a3c1ae6",
+        "srcFileName": "阿盖.MP3",
+        "resultThumbnailsExpanded": true,
+        "model": "(文_语音转语音)-单_多语音自定义(有参)",
+        "workflowEntryId": "aba0f3e6-246d-44f5-b717-501b64249062"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "b031ea39-446d-4481-aa47-357de38d54af",
+      "position": {
+        "x": 3327.198106042801,
+        "y": 3409.824036620814
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "配音 · 懒懒羊",
+        "runStatus": "idle",
+        "src": "blob:http://127.0.0.1:5173/53e1f614-92fe-47d4-9f23-edf240ea302c",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/53e1f614-92fe-47d4-9f23-edf240ea302c"
+        ],
+        "note": "",
+        "referenceImageSources": [],
+        "srcAssetId": "33594f9b-1e4a-42c0-ae9e-11f61dbc45b0",
+        "srcFileName": "懒懒羊.MP3",
+        "resultThumbnailsExpanded": true,
+        "model": "(文_语音转语音)-单_多语音自定义(有参)",
+        "workflowEntryId": "aba0f3e6-246d-44f5-b717-501b64249062"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "068cd75d-86fd-47f2-bce2-a5ffd8b3300c",
+      "position": {
+        "x": 5059.4765452702495,
+        "y": 307.0527792760902
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "music",
+        "title": "最终合成的音乐（填微调可以调节）",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/d62b6609-9634-4916-a865-537ea239771f",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/d62b6609-9634-4916-a865-537ea239771f"
+        ],
+        "note": "@[歌词（需按照下面的格式填入）](c4bc9ede-9e12-47ef-9c6c-5b8d2447981c)\n@[声音描述（需按照下面的格式填入）](8a760c38-803e-42de-b64e-32bd468ce401)\n",
+        "referenceImageSources": [],
+        "resultThumbnails": [
+          {
+            "id": "c826523f-65d2-4bbd-83ff-fdfdef32e7f3",
+            "url": "blob:http://127.0.0.1:5173/266de338-f152-4f04-8014-76d51f7ac2ca",
+            "mediaKind": "audio"
+          }
+        ],
+        "lastRunAt": 1779946787820,
+        "resultThumbnailsExpanded": true,
+        "comfyMusicDurationMinutes": 2,
+        "comfyMusicBpm": 98,
+        "comfyMusicTimesignature": "6",
+        "comfyMusicLanguage": "en",
+        "comfyMusicKeyscale": "D# major",
+        "promptPickerMode": "workflow",
+        "model": "(语音转音乐)-音乐创作",
+        "workflowEntryId": "42e833e6-6ac9-4531-bcbf-803ef8684659",
+        "srcAssetId": "",
+        "srcDiskPath": "D:/flowid-zy/output/最终合成的音乐（填微调可以调节）_068cd75d86fd47f2bce2a5ffd8b3300c-2026-05-28T05-39-47-792Z.mp3"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "c4bc9ede-9e12-47ef-9c6c-5b8d2447981c",
+      "position": {
+        "x": 4499.994354140909,
+        "y": 310.3989910647367
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "歌词（需按照下面的格式填入）",
+        "runStatus": "idle",
+        "body": "\n[Intro - acoustic guitar and gentle waves]\n\n[Mm-hmm humming]\n(Hmm-mm-mm-mm)\n(Hmm-mm-mm-mm)\n(Hmm-mm-mm-mm)\n\n[Verse 1 - soft breathy humming]\n(Summer breeze so warm)\n(Sunlight on the shore)\n(Waves keep calling me)\n(Floating ever more)\n\n[Chorus - light and airy]\n(Hmm-mm feel the sand)\n(Hmm-mm take my hand)\n(Swaying like the sea)\n(Where I long to be)\n\n[Instrumental - piano interlude with light percussion]\n\n[Outro - fading humming and guitar]\n(Hmm-mm-mm-mm)\n(Summer fades away)\n",
+        "model": "(文生文)-模特提示词",
+        "workflowEntryId": "4e750db8-5879-4ff6-bebc-4b61931f02e3"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "90552fb8-2dcd-48fa-9c76-17bdbb1a2c48",
+      "position": {
+        "x": 3321.733362672376,
+        "y": 3057.305363451367
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "配音 · 波波2",
+        "runStatus": "idle",
+        "src": "blob:http://127.0.0.1:5173/a8403a65-c849-4292-8099-b98b905e371f",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/a8403a65-c849-4292-8099-b98b905e371f"
+        ],
+        "note": "",
+        "referenceImageSources": [],
+        "srcAssetId": "b5f8ad21-2130-4bc3-9bde-8514831ccbc3",
+        "srcFileName": "波波.MP3",
+        "resultThumbnailsExpanded": true,
+        "model": "(文_语音转语音)-单_多语音自定义(有参)",
+        "workflowEntryId": "aba0f3e6-246d-44f5-b717-501b64249062"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "152a38b5-f472-44fb-a5ad-58bf3676873a",
+      "position": {
+        "x": 3819.870450178744,
+        "y": 2689.8240366208133
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "(文_语音转语音)-单_多语音自定义(有参)-填匹配",
+        "runStatus": "success",
+        "src": "blob:http://127.0.0.1:5173/180bda3b-e86b-44e7-96b5-f330485ea0de",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/180bda3b-e86b-44e7-96b5-f330485ea0de"
+        ],
+        "note": "@[对话文本（需按照下面的格式）(1)](42d64503-4320-4aa0-ab54-7b1f60ee3348)\n@[配音 · 波波2](90552fb8-2dcd-48fa-9c76-17bdbb1a2c48)\n@[配音 · 卡卡](2ebcafbd-33d5-48b3-a11d-e3133608e59b)\n@[配音 · 懒懒羊](b031ea39-446d-4481-aa47-357de38d54af)",
+        "referenceImageSources": [],
+        "comfyTdRefAudioRoleRows": [
+          {
+            "roleName": "酝酿"
+          },
+          {
+            "roleName": "百合"
+          },
+          {
+            "roleName": "白白"
+          }
+        ],
+        "srcAssetId": "",
+        "resultThumbnails": [
+          {
+            "id": "d2c60dd3-d943-48ea-9e47-2f6617b0b37a",
+            "url": "blob:http://127.0.0.1:5173/9cc936a6-f619-4ca3-9be3-91df1c98c94c",
+            "mediaKind": "audio"
+          },
+          {
+            "id": "835da8c2-968b-4cb3-9b57-bfbd9dd45d34",
+            "url": "blob:http://127.0.0.1:5173/8d71d535-72a4-4235-8ff2-f3d417e1f5ce",
+            "mediaKind": "audio"
+          },
+          {
+            "id": "0584d786-0981-4889-ad59-6454d774f85a",
+            "url": "blob:http://127.0.0.1:5173/9f900ce9-d141-41da-8245-d8c468abe41d",
+            "mediaKind": "audio"
+          },
+          {
+            "id": "8240f867-590e-4a69-95a3-84bbba9e0c65",
+            "url": "blob:http://127.0.0.1:5173/1abad1fc-c3ca-434d-bf9a-89bf9ee607d2",
+            "mediaKind": "audio"
+          }
+        ],
+        "srcDiskPath": "D:/flowid-zy/output/(文_语音转语音)-单_多语音自定义(有参)-填匹配_152a38b5f47244fba5ad58bf3676873a-2026-05-28T05-47-12-297Z.flac",
+        "lastRunAt": 1779947232303,
+        "resultThumbnailsExpanded": false,
+        "promptPickerMode": "workflow",
+        "model": "(文_语音转语音)-单_多语音自定义(有参)",
+        "workflowEntryId": "aba0f3e6-246d-44f5-b717-501b64249062"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "8a760c38-803e-42de-b64e-32bd468ce401",
+      "position": {
+        "x": 4499.491253883053,
+        "y": 713.8527874366816
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "声音描述（需按照下面的格式填入）",
+        "runStatus": "idle",
+        "body": "bossa nova, relaxing summer beach vibe, soft acoustic guitar, gentle piano, light percussion, female soft humming vocal, warm and airy texture"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "1d34511b-928f-4fb3-a7c3-af8f127fa6c6",
+      "type": "group",
+      "position": {
+        "x": 352.0172665143183,
+        "y": 151.18604479698004
+      },
+      "draggable": true,
+      "selectable": false,
+      "dragHandle": ".studio-group__titleRow",
+      "style": {
+        "width": 1701.2336202889232,
+        "height": 3007.103897414128,
+        "pointerEvents": "none"
+      },
+      "zIndex": 10,
+      "data": {
+        "kind": "group",
+        "title": "云端comfyui-(图片工作流的运用)",
+        "runStatus": "idle",
+        "memberIds": [
+          "325d11db-b407-4fbb-9aff-45001d474297",
+          "16571ddb-fac5-4226-bf55-1353c71292e5",
+          "e8290916-d5f3-4b31-9bd4-90d265448b8e",
+          "ce502380-33d5-4dd8-ad25-40f1e730ee27",
+          "f7f906ab-9740-459b-9f89-762510bffa06",
+          "de3bdc15-77b9-4beb-b347-ac4af64feac1",
+          "70b69436-aee1-4fd0-b5fa-8c465bcf21d7",
+          "9cbb5ebc-11bb-45ca-a039-13bb7d6d6614",
+          "cbb9c1d5-4745-475e-8d6f-30ab63be6b92",
+          "62030897-db16-4f38-9167-60b581ee0233",
+          "2b93efe7-c471-45d8-a511-2672e9a95fc3",
+          "8eb60fad-29f1-4304-b36c-673628664a8c"
+        ],
+        "collapsed": false,
+        "borderColor": "#3b82f6",
+        "backgroundColor": "rgba(15, 23, 42, 0.9)",
+        "titleFontSize": 50,
+        "locked": false,
+        "expandedWidth": 1701.2336202889232,
+        "expandedHeight": 3007.103897414128
+      },
+      "measured": {
+        "width": 1721,
+        "height": 3865
+      },
+      "selected": false,
+      "width": 1721,
+      "height": 3865,
+      "resizing": false
+    },
+    {
+      "id": "75483b02-5409-462f-824e-ff65c435e4c8",
+      "type": "group",
+      "position": {
+        "x": 2219.3079623643616,
+        "y": 149.31119514691912
+      },
+      "draggable": true,
+      "selectable": false,
+      "dragHandle": ".studio-group__titleRow",
+      "style": {
+        "width": 992.0865582667448,
+        "height": 2688.6098381697125,
+        "pointerEvents": "none"
+      },
+      "zIndex": 10,
+      "data": {
+        "kind": "group",
+        "title": "云端comfyui工作流-视频的运用",
+        "runStatus": "idle",
+        "memberIds": [
+          "798cc5ca-060b-4072-80a8-1c1a7e9b9736",
+          "148dd9e4-08ad-4fac-8a75-0253091e2663",
+          "2b1957f8-8eaf-4315-b406-3a609c48d39f",
+          "a5e0f6cd-9ff1-4e0b-a4fa-6c5b4c495ed5",
+          "6fa2d98f-4fa3-42bd-9567-c61703f3a8ee",
+          "d7e5dfb8-43d1-48ba-b238-6f54659c5043",
+          "cc9b0118-77b5-44a4-9c4c-c5fd2d363a24",
+          "427306b1-7dc5-461f-83fb-8778487512a6"
+        ],
+        "collapsed": false,
+        "borderColor": "#3b82f6",
+        "backgroundColor": "rgba(15, 23, 42, 0.9)",
+        "titleFontSize": 50,
+        "locked": false,
+        "expandedWidth": 992.0865582667448,
+        "expandedHeight": 2688.6098381697125
+      },
+      "measured": {
+        "width": 992,
+        "height": 2776
+      },
+      "selected": false,
+      "dragging": false,
+      "width": 992,
+      "height": 2776,
+      "resizing": false
+    },
+    {
+      "id": "de009ccd-2d3c-4aaf-ba4e-e7dc1a4e1143",
+      "type": "group",
+      "position": {
+        "x": 3262.243986577857,
+        "y": 156.47869855959254
+      },
+      "draggable": true,
+      "selectable": false,
+      "dragHandle": ".studio-group__titleRow",
+      "style": {
+        "width": 1117.5843814804966,
+        "height": 3954.264519029268,
+        "pointerEvents": "none"
+      },
+      "zIndex": 10,
+      "data": {
+        "kind": "group",
+        "title": "配音节点云端comfyui示例",
+        "runStatus": "idle",
+        "memberIds": [
+          "0f4c4410-211a-40e0-a2bf-59144ff32807",
+          "ebc5d705-cf9d-4193-97e4-e97a9d94b79c",
+          "42d64503-4320-4aa0-ab54-7b1f60ee3348",
+          "6821557a-4465-4215-a864-261d6d17b9d8",
+          "da115b80-6939-4e15-ad73-9cf4acc26ba7",
+          "2484ea80-a58a-4aae-8f70-066b817f8625",
+          "fbd30856-f6c3-4369-9f71-2fb947778034",
+          "0440b7ee-174c-481b-b7dc-1bdf91e70874",
+          "8453600d-4ddf-431a-8304-c12f2df62e34",
+          "2ebcafbd-33d5-48b3-a11d-e3133608e59b",
+          "b031ea39-446d-4481-aa47-357de38d54af",
+          "90552fb8-2dcd-48fa-9c76-17bdbb1a2c48",
+          "152a38b5-f472-44fb-a5ad-58bf3676873a"
+        ],
+        "collapsed": false,
+        "borderColor": "#3b82f6",
+        "backgroundColor": "rgba(15, 23, 42, 0.9)",
+        "titleFontSize": 50,
+        "locked": false,
+        "expandedWidth": 1117.5843814804966,
+        "expandedHeight": 3954.264519029268
+      },
+      "measured": {
+        "width": 1190,
+        "height": 4090
+      },
+      "selected": false,
+      "dragging": false,
+      "width": 1190,
+      "height": 4090,
+      "resizing": false
+    },
+    {
+      "id": "1103a147-fc26-4ecf-9d3d-4904b4a89306",
+      "type": "group",
+      "position": {
+        "x": 4473.991253883053,
+        "y": 160.55277927609114
+      },
+      "draggable": true,
+      "selectable": false,
+      "dragHandle": ".studio-group__titleRow",
+      "style": {
+        "width": 1037.9852913871964,
+        "height": 804.8000081605915,
+        "pointerEvents": "none"
+      },
+      "zIndex": 10,
+      "data": {
+        "kind": "group",
+        "title": "音乐节点云端comfyui的示例",
+        "runStatus": "idle",
+        "memberIds": [
+          "068cd75d-86fd-47f2-bce2-a5ffd8b3300c",
+          "c4bc9ede-9e12-47ef-9c6c-5b8d2447981c",
+          "8a760c38-803e-42de-b64e-32bd468ce401"
+        ],
+        "collapsed": false,
+        "borderColor": "#3b82f6",
+        "backgroundColor": "rgba(15, 23, 42, 0.9)",
+        "titleFontSize": 50,
+        "locked": false,
+        "expandedWidth": 1037.9852913871964,
+        "expandedHeight": 804.8000081605915
+      },
+      "measured": {
+        "width": 1069,
+        "height": 1038
+      },
+      "selected": false,
+      "dragging": false,
+      "width": 1069,
+      "height": 1038,
+      "resizing": false
+    },
+    {
+      "id": "50f4c89a-b04b-4e65-b71f-160d57845e65",
+      "type": "imageCompare",
+      "position": {
+        "x": 388.0077794158832,
+        "y": 3161.2090208058557
+      },
+      "draggable": true,
+      "selectable": true,
+      "dragHandle": ".studio-node__head",
+      "style": {
+        "width": 520,
+        "height": 420
+      },
+      "data": {
+        "kind": "imageCompare",
+        "title": "图像对比节点1",
+        "runStatus": "idle",
+        "compareSrcA": "blob:http://127.0.0.1:5173/a8900998-be26-43a6-bbfb-fb1747426e72",
+        "compareSrcB": "blob:http://127.0.0.1:5173/715b00cc-f002-4bb5-85e3-a02c6f48c73c",
+        "compareLabelA": "有字幕，杂的东西",
+        "compareLabelB": "去除字幕，杂的东西"
+      },
+      "selected": false,
+      "measured": {
+        "width": 1113,
+        "height": 749
+      },
+      "dragging": false,
+      "width": 1113,
+      "height": 749,
+      "resizing": false
+    },
+    {
+      "id": "39677239-7f31-45c4-accc-d0558befe61d",
+      "position": {
+        "x": 2248.4774748705286,
+        "y": 670.5766294867566
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "audio",
+      "data": {
+        "kind": "audio",
+        "title": "配音 · 音频节点1_ffc65e7b8ef04ad1aa636dcd89d5fb4c-2026-05-22T08-09-46-400Z",
+        "runStatus": "idle",
+        "src": "blob:http://127.0.0.1:5173/d83f62ab-3c8f-4e77-bf41-4b00b069c755",
+        "resultSources": [
+          "blob:http://127.0.0.1:5173/d83f62ab-3c8f-4e77-bf41-4b00b069c755"
+        ],
+        "note": "",
+        "promptPickerMode": "model",
+        "referenceImageSources": [],
+        "srcAssetId": "1f275fc9-f80e-40ce-b759-4d9c6786a473",
+        "srcFileName": "5208b2c3-dbda-4806-9a96-f9dc6d5a6968.flac",
+        "model": "(文_语音转语音)-单_多语音自定义(有参)",
+        "workflowEntryId": "aba0f3e6-246d-44f5-b717-501b64249062"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "99af1585-6077-4109-a149-599cb38dad54",
+      "position": {
+        "x": 2248.4774748705286,
+        "y": 1030.5766294867567
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "文字节点2",
+        "runStatus": "idle",
+        "body": "The cat's eyes widen with delighted surprise as floating gift hearts pulse on screen, it bounces slightly in place and lifts the thank-you sign higher toward the camera with both paws, ears perked forward, mouth opening in an excited meow-like expression with subtle head bobbing | The cat leans closer to the lens with a grateful beaming smile, nodding twice while keeping the sign steady in frame, whiskers twitching, gentle paw tap on the sign edge as if emphasizing thanks to the viewer named Hailey | The cat playfully tilts its head left then right while holding the sign at chest height, soft blinking, one ear flicking, background livestream UI hearts drifting upward, maintaining eye contact with camera | The cat raises one paw in a cute beckoning wave toward the audience while the other paw still supports the sign, small enthusiastic body sway, confident happy expression sealing a call to follow the stream"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "c5b27505-9007-4f3a-9a95-a865e4b54484",
+      "position": {
+        "x": 2248.4774748705286,
+        "y": 1390.5766294867567
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "text",
+      "data": {
+        "kind": "text",
+        "title": "文字节点3",
+        "runStatus": "idle",
+        "body": "A cute anthropomorphic brown tabby cat acting as a mobile livestream host, large sparkling eyes, joyful open-mouth expression, fluffy fur, holding a small handwritten sign that reads thank-you message with a rocket doodle, cozy warm-lit pet livestream room background with cat tree and chalkboard welcome sign, vertical phone livestream UI overlays with floating pink hearts and gift notifications, soft ring-light style facial lighting, shallow depth of field, authentic Chinese mobile livestream aesthetic, stable centered framing, the cat remains the same character throughout, no human host"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "61d25075-3d67-468b-b555-66ccf8afb52a",
+      "type": "image",
+      "position": {
+        "x": 2248.4774748705286,
+        "y": 310.5766294867566
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "data": {
+        "kind": "image",
+        "title": "图片 · 24d47874-125a-4d25-b749-742ceb8bd7a0",
+        "src": "blob:http://127.0.0.1:5173/16be3b98-def8-492c-a932-b92658737d9e",
+        "srcAssetId": "7dddce84-c59e-42f6-8489-ac548ff1a749",
+        "srcFileName": "24d47874-125a-4d25-b749-742ceb8bd7a0.png",
+        "prompt": "",
+        "referenceImageSources": [],
+        "referenceImageAssetIds": [],
+        "runStatus": "idle",
+        "mattingRefWidth": 720,
+        "mattingRefHeight": 1280,
+        "model": "(文生图)-全类型生图",
+        "workflowEntryId": "12c6b358-d5c2-4b9c-9eaf-4c7154f48a2e"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "e34ae07e-51de-4214-940c-be8e9daf9d69",
+      "position": {
+        "x": 2738.4774748705286,
+        "y": 310.5766294867566
+      },
+      "style": {
+        "width": 430,
+        "height": 340
+      },
+      "type": "video",
+      "data": {
+        "kind": "video",
+        "title": "图-文字节点2",
+        "runStatus": "success",
+        "prompt": "@[文字节点2](99af1585-6077-4109-a149-599cb38dad54)\n@[配音 · 音频节点1_ffc65e7b8ef04ad1aa636dcd89d5fb4c-2026-05-22T08-09-46-400Z](39677239-7f31-45c4-accc-d0558befe61d)\n@[图片 · 24d47874-125a-4d25-b749-742ceb8bd7a0](61d25075-3d67-468b-b555-66ccf8afb52a)",
+        "prompt2": "@[文字节点3](c5b27505-9007-4f3a-9a95-a865e4b54484)",
+        "prompt3": "",
+        "prompt4": "",
+        "model": "(图生视频)-数字人",
+        "promptPickerMode": "workflow",
+        "referenceImageSources": [],
+        "comfyWorkflowWidth": 1280,
+        "comfyWorkflowHeight": 720,
+        "comfyWorkflowAspect": "9:16",
+        "comfyWorkflowUseCustomPixels": false,
+        "workflowEntryId": "c3f19b3c-5688-4337-b567-6fa676d3ab12",
+        "resultThumbnails": [
+          {
+            "id": "06693596-78de-4255-8f37-9813b9e6d17e",
+            "url": "blob:http://127.0.0.1:5173/0c208b97-2b67-4b01-b492-80abfbb12ae5",
+            "diskPath": "D:/flowid-zy/output/图-文字节点2_e34ae07e51de4214940cbe8e9daf9d69-2026-05-28T07-59-09-405Z.mp4",
+            "mediaKind": "video"
+          }
+        ],
+        "lastRunAt": 1779955149439,
+        "src": "blob:http://127.0.0.1:5173/0c208b97-2b67-4b01-b492-80abfbb12ae5",
+        "srcDiskPath": "D:/flowid-zy/output/图-文字节点2_e34ae07e51de4214940cbe8e9daf9d69-2026-05-28T07-59-09-405Z.mp4"
+      },
+      "measured": {
+        "width": 430,
+        "height": 340
+      },
+      "selected": false
+    }
+  ],
+  "edges": [
+    {
+      "id": "6d0433de-989a-4a49-a70a-9419e7238dca",
+      "source": "ce502380-33d5-4dd8-ad25-40f1e730ee27",
+      "target": "70b69436-aee1-4fd0-b5fa-8c465bcf21d7",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "59d43797-b13c-4835-879f-1b954d816d73",
+      "source": "f7f906ab-9740-459b-9f89-762510bffa06",
+      "target": "70b69436-aee1-4fd0-b5fa-8c465bcf21d7",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "2c6e3cb2-f798-4e88-b555-9c446894c8aa",
+      "source": "de3bdc15-77b9-4beb-b347-ac4af64feac1",
+      "target": "70b69436-aee1-4fd0-b5fa-8c465bcf21d7",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "c0c91ee2-f6cf-444c-b4c2-7beec6dc2346",
+      "source": "e8290916-d5f3-4b31-9bd4-90d265448b8e",
+      "target": "70b69436-aee1-4fd0-b5fa-8c465bcf21d7",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "41ecd013-2053-44ca-a487-2389de4db5ed",
+      "source": "9cbb5ebc-11bb-45ca-a039-13bb7d6d6614",
+      "target": "cbb9c1d5-4745-475e-8d6f-30ab63be6b92",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "8349d27c-48a6-4d00-8c40-0214cbdf6f5f",
+      "source": "de3bdc15-77b9-4beb-b347-ac4af64feac1",
+      "target": "62030897-db16-4f38-9167-60b581ee0233",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "82f305f8-e0df-4cb8-945e-44a3883c3b7f",
+      "source": "ce502380-33d5-4dd8-ad25-40f1e730ee27",
+      "target": "2b93efe7-c471-45d8-a511-2672e9a95fc3",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "bea79474-9c86-4edf-9079-17ca8e38491d",
+      "source": "f7f906ab-9740-459b-9f89-762510bffa06",
+      "target": "8eb60fad-29f1-4304-b36c-673628664a8c",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "3d6db8ec-066d-41ea-b8e0-8b2a010e2cf8",
+      "source": "d7e5dfb8-43d1-48ba-b238-6f54659c5043",
+      "target": "427306b1-7dc5-461f-83fb-8778487512a6",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "targetHandle": "video-in",
+      "selected": false,
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "841f225a-1be7-428a-9ce0-893947f1f1da",
+      "source": "cc9b0118-77b5-44a4-9c4c-c5fd2d363a24",
+      "target": "427306b1-7dc5-461f-83fb-8778487512a6",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "targetHandle": "video-in",
+      "selected": false,
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "befcbba2-4510-4e59-88c4-213eb4dd25c7",
+      "source": "ebc5d705-cf9d-4193-97e4-e97a9d94b79c",
+      "target": "6821557a-4465-4215-a864-261d6d17b9d8",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "source": "2484ea80-a58a-4aae-8f70-066b817f8625",
+      "target": "da115b80-6939-4e15-ad73-9cf4acc26ba7",
+      "id": "xy-edge__2484ea80-a58a-4aae-8f70-066b817f8625-da115b80-6939-4e15-ad73-9cf4acc26ba7",
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "source": "fbd30856-f6c3-4369-9f71-2fb947778034",
+      "target": "6821557a-4465-4215-a864-261d6d17b9d8",
+      "id": "xy-edge__fbd30856-f6c3-4369-9f71-2fb947778034-6821557a-4465-4215-a864-261d6d17b9d8",
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "583caf26-a13c-4742-971a-fd5e4ef31788",
+      "source": "0f4c4410-211a-40e0-a2bf-59144ff32807",
+      "target": "0440b7ee-174c-481b-b7dc-1bdf91e70874",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "source": "8453600d-4ddf-431a-8304-c12f2df62e34",
+      "target": "0440b7ee-174c-481b-b7dc-1bdf91e70874",
+      "id": "xy-edge__8453600d-4ddf-431a-8304-c12f2df62e34-0440b7ee-174c-481b-b7dc-1bdf91e70874",
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "source": "c4bc9ede-9e12-47ef-9c6c-5b8d2447981c",
+      "target": "068cd75d-86fd-47f2-bce2-a5ffd8b3300c",
+      "id": "xy-edge__c4bc9ede-9e12-47ef-9c6c-5b8d2447981c-068cd75d-86fd-47f2-bce2-a5ffd8b3300c",
+      "selected": false,
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "8baf6c57-9404-4652-9259-938c3a100604",
+      "source": "42d64503-4320-4aa0-ab54-7b1f60ee3348",
+      "target": "152a38b5-f472-44fb-a5ad-58bf3676873a",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "3d838199-27d9-448a-9726-e14cd177be42",
+      "source": "90552fb8-2dcd-48fa-9c76-17bdbb1a2c48",
+      "target": "152a38b5-f472-44fb-a5ad-58bf3676873a",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "823335c4-ebea-4b62-bcd2-759917db3672",
+      "source": "2ebcafbd-33d5-48b3-a11d-e3133608e59b",
+      "target": "152a38b5-f472-44fb-a5ad-58bf3676873a",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "31c8329f-a4b6-46f8-be6e-ada781ee2bdf",
+      "source": "b031ea39-446d-4481-aa47-357de38d54af",
+      "target": "152a38b5-f472-44fb-a5ad-58bf3676873a",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "selected": false,
+      "targetHandle": "studio-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "source": "8a760c38-803e-42de-b64e-32bd468ce401",
+      "target": "068cd75d-86fd-47f2-bce2-a5ffd8b3300c",
+      "id": "xy-edge__8a760c38-803e-42de-b64e-32bd468ce401-068cd75d-86fd-47f2-bce2-a5ffd8b3300c",
+      "selected": false,
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "9471021f-e9be-4986-9d27-98e5cf40eb00",
+      "source": "99af1585-6077-4109-a149-599cb38dad54",
+      "target": "e34ae07e-51de-4214-940c-be8e9daf9d69",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "targetHandle": "video-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "672e45a3-e750-4404-a8b7-ae33bc9a3c80",
+      "source": "c5b27505-9007-4f3a-9a95-a865e4b54484",
+      "target": "e34ae07e-51de-4214-940c-be8e9daf9d69",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "targetHandle": "video-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "3b003725-d97d-4af0-9975-a4f65b7d4b20",
+      "source": "39677239-7f31-45c4-accc-d0558befe61d",
+      "target": "e34ae07e-51de-4214-940c-be8e9daf9d69",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "targetHandle": "video-in",
+      "sourceHandle": "studio-out"
+    },
+    {
+      "id": "e2aff291-9146-4fd0-9ef2-3a64c1d9c2e5",
+      "source": "61d25075-3d67-468b-b555-66ccf8afb52a",
+      "target": "e34ae07e-51de-4214-940c-be8e9daf9d69",
+      "animated": true,
+      "style": {
+        "strokeWidth": 2
+      },
+      "targetHandle": "video-in",
+      "sourceHandle": "studio-out"
+    }
+  ],
+  "viewport": {
+    "x": -495.14852833854206,
+    "y": 126.46474797100228,
+    "zoom": 0.43527528164806556
+  }
+}

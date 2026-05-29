@@ -297,6 +297,29 @@ export type ImageNodeData = StudioNodeDataBase & {
   comfyWorkflowUseCustomPixels?: boolean
   /** Comfy 占位符 `__STYLE_TONE__`（风格短语，不进入用户主提示词框） */
   comfyWorkflowStyleTone?: string
+  /**
+   * 无限扩图：四向扩展像素（写入 Comfy ImagePadForOutpaint；未填则用模板默认左右 400、上下 0）。
+   */
+  comfyOutpaintLeft?: number
+  comfyOutpaintTop?: number
+  comfyOutpaintRight?: number
+  comfyOutpaintBottom?: number
+  /** 宫格分割：最多5张图片 URL 列表（对应 __GRID_IMAGE_1__ ~ __GRID_IMAGE_5__，下标与槽位 1~5 对齐） */
+  gridImages?: string[]
+  /** 宫格图 IndexedDB 资源 id（与 gridImages 下标对齐，避免 blob: 失效后无法上传 Comfy） */
+  gridImageAssetIds?: string[]
+  /** 宫格分割：水平张数（默认2） */
+  gridHorizontal?: number
+  /** 宫格分割：垂直张数（默认2） */
+  gridVertical?: number
+  /** 宫格分割：移除画布边缘 */
+  gridRemoveEdge?: boolean
+  /** 宫格分割：移除描边宽度 */
+  gridRemoveStroke?: number
+  /** 宫格分割：文件名前缀 */
+  gridFilePrefix?: string
+  /** 宫格分割：保存格式 */
+  gridFormat?: 'PNG' | 'JPG'
 }
 
 export type VideoNodeData = StudioNodeDataBase & {
@@ -336,6 +359,11 @@ export type VideoNodeData = StudioNodeDataBase & {
   comfyWorkflowAspect?: CloudImageAspectKey
   comfyWorkflowUseCustomPixels?: boolean
   comfyWorkflowStyleTone?: string
+  /** 无限扩图四向边距（像素），含义同 Image 节点 */
+  comfyOutpaintLeft?: number
+  comfyOutpaintTop?: number
+  comfyOutpaintRight?: number
+  comfyOutpaintBottom?: number
 }
 
 /** 8 路 FB 多人配音侧栏：一行对应 RoleBank 一路（与 Comfy 图槽位顺序一致）。 */

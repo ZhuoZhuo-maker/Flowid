@@ -1,0 +1,3 @@
+# Windows cmd.exe expects CRLF in batch files; LF-only scripts can mis-parse (dropped first chars per line).
+*.bat text eol=crlf
+*.cmd text eol=crlf

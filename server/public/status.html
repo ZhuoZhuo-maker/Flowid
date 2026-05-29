@@ -556,28 +556,12 @@
           grid.innerHTML = ''
           const service = escapeHtml(data.service || '—')
           const okLabel = ok ? '✅ 正常' : '❌ 异常'
-          const mountPath = String(data.pointsMount || '/pts').trim() || '/pts'
-          const adminPath = String(data.pointsAdmin || '/pts/admin').trim() || '/pts/admin'
-          const apiPath = String(data.pointsApi || '/pts/api').trim() || '/pts/api'
-
           grid.appendChild(card('服务标识 <span style="font-weight:500">service</span>', '<span class="mono">' + service + '</span>'))
           grid.appendChild(card('健康状态 <span style="font-weight:500">ok</span>', okLabel))
           grid.appendChild(
             card(
-              '积分服务挂载 <span style="font-weight:500">pointsMount</span>',
-              '<a class="mono" href="' + escapeHtml(absUrl(mountPath)) + '">' + escapeHtml(mountPath) + '</a>',
-            ),
-          )
-          grid.appendChild(
-            card(
-              '积分管理页 <span style="font-weight:500">pointsAdmin</span>',
-              '<a class="mono" href="' + escapeHtml(absUrl(adminPath)) + '">' + escapeHtml(adminPath) + '</a>',
-            ),
-          )
-          grid.appendChild(
-            card(
-              '积分 API <span style="font-weight:500">pointsApi</span>',
-              '<a class="mono" href="' + escapeHtml(absUrl(apiPath)) + '">' + escapeHtml(apiPath) + '</a>',
+              '管理控制台 <span style="font-weight:500">admin</span>',
+              '<a class="mono" href="' + escapeHtml(absUrl('/admin.html')) + '">/admin.html</a>',
             ),
           )
           const st =

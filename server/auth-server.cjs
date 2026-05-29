@@ -823,33 +823,9 @@ function normalizeTier(v) {
   return t === 'pro' ? 'pro' : 'free'
 }
 
-function isLicenseActive(license) {
-  if (!license) return false
-  if (license.frozen) return false
-  return Number(license.expiresAtMs || 0) > Date.now()
-}
-
 function pickEntitlements(license) {
   const ent = license && typeof license.entitlements === 'object' ? license.entitlements : null
   return ent && !Array.isArray(ent) ? ent : undefined
-}
-
-function resolveLicenseFromHeaders(req) {
-  const licenseCode = String(req.headers['x-license-code'] || '').trim()
-  const machineId = String(req.headers['x-machine-id'] || '').trim()
-  if (!licenseCode || !machineId) return { ok: false, message: '缺少授权信息（x-license-code / x-machine-id）' }
-  const db = readDb()
-  const codeHash = sha256(licenseCode)
-  const license = (db.licenses || []).find((l) => l.codeHash === codeHash)
-  if (!license) return { ok: false, message: '授权码无效' }
-  if (license.boundMachineId && license.boundMachineId !== machineId) {
-    return { ok: false, message: '授权码已绑定其他设备' }
-  }
-  if (license.frozen) return { ok: false, message: '授权已冻结' }
-  if (!Number(license.expiresAtMs || 0) || Number(license.expiresAtMs || 0) <= Date.now()) {
-    return { ok: false, message: '授权已到期' }
-  }
-  return { ok: true, license, licenseCode, machineId, db }
 }
 
 function resolveLicenseFromHeadersOptional(req) {
@@ -1184,9 +1160,6 @@ app.get('/healthz', (_req, res) => {
   res.json({
     ok: true,
     service: 'flowid-auth-server',
-    pointsMount: '/pts',
-    pointsAdmin: '/pts/admin',
-    pointsApi: '/pts/api',
   })
 })
 
@@ -1203,9 +1176,6 @@ app.get('/healthz/detailed', (_req, res) => {
   res.json({
     ok: true,
     service: 'flowid-auth-server',
-    pointsMount: '/pts',
-    pointsAdmin: '/pts/admin',
-    pointsApi: '/pts/api',
     serverTimeMs: Date.now(),
     serverTimeIso: new Date().toISOString(),
     listenPort: PORT,
@@ -1379,85 +1349,11 @@ app.get('/tasks/:taskId/status', licenseMiddleware, (req, res) => {
   })
 })
 
-app.post('/license/activate', (req, res) => {
-  const licenseCode = String(req.body?.licenseCode || '').trim()
-  const machineId = String(req.body?.machineId || '').trim()
-  if (!licenseCode || !machineId) {
-    res.status(400).json({ message: 'licenseCode / machineId 不能为空' })
-    return
-  }
-  const db = readDb()
-  const codeHash = sha256(licenseCode)
-  const lic = (db.licenses || []).find((l) => l.codeHash === codeHash)
-  if (!lic) {
-    res.status(404).json({ message: '授权码无效' })
-    return
-  }
-  if (lic.frozen) {
-    res.status(403).json({ message: '授权已冻结' })
-    return
-  }
-  if (lic.boundMachineId && lic.boundMachineId !== machineId) {
-    res.status(403).json({ message: '授权码已绑定其他设备' })
-    return
-  }
-  if (!lic.boundMachineId) {
-    lic.boundMachineId = machineId
-    writeDb(db)
-  }
-  res.json({
-    licenseCode,
-    machineId,
-    expiresAtMs: lic.expiresAtMs,
-    entitlements: pickEntitlements(lic),
-    serverTimeMs: Date.now(),
-  })
-})
-
-app.post('/license/verify', (req, res) => {
-  const licenseCode = String(req.body?.licenseCode || '').trim()
-  const machineId = String(req.body?.machineId || '').trim()
-  if (!licenseCode || !machineId) {
-    res.status(400).json({ message: 'licenseCode / machineId 不能为空' })
-    return
-  }
-  const db = readDb()
-  const codeHash = sha256(licenseCode)
-  const lic = (db.licenses || []).find((l) => l.codeHash === codeHash)
-  if (!lic) {
-    res.status(404).json({ message: '授权码无效' })
-    return
-  }
-  if (lic.frozen) {
-    res.status(403).json({ message: '授权已冻结' })
-    return
-  }
-  if (lic.boundMachineId && lic.boundMachineId !== machineId) {
-    res.status(403).json({ message: '授权码已绑定其他设备' })
-    return
-  }
-  if (!lic.boundMachineId) {
-    // 允许 verify 也完成首次绑定（对“先输入码再点刷新”的用户更友好）
-    lic.boundMachineId = machineId
-    writeDb(db)
-  }
-  res.json({
-    licenseCode,
-    machineId,
-    expiresAtMs: lic.expiresAtMs,
-    entitlements: pickEntitlements(lic),
-    serverTimeMs: Date.now(),
-  })
-})
-
+/** 开源版：不再校验授权码请求头，任务/模板接口对所有人开放。 */
 function licenseMiddleware(req, res, next) {
-  const resolved = resolveLicenseFromHeaders(req)
-  if (!resolved.ok) {
-    res.status(401).json({ message: resolved.message })
-    return
-  }
-  req.license = resolved.license
-  req.licenseEntitlements = pickEntitlements(resolved.license) || {}
+  const resolved = resolveLicenseFromHeadersOptional(req)
+  req.license = resolved.license || null
+  req.licenseEntitlements = resolved.entitlements || { proTemplates: true, cloudModels: true }
   next()
 }
 
@@ -1477,116 +1373,6 @@ function adminMiddleware(req, res, next) {
   }
   next()
 }
-
-app.get('/admin/licenses', adminMiddleware, (_req, res) => {
-  const db = readDb()
-  const list = (db.licenses || []).map((l) => ({
-    codeHash: String(l.codeHash || ''),
-    id: String(l.codeHash || '').slice(0, 12),
-    expiresAtMs: Number(l.expiresAtMs || 0),
-    frozen: Boolean(l.frozen),
-    boundMachineId: String(l.boundMachineId || ''),
-    entitlements: pickEntitlements(l) || {},
-    createdAtMs: Number(l.createdAtMs || 0),
-  }))
-  list.sort((a, b) => Number(b.createdAtMs || 0) - Number(a.createdAtMs || 0))
-  res.json({ total: list.length, licenses: list, serverTimeMs: Date.now() })
-})
-
-app.post('/admin/licenses/freeze', adminMiddleware, (req, res) => {
-  const codeHash = String(req.body?.codeHash || '').trim()
-  const frozen = Boolean(req.body?.frozen)
-  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
-  const db = readDb()
-  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
-  if (!lic) return res.status(404).json({ message: '授权不存在' })
-  lic.frozen = frozen
-  writeDb(db)
-  res.json({ ok: true, codeHash, frozen: Boolean(lic.frozen), expiresAtMs: lic.expiresAtMs, serverTimeMs: Date.now() })
-})
-
-app.post('/admin/licenses/renew', adminMiddleware, (req, res) => {
-  const codeHash = String(req.body?.codeHash || '').trim()
-  const daysRaw = Number(req.body?.days)
-  const days = Number.isFinite(daysRaw) ? Math.max(1, Math.min(3650, Math.floor(daysRaw))) : 30
-  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
-  const db = readDb()
-  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
-  if (!lic) return res.status(404).json({ message: '授权不存在' })
-  const base = Math.max(Date.now(), Number(lic.expiresAtMs || 0))
-  lic.expiresAtMs = base + days * DAY_MS
-  writeDb(db)
-  res.json({ ok: true, codeHash, addedDays: days, expiresAtMs: lic.expiresAtMs, serverTimeMs: Date.now() })
-})
-
-app.post('/admin/licenses/unbind', adminMiddleware, (req, res) => {
-  const codeHash = String(req.body?.codeHash || '').trim()
-  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
-  const db = readDb()
-  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
-  if (!lic) return res.status(404).json({ message: '授权不存在' })
-  lic.boundMachineId = ''
-  writeDb(db)
-  res.json({ ok: true, codeHash, boundMachineId: '', serverTimeMs: Date.now() })
-})
-
-/**
- * 重新签发授权码（用于无法找回原始授权码时重新发放给用户）
- * - 会生成新的 licenseCode，并更新 codeHash
- * - 默认清空机器绑定并解除冻结（以便新码可激活）
- * - 保留原 expiresAtMs / entitlements
- */
-app.post('/admin/licenses/reissue', adminMiddleware, (req, res) => {
-  const codeHash = String(req.body?.codeHash || '').trim()
-  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
-  const db = readDb()
-  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
-  if (!lic) return res.status(404).json({ message: '授权不存在' })
-  const now = Date.now()
-  const licenseCode = `LIC-${crypto.randomUUID().replaceAll('-', '')}`
-  const nextHash = sha256(licenseCode)
-  lic.codeHash = nextHash
-  lic.boundMachineId = ''
-  lic.frozen = false
-  lic.createdAtMs = now
-  writeDb(db)
-  res.json({
-    ok: true,
-    licenseCode,
-    codeHash: nextHash,
-    expiresAtMs: Number(lic.expiresAtMs || 0),
-    entitlements: pickEntitlements(lic) || {},
-    serverTimeMs: now,
-  })
-})
-
-app.post('/admin/licenses/entitlements', adminMiddleware, (req, res) => {
-  const codeHash = String(req.body?.codeHash || '').trim()
-  const entitlements =
-    req.body?.entitlements && typeof req.body.entitlements === 'object' && !Array.isArray(req.body.entitlements)
-      ? req.body.entitlements
-      : null
-  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
-  if (!entitlements) return res.status(400).json({ message: 'entitlements 不能为空' })
-  const db = readDb()
-  const lic = (db.licenses || []).find((l) => String(l.codeHash || '') === codeHash)
-  if (!lic) return res.status(404).json({ message: '授权不存在' })
-  lic.entitlements = entitlements
-  writeDb(db)
-  res.json({ ok: true, codeHash, entitlements: pickEntitlements(lic) || {}, serverTimeMs: Date.now() })
-})
-
-app.post('/admin/licenses/delete', adminMiddleware, (req, res) => {
-  const codeHash = String(req.body?.codeHash || '').trim()
-  if (!codeHash) return res.status(400).json({ message: 'codeHash 不能为空' })
-  const db = readDb()
-  const before = Array.isArray(db.licenses) ? db.licenses.length : 0
-  db.licenses = (db.licenses || []).filter((l) => String(l.codeHash || '') !== codeHash)
-  const after = db.licenses.length
-  if (after === before) return res.status(404).json({ message: '授权不存在' })
-  writeDb(db)
-  res.json({ ok: true, deleted: codeHash, total: after, serverTimeMs: Date.now() })
-})
 
 app.post('/admin/user/freeze', adminMiddleware, (req, res) => {
   const account = String(req.body?.account || '').trim()
@@ -2359,19 +2145,9 @@ app.delete('/admin/inspiration-market/:id', adminMiddleware, (req, res) => {
   res.json({ ok: true, deleted: id })
 })
 
-const pointsBootUrl = pathToFileURL(path.join(__dirname, '..', 'src', 'backend', 'createPointsApp.mjs')).href
-import(pointsBootUrl)
-  .then(async ({ attachPointsRoutes }) => {
-    await attachPointsRoutes(app, { mountPrefix: '/pts' })
-    app.listen(PORT, () => {
-      console.log(`[Flowid Auth] server running at http://127.0.0.1:${PORT}`)
-      console.log(`[Flowid Auth] admin secret: ${ADMIN_SECRET}`)
-      console.log(`[Flowid Auth] SQLite 积分: /pts/api/* 与 /pts/admin/*（better-sqlite3 失败时 /pts 为降级说明页）`)
-    })
-  })
-  .catch((err) => {
-    console.error('[Flowid Auth] failed to load createPointsApp.mjs:', err)
-    app.listen(PORT, () => {
-      console.log(`[Flowid Auth] server running at http://127.0.0.1:${PORT} (without /pts — 检查路径与 Node ESM)`)
-    })
-  })
+/** 开源版：不挂载积分/授权码计费服务（/pts）。 */
+app.listen(PORT, () => {
+  console.log(`[Flowid Auth] server running at http://127.0.0.1:${PORT}`)
+  console.log(`[Flowid Auth] admin secret: ${ADMIN_SECRET}`)
+  console.log('[Flowid Auth] 积分服务已禁用（开源构建）')
+})

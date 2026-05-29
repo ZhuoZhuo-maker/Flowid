@@ -1,4 +1,4 @@
-import { loadLicenseServerConfig, loadLicenseSnapshotV2 } from './licenseAccess'
+import { loadLicenseServerConfig } from './licenseAccess'
 
 const SYSTEM_PROMPT_ACTIVE_ID_KEY = 'flowid.systemPrompt.activePresetId.v1'
 const DEFAULT_AUTH_BASE_URL = 'http://127.0.0.1:3721'
@@ -28,30 +28,24 @@ export function saveActiveSystemPromptPresetId(id: string): void {
   }
 }
 
-function getBaseAndOptionalHeaders(): { baseUrl: string; headers?: Record<string, string> } | null {
+function getBaseAndOptionalHeaders(): { baseUrl: string } | null {
   const cfg = loadLicenseServerConfig()
-  const snap = loadLicenseSnapshotV2()
   const configured = String(cfg.baseUrl || '').trim().replace(/\/+$/, '')
   const baseUrl = configured || (typeof window !== 'undefined' ? DEFAULT_AUTH_BASE_URL : '')
-  const licenseCode = String(snap?.licenseCode || '').trim()
-  const machineId = String(snap?.machineId || '').trim()
   if (!baseUrl) return null
-  if (!licenseCode || !machineId) return { baseUrl }
-  return { baseUrl, headers: { 'x-license-code': licenseCode, 'x-machine-id': machineId } }
+  return { baseUrl }
 }
 
 export type SystemPromptPresetClientStatus =
-  | { ok: true; baseUrl: string; hasLicense: boolean }
-  | { ok: false; baseUrl: string; hasLicense: false; reason: 'missing_base_url' }
+  | { ok: true; baseUrl: string }
+  | { ok: false; baseUrl: string; reason: 'missing_base_url' }
 
 export function getSystemPromptPresetClientStatus(): SystemPromptPresetClientStatus {
   const cfg = loadLicenseServerConfig()
-  const snap = loadLicenseSnapshotV2()
   const configured = String(cfg.baseUrl || '').trim().replace(/\/+$/, '')
   const baseUrl = configured || (typeof window !== 'undefined' ? DEFAULT_AUTH_BASE_URL : '')
-  const hasLicense = Boolean(String(snap?.licenseCode || '').trim()) && Boolean(String(snap?.machineId || '').trim())
-  if (!baseUrl) return { ok: false, baseUrl: '', hasLicense: false, reason: 'missing_base_url' }
-  return { ok: true, baseUrl, hasLicense }
+  if (!baseUrl) return { ok: false, baseUrl: '', reason: 'missing_base_url' }
+  return { ok: true, baseUrl }
 }
 
 export type SystemPromptPresetsFetchResult = {
@@ -64,7 +58,6 @@ export async function fetchSystemPromptPresets(): Promise<SystemPromptPresetsFet
   if (!ctx) return { items: [], categoryOrder: [] }
   const res = await fetch(`${ctx.baseUrl}/system-prompts/groups`, {
     method: 'GET',
-    headers: ctx.headers,
   })
   const json = (await res.json().catch(() => ({}))) as {
     groups?: Array<{ id?: string; label?: string; tier?: string; items?: unknown[] }>
@@ -111,7 +104,6 @@ export async function fetchSystemPromptPresetText(id: string): Promise<string> {
   if (!ctx) return ''
   const res = await fetch(`${ctx.baseUrl}/system-prompts/${encodeURIComponent(trimmed)}`, {
     method: 'GET',
-    headers: ctx.headers,
   })
   const json = (await res.json().catch(() => ({}))) as { systemPromptText?: unknown }
   if (!res.ok) return ''

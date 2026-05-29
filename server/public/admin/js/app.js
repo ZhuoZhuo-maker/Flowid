@@ -2,7 +2,6 @@
   const state = window.FlowidAdminState
   const panels = {
     overview: window.FlowidAdminPanelOverview,
-    licenses: window.FlowidAdminPanelLicenses,
     'cloud-comfyui': window.FlowidAdminPanelCloudComfyui,
     templates: window.FlowidAdminPanelTemplatesPro,
     'inspiration-market': window.FlowidAdminPanelInspirationMarket,
@@ -23,11 +22,6 @@
       id: 'overview',
       title: 'FlowID Auth 控制台',
       sub: '健康检查、端口、环境变量说明、代理状态',
-    },
-    {
-      id: 'licenses',
-      title: 'License 授权',
-      sub: 'JWT 会员列表、服务状态与授权码录入',
     },
     {
       id: 'cloud-comfyui',
@@ -94,7 +88,7 @@
     await mountPanel(id)
   }
 
-  /** 供 License 页等模块跳转到其它管理面板（与侧栏点击一致） */
+  /** 供各管理模块跳转到其它面板（与侧栏点击一致） */
   window.FlowidAdminNavigate = function (id) {
     return navigate(String(id || '').trim() || 'overview', true)
   }

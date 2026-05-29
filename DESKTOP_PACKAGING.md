@@ -62,12 +62,7 @@ npm run desktop:dir
 npm run auth:dev
 ```
 
-也可用批处理脚本：
-
-```bash
-restart-auth-dev.bat
-stop-auth-dev.bat
-```
+停止开发服务：在运行 `npm run dev` / `npm run auth:dev` 的终端按 `Ctrl+C`。
 
 默认地址：
 - `http://127.0.0.1:3721`
@@ -82,4 +77,4 @@ stop-auth-dev.bat
 - `GET /auth/license/status`（Bearer token）
 
 数据库文件：
-- `server/auth-db.json`
+- `server/auth-db.json`（本地自动生成；仓库内见 `server/auth-db.example.json`）

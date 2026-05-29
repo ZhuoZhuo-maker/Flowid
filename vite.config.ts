@@ -32,7 +32,6 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     proxy: {
-      '/pts': { target: 'http://127.0.0.1:3721', changeOrigin: true },
       '/__comfy_local__': comfyLocalProxy,
     },
   },
@@ -41,7 +40,6 @@ export default defineConfig({
     port: 4173,
     strictPort: true,
     proxy: {
-      '/pts': { target: 'http://127.0.0.1:3721', changeOrigin: true },
       '/__comfy_local__': comfyLocalProxy,
     },
   },

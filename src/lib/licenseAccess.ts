@@ -54,6 +54,11 @@ function buildTimePublicServerOrigin(): string {
     .replace(/\/+$/, '')
 }
 
+/** 安装包在构建时写入公网 Auth 根地址后，运行态固定该地址，禁止通过 localStorage 等改后端。 */
+export function isLicenseServerOriginLockedByBuild(): boolean {
+  return Boolean(buildTimePublicServerOrigin())
+}
+
 function buildTimeExchangeGroupQq(): string {
   const u = import.meta.env.VITE_FLOWID_EXCHANGE_GROUP_QQ
   return String(u || '').trim()
@@ -83,6 +88,9 @@ function safeJsonParse<T>(raw: string): T | null {
 }
 
 export function loadLicenseServerConfig(): LicenseServerConfig {
+  if (buildTimePublicServerOrigin()) {
+    return DEFAULT_SERVER_CONFIG
+  }
   try {
     const raw = localStorage.getItem(SERVER_CONFIG_KEY)
     if (!raw) return DEFAULT_SERVER_CONFIG
@@ -101,6 +109,9 @@ export function loadLicenseServerConfig(): LicenseServerConfig {
 }
 
 export function saveLicenseServerConfig(patch: Partial<LicenseServerConfig>): LicenseServerConfig {
+  if (buildTimePublicServerOrigin()) {
+    return DEFAULT_SERVER_CONFIG
+  }
   const prev = loadLicenseServerConfig()
   const next: LicenseServerConfig = {
     baseUrl: String(patch.baseUrl ?? prev.baseUrl).trim(),
@@ -211,22 +222,13 @@ export function estimateServerNowMs(snapshot: LicenseSnapshotV2 | null): number 
   return anchor.serverTimeMs + delta
 }
 
-export function computeAccessState(snapshot: LicenseSnapshotV2 | null): AccessState {
-  if (!snapshot?.licenseCode) return 'unauthorized'
-  // 若本地检测到回拨，调用方应先 touchLicenseLocalTime 再决定，这里仅根据字段做兜底判断。
-  const nowServer = estimateServerNowMs(snapshot) ?? Date.now()
-  const exp = snapshot.expiresAtMs
-  if (Number.isFinite(Number(exp)) && Number(exp) > 0) {
-    return nowServer <= Number(exp) ? 'valid' : 'expired'
-  }
-  // 没有 expiresAtMs：按“需联网校验”处理，避免无限期放行。
-  return 'tampered_need_verify'
+/** 开源版：不再做授权码/到期门禁，始终视为可用。 */
+export function computeAccessState(_snapshot: LicenseSnapshotV2 | null): AccessState {
+  return 'valid'
 }
 
-export function hasEntitlement(snapshot: LicenseSnapshotV2 | null, key: keyof LicenseEntitlements): boolean {
-  const ent = snapshot?.entitlements
-  if (!ent) return false
-  const v = (ent as Record<string, unknown>)[String(key)]
-  return v === true
+/** 开源版：模板/云端能力不再按会员权益区分。 */
+export function hasEntitlement(_snapshot: LicenseSnapshotV2 | null, _key: keyof LicenseEntitlements): boolean {
+  return true
 }
 

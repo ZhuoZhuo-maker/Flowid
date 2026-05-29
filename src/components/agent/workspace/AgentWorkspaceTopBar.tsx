@@ -7,6 +7,11 @@ type Props = {
   /** 双击标题重命名后提交，与侧栏会话列表同步 */
   onRenameTitle: (next: string) => void
   onBackToCanvas: () => void
+  /** 顶栏右侧按钮文案（分栏短剧默认为「节点画布」） */
+  backLabel?: string
+  /** 分栏模式：完全收起左侧 Agent，恢复全宽画布 */
+  onDismissSplit?: () => void
+  dismissSplitLabel?: string
   /** 侧栏收起时在顶栏左侧显示展开按钮 */
   sidebarCollapsed: boolean
   onExpandSidebar: () => void
@@ -19,6 +24,9 @@ export function AgentWorkspaceTopBar({
   title,
   onRenameTitle,
   onBackToCanvas,
+  backLabel = '返回画布',
+  onDismissSplit,
+  dismissSplitLabel = '全屏画布',
   sidebarCollapsed,
   onExpandSidebar,
 }: Props) {
@@ -89,13 +97,25 @@ export function AgentWorkspaceTopBar({
           </span>
         )}
       </div>
-      <button
-        type="button"
-        className="mt-0.5 shrink-0 self-start rounded-lg border border-aw-border bg-aw-page px-3 py-1.5 text-[12px] font-semibold text-aw-text-main shadow-sm transition-colors hover:bg-aw-hover"
-        onClick={onBackToCanvas}
-      >
-        返回画布
-      </button>
+      <div className="mt-0.5 flex shrink-0 items-center gap-2 self-start">
+        {onDismissSplit ? (
+          <button
+            type="button"
+            className="rounded-lg border border-transparent px-2 py-1.5 text-[11px] font-semibold text-aw-text-sub transition-colors hover:border-aw-border hover:bg-aw-hover hover:text-aw-text-main"
+            onClick={onDismissSplit}
+            title="收起 Agent 对话，恢复全宽节点画布"
+          >
+            {dismissSplitLabel}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="rounded-lg border border-aw-border bg-aw-page px-3 py-1.5 text-[12px] font-semibold text-aw-text-main shadow-sm transition-colors hover:bg-aw-hover"
+          onClick={onBackToCanvas}
+        >
+          {backLabel}
+        </button>
+      </div>
     </div>
   )
 }

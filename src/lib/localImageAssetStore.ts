@@ -311,6 +311,74 @@ async function readDesktopMirroredAssetBlob(assetId: string): Promise<Blob | nul
   return null
 }
 
+const COMFY_INPUT_IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp'] as const
+
+function sanitizeComfyUploadPrefix(raw: string): string {
+  return String(raw || '')
+    .replace(/[\\/:*?"<>|\r\n\t]+/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 48) || 'input'
+}
+
+/**
+ * 桌面端：HTTP 上传失败时，若文件已镜像到 Comfy `input` 目录，则直接复用「纯文件名」注入 LoadImage。
+ *
+ * @param options.assetId IndexedDB 资产 id（对应 `flowid-asset-{id}.ext`）
+ * @param options.uploadPrefix 与上传时 `filenamePrefix` 一致（如 `数字人_图片·图片节点1_1`）
+ */
+export async function resolveExistingComfyInputFilenameFromDesktop(options: {
+  assetId?: string
+  uploadPrefix?: string
+  /** 仅当本次只需 1 张图且前缀未命中时：取 input 根目录最新一张图片（桌面端二次执行复用） */
+  allowNewestSingleImage?: boolean
+}): Promise<string | null> {
+  const desktop = typeof window !== 'undefined' ? window.flowidDesktop : undefined
+  if (!desktop?.readBinaryFile) return null
+  const inputPath = loadLocalDiskPathsSettings().inputPath.trim()
+  if (!inputPath) return null
+
+  const aid = String(options.assetId || '').trim()
+  if (aid) {
+    for (const ext of COMFY_INPUT_IMAGE_EXTS) {
+      const fileName = `flowid-asset-${aid}${ext}`
+      const filePath = joinPath(inputPath, fileName)
+      const res = await desktop.readBinaryFile(filePath)
+      if (res?.ok && res.data && res.data.byteLength > 0) return fileName
+    }
+  }
+
+  const prefix = sanitizeComfyUploadPrefix(options.uploadPrefix || '')
+  if (!prefix || !desktop.readDirectory) return null
+  const dirResult = await desktop.readDirectory(inputPath)
+  if (!dirResult?.ok || !Array.isArray(dirResult.files)) return null
+  const prefixLower = prefix.toLowerCase()
+  let best: { name: string; mtimeMs: number } | null = null
+  for (const entry of dirResult.files) {
+    const name = String(entry.name || '').trim()
+    if (!name) continue
+    const lower = name.toLowerCase()
+    if (!lower.startsWith(prefixLower)) continue
+    if (!COMFY_INPUT_IMAGE_EXTS.some((ext) => lower.endsWith(ext))) continue
+    const mtimeMs = Number(entry.mtimeMs) || 0
+    if (!best || mtimeMs > best.mtimeMs) best = { name, mtimeMs }
+  }
+  if (best?.name) return best.name
+
+  if (!options.allowNewestSingleImage || !desktop.readDirectory) return null
+  const newestOnly = await desktop.readDirectory(inputPath)
+  if (!newestOnly?.ok || !Array.isArray(newestOnly.files)) return null
+  let newestPng: { name: string; mtimeMs: number } | null = null
+  for (const entry of newestOnly.files) {
+    const name = String(entry.name || '').trim()
+    if (!name) continue
+    const lower = name.toLowerCase()
+    if (!COMFY_INPUT_IMAGE_EXTS.some((ext) => lower.endsWith(ext))) continue
+    const mtimeMs = Number(entry.mtimeMs) || 0
+    if (!newestPng || mtimeMs > newestPng.mtimeMs) newestPng = { name, mtimeMs }
+  }
+  return newestPng?.name ?? null
+}
+
 /**
  * 打开（或初始化）本地图片资产库。
  */
