@@ -1,0 +1,23 @@
+@echo off
+setlocal EnableExtensions
+cd /d "%~dp0\.."
+
+echo ==========================================
+echo Flowid Release 上传（需先配置令牌）
+echo ==========================================
+echo.
+echo 1. Gitee 私人令牌: https://gitee.com/profile/personal_access_tokens
+echo    勾选 projects 权限，复制令牌后填入下方
+echo 2. GitHub 令牌: https://github.com/settings/tokens
+echo    勾选 repo 权限，或在本机执行 gh auth login 后只设 GITEE_ACCESS_TOKEN
+echo.
+
+if "%GITEE_ACCESS_TOKEN%"=="" (
+  set /p GITEE_ACCESS_TOKEN=请输入 Gitee 私人令牌: 
+)
+if "%GITHUB_TOKEN%"=="" if "%GH_TOKEN%"=="" (
+  echo [提示] 未设置 GITHUB_TOKEN 时将尝试使用已登录的 gh CLI
+)
+
+call npm run publish:release
+pause
