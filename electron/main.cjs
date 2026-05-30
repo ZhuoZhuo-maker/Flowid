@@ -7,6 +7,9 @@ const { autoUpdater } = require('electron-updater')
 
 const isDev = !app.isPackaged
 
+/** 打包态内置静态服务地址（含 Comfy 同源反代）；开发态为 null */
+let packagedAppBaseUrl = null
+
 /** package.json 中 flowidDesktop.disableAutoUpdate：内测手动发包装关闭自动更新 */
 let flowidDesktopFlags = {}
 try {
@@ -130,6 +133,8 @@ function createMainWindow() {
 
   if (isDev) {
     win.loadURL('http://127.0.0.1:5173')
+  } else if (packagedAppBaseUrl) {
+    win.loadURL(packagedAppBaseUrl)
   } else {
     win.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'))
   }
@@ -173,6 +178,8 @@ function createMainWindow() {
     if (result.response === 0 && !win.isDestroyed()) {
       if (isDev) {
         void win.loadURL('http://127.0.0.1:5173')
+      } else if (packagedAppBaseUrl) {
+        void win.loadURL(packagedAppBaseUrl)
       } else {
         void win.loadFile(path.join(app.getAppPath(), 'dist', 'index.html'))
       }
@@ -686,8 +693,18 @@ ipcMain.handle('desktop:check-for-updates', async () => {
   return { ok: true, hasUpdate: Boolean(result?.updateInfo?.version) }
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   installApplicationMenu()
+  if (!isDev) {
+    try {
+      const { startPackagedAppServer } = require('./packagedAppServer.cjs')
+      const distDir = path.join(app.getAppPath(), 'dist')
+      packagedAppBaseUrl = await startPackagedAppServer({ distDir, preferredPort: 53173 })
+    } catch (err) {
+      console.error('[Flowid] packaged app server failed, fallback to file://', err)
+      packagedAppBaseUrl = null
+    }
+  }
   createMainWindow()
   setupAutoUpdate()
 

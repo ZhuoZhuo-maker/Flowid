@@ -596,14 +596,29 @@ function absolutizeComfyBaseForFetch(baseUrl: string): string {
 }
 
 /**
+ * 是否走 Comfy 同源反代（开发 Vite 或打包态内置 HTTP 服务）。
+ */
+export function usesComfySameOriginProxy(): boolean {
+  if (import.meta.env.DEV) return true
+  if (typeof window === 'undefined') return false
+  if (!window.flowidDesktop) return false
+  try {
+    const { protocol, hostname } = window.location
+    return protocol === 'http:' && (hostname === '127.0.0.1' || hostname === 'localhost')
+  } catch {
+    return false
+  }
+}
+
+/**
  * 本地 ComfyUI 在浏览器直连时可能触发 CORS/PNA，开发态走 Vite 同源代理更稳定。
  * 远程 http(s) Comfy（如云 GPU）在开发态同样走 `/__comfy_dev_proxy__/` 同源反代，避免上传/轮询被 CORS 拦截。
- * 生产构建无 Vite 代理时，必须使用真实 baseUrl（由 Comfy 开启 CORS 或同源反代）。
+ * 打包桌面端经内置 HTTP 服务加载时，与开发态共用同一套反代路径。
  */
 export function resolveRequestBase(baseUrl: string): string {
   const normalized = normalizeBaseUrl(baseUrl)
   const absolute = absolutizeComfyBaseForFetch(normalized)
-  if (!import.meta.env.DEV) {
+  if (!usesComfySameOriginProxy()) {
     return absolute
   }
   const baseOrigin =
@@ -3088,7 +3103,7 @@ export async function checkComfyHealth({
       window.clearTimeout(timer)
       const msg = String((error as Error)?.message || error || '网络或跨域错误')
       const devProxyHint =
-        import.meta.env.DEV && String(requestBase).includes('__comfy_dev_proxy__')
+        usesComfySameOriginProxy() && String(requestBase).includes('__comfy_dev_proxy__')
           ? ' 若页面提示 [vite] server connection lost，多为开发服务器在代理该请求时异常退出，请查看运行 npm run dev 的终端并重启 dev。'
           : ''
       if (path === tryPaths[tryPaths.length - 1]) {
@@ -3100,8 +3115,8 @@ export async function checkComfyHealth({
     }
   }
   const devTail =
-    import.meta.env.DEV && String(requestBase).includes('__comfy_dev_proxy__')
-      ? '（开发态经 Vite 代理；直连 https 云端会触发 CORS。若反复失败请用 Flowid 桌面正式包或看 dev 终端日志。）'
+    usesComfySameOriginProxy() && String(requestBase).includes('__comfy_dev_proxy__')
+      ? '（经同源 Comfy 反代；直连 https 云端会触发 CORS。若反复失败请查看终端/桌面日志。）'
       : ''
   return { ok: false, message: `连接失败，请检查地址、网络或鉴权信息${devTail}` }
 }
